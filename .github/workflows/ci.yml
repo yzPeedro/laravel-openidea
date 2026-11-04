@@ -23,12 +23,12 @@ jobs:
     name: Rust (fmt, clippy, tests, wasm)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: laravel-openidea
 
       - name: Check out the OpenIDEA plugin SDK
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.SDK_REPOSITORY }}
           ref: ${{ env.SDK_REF }}
@@ -72,7 +72,7 @@ jobs:
     name: PHP scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.3"
@@ -84,7 +84,7 @@ jobs:
     name: Hub script
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
