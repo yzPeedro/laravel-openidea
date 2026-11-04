@@ -17,10 +17,9 @@
   every resource of your app, live logs, a live audit of requests, queries and events, and an MCP server for AI agents.
 </p>
 
-<p align="center">
-  <a href="docs/media/install.mp4"><img src="docs/media/video-poster.webp" alt="Watch: install Laravel OpenIDEA in under a minute" width="80%"></a><br>
-  <sub>▶ Watch the 1-minute install video (MP4, 1080p)</sub>
-</p>
+https://github.com/user-attachments/assets/bc56e061-73f0-484d-8e1c-d9776cdc9692
+
+<p align="center"><sub>Install in under a minute, then a tour of the features. <a href="docs/media/install.mp4">Download the MP4</a>.</sub></p>
 
 ---
 
