@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  SDK_REPOSITORY: yzPeedro/openidea
+  SDK_REF: fix/plugin-completion-and-definitions
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, tests, wasm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: laravel-openidea
+
+      - name: Check out the OpenIDEA plugin SDK
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SDK_REPOSITORY }}
+          ref: ${{ env.SDK_REF }}
+          path: openidea
+          sparse-checkout: sdk/rust/openidea-plugin
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: laravel-openidea
+
+      - name: Format
+        working-directory: laravel-openidea
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: laravel-openidea
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        working-directory: laravel-openidea
+        run: cargo test
+
+      - name: Package
+        working-directory: laravel-openidea
+        run: ./scripts/package.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: laravel-openidea-package
+          path: |
+            laravel-openidea/build/*.zip
+            laravel-openidea/build/*.sha256
+          if-no-files-found: error
+
+  php:
+    name: PHP scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          coverage: none
+      - name: Lint
+        run: for f in php/*.php; do php -l "$f"; done
+
+  hub:
+    name: Hub script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check the hub's JavaScript
+        run: |
+          node -e '
+            const fs = require("fs");
+            const html = fs.readFileSync("web/hub.html", "utf8");
+            const script = html.slice(html.indexOf("<script>") + 8, html.indexOf("</script>")).replace("\"__ICONS__\"", "{}");
+            fs.writeFileSync("hub.js", script);
+          '
+          node --check hub.js

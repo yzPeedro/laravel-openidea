@@ -1,0 +1,53 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for the report. Please don't paste secrets, `.env` values or personal data from your project.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The smallest code or project layout that shows the problem.
+      placeholder: |
+        1. Open a Laravel 12 project with …
+        2. Type `route('` in …
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: plugin
+    attributes:
+      label: Plugin version
+      placeholder: "0.12.0"
+    validations:
+      required: true
+  - type: input
+    id: openidea
+    attributes:
+      label: OpenIDEA version or commit
+    validations:
+      required: true
+  - type: input
+    id: laravel
+    attributes:
+      label: Laravel and PHP versions
+      placeholder: "Laravel 12.3, PHP 8.4"
+  - type: dropdown
+    id: runner
+    attributes:
+      label: How Artisan runs
+      options: ["php", "docker compose run", "docker compose exec", "not relevant"]
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Plugin errors from the IDE log, or a screenshot.

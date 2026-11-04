@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security issue
+    url: https://github.com/yzPeedro/laravel-openidea/security/advisories/new
+    about: Report vulnerabilities privately.
+  - name: Questions and ideas
+    url: https://github.com/yzPeedro/laravel-openidea/discussions
+    about: Ask how to do something or share an idea.

@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  SDK_REPOSITORY: yzPeedro/openidea
+  SDK_REF: fix/plugin-completion-and-definitions
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: laravel-openidea
+
+      - name: Check out the OpenIDEA plugin SDK
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SDK_REPOSITORY }}
+          ref: ${{ env.SDK_REF }}
+          path: openidea
+          sparse-checkout: sdk/rust/openidea-plugin
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: laravel-openidea
+
+      - name: Check the tag matches plugin.toml
+        working-directory: laravel-openidea
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' plugin.toml | head -n 1)"
+          test "v${version}" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} does not match plugin.toml ${version}"; exit 1; }
+
+      - name: Test
+        working-directory: laravel-openidea
+        run: cargo test
+
+      - name: Package
+        working-directory: laravel-openidea
+        run: ./scripts/package.sh
+
+      - name: Release notes
+        working-directory: laravel-openidea
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="## ${version}" '$0 == v { on = 1; next } /^## / && on { exit } on' CHANGELOG.md > build/notes.md
+          {
+            echo
+            echo "### Install"
+            echo
+            echo "Download \`laravel-openidea-${version}.zip\`, then in OpenIDEA open **Settings › Plugins › ⚙ › Install Plugin from Package File…** and pick it."
+          } >> build/notes.md
+
+      - name: Publish
+        working-directory: laravel-openidea
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Laravel OpenIDEA ${GITHUB_REF_NAME}" \
+            --notes-file build/notes.md \
+            build/*.zip build/*.sha256
