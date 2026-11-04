@@ -1,0 +1,50 @@
+{
+  "properties": {
+    "unknownViewInspection": {
+      "type": "boolean",
+      "title": "Report unknown views",
+      "default": true
+    },
+    "unknownRouteInspection": {
+      "type": "boolean",
+      "title": "Report unknown route names",
+      "default": false
+    },
+    "unknownRuleInspection": {
+      "type": "boolean",
+      "title": "Report unknown validation rules",
+      "default": true
+    },
+    "unknownAuthInspection": {
+      "type": "boolean",
+      "title": "Report unknown middleware and abilities",
+      "default": false
+    },
+    "unknownOpenApiRefInspection": {
+      "type": "boolean",
+      "title": "Report unknown OpenAPI $ref components",
+      "default": true
+    },
+    "locale": {
+      "type": "string",
+      "title": "Preferred translation locale",
+      "default": "en"
+    },
+    "artisanRunner": {
+      "type": "string",
+      "title": "Run Artisan with",
+      "enum": [
+        "auto",
+        "php",
+        "docker-run",
+        "docker"
+      ],
+      "default": "auto"
+    },
+    "dockerService": {
+      "type": "string",
+      "title": "Docker Compose service for Artisan (empty: detect)",
+      "default": ""
+    }
+  }
+}

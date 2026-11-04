@@ -1,0 +1,6 @@
+/target
+/dist/*
+!/dist/.gitkeep
+/build
+*.oiplugin
+.DS_Store

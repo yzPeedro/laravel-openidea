@@ -1,0 +1,736 @@
+use crate::index::RefKind;
+use crate::index::openapi::{FORMATS, IN, TYPES, is_openapi};
+use crate::php::{CallKind, StringArg};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Want {
+    Kind(RefKind),
+    Columns {
+        model: Option<String>,
+        table: Option<String>,
+    },
+    Relations {
+        model: String,
+        path: Vec<String>,
+    },
+    RelationColumns {
+        model: String,
+        path: Vec<String>,
+    },
+    Methods(String),
+    OpenApiRef,
+    OpenApiSection(&'static str),
+    Static(&'static [(&'static str, &'static str)]),
+    SchemaProperties(usize),
+    RoutePaths,
+    PathParams(usize),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Segment {
+    pub want: Want,
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Scope {
+    pub class: Option<String>,
+    pub model: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Ctx {
+    Simple(RefKind),
+    Middleware,
+    Rules,
+    Columns(Option<String>),
+    Relations(String),
+    Methods(String),
+    OpenApiRef,
+    Section(&'static str),
+    Static(&'static [(&'static str, &'static str)]),
+    SchemaProperties,
+    RoutePaths,
+    PathParams,
+}
+
+const SCHEMA_CALLS: [&str; 6] = [
+    "schema",
+    "jsoncontent",
+    "xmlcontent",
+    "items",
+    "property",
+    "additionalproperties",
+];
+const OPERATIONS: [&str; 9] = [
+    "get", "post", "put", "patch", "delete", "options", "head", "trace", "pathitem",
+];
+
+fn openapi_ctx(arg: &StringArg) -> Option<(Ctx, usize, bool)> {
+    let name = arg.callee.name.as_str();
+    let ctx = match arg.param.as_deref()? {
+        "ref" => Ctx::OpenApiRef,
+        "tags" => Ctx::Section("tags"),
+        "security" => Ctx::Section("securitySchemes"),
+        "in" => Ctx::Static(IN),
+        "type" => Ctx::Static(TYPES),
+        "format" => Ctx::Static(FORMATS),
+        "required" if SCHEMA_CALLS.contains(&name) => Ctx::SchemaProperties,
+        "path" if OPERATIONS.contains(&name) => Ctx::RoutePaths,
+        "name" if name == "parameter" => Ctx::PathParams,
+        _ => return None,
+    };
+    Some((ctx, arg.arg, true))
+}
+
+const COLUMN_METHODS: [&str; 42] = [
+    "where",
+    "orwhere",
+    "wherenot",
+    "orwherenot",
+    "wherein",
+    "orwherein",
+    "wherenotin",
+    "orwherenotin",
+    "wherenull",
+    "orwherenull",
+    "wherenotnull",
+    "orwherenotnull",
+    "wherebetween",
+    "orwherebetween",
+    "wherenotbetween",
+    "wheredate",
+    "wheremonth",
+    "whereday",
+    "whereyear",
+    "wheretime",
+    "wherecolumn",
+    "wherelike",
+    "orwherelike",
+    "firstwhere",
+    "orderby",
+    "orderbydesc",
+    "latest",
+    "oldest",
+    "groupby",
+    "having",
+    "pluck",
+    "value",
+    "select",
+    "addselect",
+    "increment",
+    "decrement",
+    "sum",
+    "avg",
+    "average",
+    "max",
+    "min",
+    "wherejsoncontains",
+];
+
+const COLUMN_KEY_METHODS: [&str; 10] = [
+    "create",
+    "update",
+    "fill",
+    "forcefill",
+    "firstorcreate",
+    "firstornew",
+    "updateorcreate",
+    "where",
+    "make",
+    "forcecreate",
+];
+
+const RELATION_METHODS: [&str; 22] = [
+    "with",
+    "without",
+    "withonly",
+    "load",
+    "loadmissing",
+    "loadcount",
+    "has",
+    "orhas",
+    "doesnthave",
+    "ordoesnthave",
+    "wherehas",
+    "orwherehas",
+    "wheredoesnthave",
+    "orwheredoesnthave",
+    "withcount",
+    "withexists",
+    "withsum",
+    "withavg",
+    "withmax",
+    "withmin",
+    "whererelation",
+    "withwherehas",
+];
+
+const VERBS: [&str; 8] = [
+    "get", "post", "put", "patch", "delete", "options", "any", "match",
+];
+
+fn model_head(head: Option<&str>) -> Option<String> {
+    let head = head?;
+    head.chars()
+        .next()
+        .is_some_and(char::is_uppercase)
+        .then(|| head.to_owned())
+}
+
+fn ctx_of(arg: &StringArg, scope: &Scope) -> Option<(Ctx, usize, bool)> {
+    let c = &arg.callee;
+    let name = c.name.as_str();
+    let class = c.class.as_deref().unwrap_or("");
+    use Ctx::Simple as S;
+    if is_openapi(c) {
+        return openapi_ctx(arg);
+    }
+    Some(match c.kind {
+        CallKind::Function => match name {
+            "config" => (S(RefKind::Config), 0, false),
+            "route" | "to_route" => (S(RefKind::Route), 0, false),
+            "view" => (S(RefKind::View), 0, false),
+            "env" => (S(RefKind::Env), 0, false),
+            "__" | "trans" | "trans_choice" => (S(RefKind::Translation), 0, false),
+            "auth" => (S(RefKind::Guard), 0, false),
+            "asset" | "secure_asset" | "mix" => (S(RefKind::Asset), 0, false),
+            "inertia" => (S(RefKind::InertiaPage), 0, false),
+            "action" => (Ctx::Methods(arg.class_ref.clone()?), 0, true),
+            "validator" => (Ctx::Rules, 1, true),
+            "privatechannel" | "channel" | "presencechannel" | "encryptedprivatechannel" => {
+                (S(RefKind::Channel), 0, false)
+            }
+            _ => return None,
+        },
+        CallKind::Static => match (class, name) {
+            (
+                "config",
+                "get" | "set" | "has" | "string" | "integer" | "float" | "boolean" | "array"
+                | "collection" | "prepend" | "push",
+            ) => (S(RefKind::Config), 0, false),
+            ("route", "has") => (S(RefKind::Route), 0, true),
+            ("route", "view") => (S(RefKind::View), 1, false),
+            ("route", "inertia") => (S(RefKind::InertiaPage), 1, false),
+            ("route", "middleware" | "withoutmiddleware") => (Ctx::Middleware, 0, true),
+            ("route", v) if VERBS.contains(&v) => (
+                Ctx::Methods(arg.class_ref.clone()?),
+                if v == "match" { 2 } else { 1 },
+                true,
+            ),
+            ("url" | "redirect", "route" | "signedroute" | "temporarysignedroute") => {
+                (S(RefKind::Route), 0, false)
+            }
+            ("view", "make" | "exists") => (S(RefKind::View), 0, false),
+            ("view", "first") => (S(RefKind::View), 0, true),
+            ("env", "get") => (S(RefKind::Env), 0, false),
+            ("lang", "get" | "has" | "choice") => (S(RefKind::Translation), 0, false),
+            ("storage", "disk" | "fake" | "persistentfake" | "build") => {
+                (S(RefKind::Disk), 0, false)
+            }
+            ("cache", "store" | "driver" | "memo") => (S(RefKind::CacheStore), 0, false),
+            ("queue", "connection") => (S(RefKind::Queue), 0, false),
+            ("log", "channel") => (S(RefKind::LogChannel), 0, false),
+            ("log", "stack") => (S(RefKind::LogChannel), 0, true),
+            ("db", "connection") | ("schema", "connection") => (S(RefKind::DbConnection), 0, false),
+            ("db", "table") => (S(RefKind::Table), 0, false),
+            (
+                "schema",
+                "create" | "table" | "drop" | "dropifexists" | "hastable" | "hascolumn"
+                | "hascolumns" | "getcolumns" | "rename",
+            ) => (S(RefKind::Table), 0, false),
+            ("mail", "mailer") => (S(RefKind::Mailer), 0, false),
+            ("auth", "guard" | "shoulduse") => (S(RefKind::Guard), 0, false),
+            ("password", "broker") => (S(RefKind::PasswordBroker), 0, false),
+            ("broadcast", "connection" | "driver") => (S(RefKind::Broadcaster), 0, false),
+            (
+                "gate",
+                "allows" | "denies" | "check" | "any" | "none" | "authorize" | "inspect" | "has"
+                | "raw",
+            ) => (S(RefKind::Ability), 0, true),
+            ("inertia", "render") => (S(RefKind::InertiaPage), 0, false),
+            ("vite", "asset" | "content") => (S(RefKind::Asset), 0, false),
+            ("validator", "make" | "validate") => (Ctx::Rules, 1, true),
+            ("artisan", "call" | "queue" | "callsilent" | "callsilently")
+            | ("schedule", "command") => (S(RefKind::Command), 0, false),
+            ("socialite", "driver" | "with" | "buildprovider") => {
+                (S(RefKind::SocialiteDriver), 0, false)
+            }
+            ("role", "findbyname" | "findorcreate") => (S(RefKind::Role), 0, false),
+            ("permission", "findbyname" | "findorcreate") => (S(RefKind::Permission), 0, false),
+            _ => return model_ctx(arg, name),
+        },
+        CallKind::Method => match name {
+            "route" if matches!(class, "$request" | "request()" | "$this") => return None,
+            "route" | "signedroute" | "temporarysignedroute" | "torroute" => {
+                (S(RefKind::Route), 0, false)
+            }
+            "routeis" | "named" => (S(RefKind::Route), 0, true),
+            "view" | "markdown" | "text" | "layout" => (S(RefKind::View), 0, false),
+            "middleware" | "withoutmiddleware" => (Ctx::Middleware, 0, true),
+            "can" | "cannot" | "cant" | "authorize" | "authorizeforuser" => (
+                S(RefKind::Ability),
+                if name == "authorizeforuser" { 1 } else { 0 },
+                true,
+            ),
+            "guard" => (S(RefKind::Guard), 0, false),
+            "tokencan" | "tokencant" => (S(RefKind::TokenAbility), 0, false),
+            "createtoken" => (S(RefKind::TokenAbility), 1, true),
+            "onqueue" => (S(RefKind::QueueName), 0, false),
+            "command" if arg.head.as_deref() == Some("$schedule") => {
+                (S(RefKind::Command), 0, false)
+            }
+            "artisan" | "call" | "callsilent" | "callsilently"
+                if arg.head.as_deref() == Some("$this") =>
+            {
+                (S(RefKind::Command), 0, false)
+            }
+            "hasrole" | "hasanyrole" | "hasallroles" | "hasexactroles" | "assignrole"
+            | "removerole" | "syncroles" | "role" => (S(RefKind::Role), arg.arg, true),
+            "haspermissionto"
+            | "hasanypermission"
+            | "hasallpermissions"
+            | "givepermissionto"
+            | "revokepermissionto"
+            | "syncpermissions"
+            | "checkpermissionto"
+            | "hasdirectpermission"
+            | "permission" => (S(RefKind::Permission), arg.arg, true),
+            "onconnection" => (S(RefKind::Queue), 0, false),
+            v if VERBS.contains(&v) && arg.head.as_deref() == Some("Route") => (
+                Ctx::Methods(arg.class_ref.clone()?),
+                if v == "match" { 2 } else { 1 },
+                true,
+            ),
+            "validate" if arg.arg == 0 => (Ctx::Rules, 0, true),
+            "validate" | "validatewithbag" => (Ctx::Rules, 1, true),
+            _ => return model_ctx(arg, name),
+        },
+        CallKind::Directive => match name {
+            "include" | "includeif" | "extends" | "each" | "component" => {
+                (S(RefKind::View), 0, false)
+            }
+            "includewhen" | "includeunless" => (S(RefKind::View), 1, false),
+            "includefirst" => (S(RefKind::View), 0, true),
+            "lang" | "choice" => (S(RefKind::Translation), 0, false),
+            "section" | "yield" | "hassection" | "sectionmissing" => {
+                (S(RefKind::Section), 0, false)
+            }
+            "push" | "prepend" | "stack" | "pushonce" | "prependonce" => {
+                (S(RefKind::Stack), 0, false)
+            }
+            "pushif" => (S(RefKind::Stack), 1, false),
+            "can" | "cannot" | "canany" | "elsecan" | "elsecannot" => {
+                (S(RefKind::Ability), 0, true)
+            }
+            "livewire" => (S(RefKind::Livewire), 0, false),
+            "vite" => (S(RefKind::Asset), 0, true),
+            "auth" | "guest" => (S(RefKind::Guard), 0, false),
+            "role" | "hasrole" | "hasanyrole" | "hasallroles" | "unlessrole" | "hasexactroles" => {
+                (S(RefKind::Role), 0, true)
+            }
+            "haspermission" | "hasanypermission" | "hasallpermissions" => {
+                (S(RefKind::Permission), 0, true)
+            }
+            _ => return None,
+        },
+        CallKind::Property => match name {
+            "fillable" | "guarded" | "hidden" | "visible" | "dates" | "casts" | "appends"
+                if scope.model =>
+            {
+                (Ctx::Columns(scope.class.clone()), arg.arg, true)
+            }
+            "with" | "withcount" | "touches" if scope.model => {
+                (Ctx::Relations(scope.class.clone()?), arg.arg, true)
+            }
+            "rules" => (Ctx::Rules, arg.arg, true),
+            "middleware" => (Ctx::Middleware, arg.arg, true),
+            _ => return None,
+        },
+        CallKind::Attribute => match name {
+            "fillable" | "guarded" | "hidden" | "visible" | "appends" if scope.model => {
+                (Ctx::Columns(scope.class.clone()), 0, true)
+            }
+            "with" | "touches" | "withcount" if scope.model => {
+                (Ctx::Relations(scope.class.clone()?), 0, true)
+            }
+            "table" => (S(RefKind::Table), 0, false),
+            "connection" => (S(RefKind::DbConnection), 0, false),
+            _ => return None,
+        },
+        CallKind::Return => match name {
+            "rules" => (Ctx::Rules, arg.arg, true),
+            "casts" if scope.model => (Ctx::Columns(scope.class.clone()), arg.arg, true),
+            "middleware" => (Ctx::Middleware, arg.arg, true),
+            _ => return None,
+        },
+    })
+}
+
+fn model_ctx(arg: &StringArg, name: &str) -> Option<(Ctx, usize, bool)> {
+    let model = model_head(arg.head.as_deref())?;
+    if RELATION_METHODS.contains(&name) {
+        return Some((Ctx::Relations(model), 0, true));
+    }
+    if (arg.is_key || arg.in_array && !arg.after_arrow) && COLUMN_KEY_METHODS.contains(&name) {
+        return Some((Ctx::Columns(Some(model)), arg.arg, true));
+    }
+    if COLUMN_METHODS.contains(&name) {
+        let any_arg = matches!(name, "select" | "addselect" | "groupby" | "pluck");
+        return Some((
+            Ctx::Columns(Some(model)),
+            if any_arg && arg.arg <= 1 { arg.arg } else { 0 },
+            any_arg || name == "wherein",
+        ));
+    }
+    None
+}
+
+fn bounds(value: &str, at: usize, separators: &[char]) -> (usize, usize) {
+    let at = at.min(value.len());
+    let start = value[..at].rfind(separators).map_or(0, |i| i + 1);
+    let end = value[at..].find(separators).map_or(value.len(), |i| at + i);
+    (start, end)
+}
+
+fn rules_segment(value: &str, at: usize) -> Option<Segment> {
+    let (s, e) = bounds(value, at, &['|']);
+    let rule = &value[s..e];
+    let colon = rule.find(':').map(|c| s + c);
+    match colon {
+        Some(c) if at > c => {
+            let name = &value[s..c];
+            let (ps, pe) = bounds(value, at, &['|', ':', ',']);
+            let index = value[c + 1..ps].matches(',').count();
+            let want = match (name, index) {
+                ("exists" | "unique", 0) => Want::Kind(RefKind::Table),
+                ("exists" | "unique", 1) => {
+                    let table = value[c + 1..]
+                        .split([',', '|'])
+                        .next()?
+                        .rsplit('.')
+                        .next()?
+                        .to_owned();
+                    Want::Columns {
+                        model: None,
+                        table: Some(table),
+                    }
+                }
+                _ => return None,
+            };
+            Some(Segment {
+                want,
+                start: ps,
+                end: pe,
+            })
+        }
+        _ => Some(Segment {
+            want: Want::Kind(RefKind::Rule),
+            start: s,
+            end: colon.unwrap_or(e),
+        }),
+    }
+}
+
+fn middleware_segment(value: &str, at: usize) -> Option<Segment> {
+    let colon = value.find(':');
+    match colon {
+        Some(c) if at > c => {
+            let name = &value[..c];
+            let (ps, pe) = bounds(value, at, &[':', ',']);
+            let index = value[c + 1..ps].matches(',').count();
+            let kind = match (name, index) {
+                ("auth" | "auth.basic" | "auth.session" | "guest", _) => RefKind::Guard,
+                ("can", 0) => RefKind::Ability,
+                ("throttle", 0) if !value[ps..pe].starts_with(|ch: char| ch.is_ascii_digit()) => {
+                    RefKind::RateLimiter
+                }
+                ("abilities" | "ability", _) => RefKind::TokenAbility,
+                ("role" | "role_or_permission", _) => RefKind::Role,
+                ("permission", _) => RefKind::Permission,
+                _ => return None,
+            };
+            Some(Segment {
+                want: Want::Kind(kind),
+                start: ps,
+                end: pe,
+            })
+        }
+        _ => Some(Segment {
+            want: Want::Kind(RefKind::Middleware),
+            start: 0,
+            end: colon.unwrap_or(value.len()),
+        }),
+    }
+}
+
+fn relation_segment(model: String, value: &str, at: usize) -> Option<Segment> {
+    let colon = value.find(':');
+    if let Some(c) = colon
+        && at > c
+    {
+        let path: Vec<String> = value[..c].split('.').map(str::to_owned).collect();
+        let (s, e) = bounds(value, at, &[':', ',']);
+        return Some(Segment {
+            want: Want::RelationColumns { model, path },
+            start: s,
+            end: e,
+        });
+    }
+    let limit = colon.unwrap_or(value.len());
+    let (s, e) = bounds(&value[..limit], at.min(limit), &['.']);
+    let path = if s == 0 {
+        Vec::new()
+    } else {
+        value[..s - 1].split('.').map(str::to_owned).collect()
+    };
+    Some(Segment {
+        want: Want::Relations { model, path },
+        start: s,
+        end: e,
+    })
+}
+
+pub fn segment(arg: &StringArg, at: usize, scope: &Scope) -> Option<Segment> {
+    let (ctx, position, arrays) = ctx_of(arg, scope)?;
+    if arg.arg != position || arg.in_array && !arrays {
+        return None;
+    }
+    let value = arg.value.as_str();
+    let whole = |want| {
+        Some(Segment {
+            want,
+            start: 0,
+            end: value.len(),
+        })
+    };
+    match ctx {
+        Ctx::Simple(kind) if !arg.is_key => whole(Want::Kind(kind)),
+        Ctx::Middleware if !arg.is_key => middleware_segment(value, at),
+        Ctx::Rules
+            if !arg.is_key
+                && (arg.in_array
+                    || matches!(arg.callee.kind, CallKind::Return | CallKind::Property)) =>
+        {
+            rules_segment(value, at)
+        }
+        Ctx::Columns(model) if !value.contains(['.', ' ', '(']) => {
+            whole(Want::Columns { model, table: None })
+        }
+        Ctx::Relations(model) => relation_segment(model, value, at),
+        Ctx::Methods(class) if !arg.is_key => whole(Want::Methods(class)),
+        Ctx::OpenApiRef if !arg.is_key => whole(Want::OpenApiRef),
+        Ctx::Section(section) if arg.is_key == (section == "securitySchemes") => {
+            whole(Want::OpenApiSection(section))
+        }
+        Ctx::Static(values) if !arg.is_key => whole(Want::Static(values)),
+        Ctx::SchemaProperties if !arg.is_key && arg.in_array => {
+            whole(Want::SchemaProperties(arg.call_start))
+        }
+        Ctx::RoutePaths if !arg.is_key => whole(Want::RoutePaths),
+        Ctx::PathParams if !arg.is_key => whole(Want::PathParams(arg.start)),
+        _ => None,
+    }
+}
+
+pub fn checkable(kind: RefKind, value: &str) -> bool {
+    !value.is_empty()
+        && !value.contains(['$', '{', '*'])
+        && match kind {
+            RefKind::View => !value.contains("::"),
+            _ => true,
+        }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::php::args_in;
+
+    fn wants(text: &str, blade: bool, scope: &Scope) -> Vec<(String, Option<Want>)> {
+        args_in(text, blade)
+            .into_iter()
+            .map(|a| {
+                let at = a.value.len();
+                (a.value.clone(), segment(&a, at, scope).map(|s| s.want))
+            })
+            .collect()
+    }
+
+    fn k(kind: RefKind) -> Option<Want> {
+        Some(Want::Kind(kind))
+    }
+
+    #[test]
+    fn recognises_laravel_helpers_facades_and_directives() {
+        let text = "<?php\nConfig::get('app.name');\nreturn redirect()->route('home');\nRoute::view('/a', 'about');\nView::first(['a', 'b']);\n__('auth.failed');\n$request->routeIs('admin.*');\nview('x', ['k' => 'v']);\nfoo('bar');\n$id = $request->route('userId');\nStorage::disk('s3');\nLog::channel('slack');\n";
+        let got = wants(text, false, &Scope::default());
+        assert_eq!(
+            got,
+            [
+                ("app.name".into(), k(RefKind::Config)),
+                ("home".into(), k(RefKind::Route)),
+                ("/a".into(), None),
+                ("about".into(), k(RefKind::View)),
+                ("a".into(), k(RefKind::View)),
+                ("b".into(), k(RefKind::View)),
+                ("auth.failed".into(), k(RefKind::Translation)),
+                ("admin.*".into(), k(RefKind::Route)),
+                ("x".into(), k(RefKind::View)),
+                ("k".into(), None),
+                ("v".into(), None),
+                ("bar".into(), None),
+                ("userId".into(), None),
+                ("s3".into(), k(RefKind::Disk)),
+                ("slack".into(), k(RefKind::LogChannel)),
+            ]
+        );
+        let blade = "@extends('layouts.app')\n@includeWhen($ok, 'partials.alert')\n@lang('messages.hi')\n@section('title')\n@can('update')\n";
+        assert_eq!(
+            wants(blade, true, &Scope::default()),
+            [
+                ("layouts.app".into(), k(RefKind::View)),
+                ("partials.alert".into(), k(RefKind::View)),
+                ("messages.hi".into(), k(RefKind::Translation)),
+                ("title".into(), k(RefKind::Section)),
+                ("update".into(), k(RefKind::Ability)),
+            ]
+        );
+    }
+
+    #[test]
+    fn splits_middleware_and_rules() {
+        let text = "<?php\nRoute::middleware(['auth:sanctum', 'throttle:uploads'])->get('/x', [UploadController::class, 'store']);\n";
+        let got = wants(text, false, &Scope::default());
+        assert_eq!(got[0].1, k(RefKind::Guard));
+        assert_eq!(got[1].1, k(RefKind::RateLimiter));
+        assert_eq!(got[3].1, Some(Want::Methods("UploadController".into())));
+        let arg = &args_in("<?php\nRoute::middleware('auth:api');", false)[0];
+        assert_eq!(
+            segment(arg, 2, &Scope::default()).map(|s| (s.want, s.start, s.end)),
+            Some((Want::Kind(RefKind::Middleware), 0, 4))
+        );
+        let rules = "<?php\nclass R { public function rules(): array { return ['email' => 'required|exists:users,email', 'tags' => ['array', 'max:3']]; } }";
+        let args = args_in(rules, false);
+        let email = &args[1];
+        assert_eq!(
+            segment(email, 3, &Scope::default()).unwrap().want,
+            Want::Kind(RefKind::Rule)
+        );
+        let at = email.value.find("users").unwrap() + 2;
+        assert_eq!(
+            segment(email, at, &Scope::default()).unwrap().want,
+            Want::Kind(RefKind::Table)
+        );
+        let at = email.value.len();
+        assert_eq!(
+            segment(email, at, &Scope::default()).unwrap().want,
+            Want::Columns {
+                model: None,
+                table: Some("users".into())
+            }
+        );
+        assert_eq!(
+            segment(&args[3], 1, &Scope::default()).unwrap().want,
+            Want::Kind(RefKind::Rule)
+        );
+    }
+
+    #[test]
+    fn understands_openapi_attributes() {
+        let text = "<?php\nuse OpenApi\\Attributes as OA;\n#[OA\\Post(path: '/users', tags: ['Users'], security: [['bearerAuth' => []]], parameters: [new OA\\Parameter(name: 'id', in: 'path', schema: new OA\\Schema(type: 'integer', format: 'int64'))], responses: [new OA\\Response(response: 404, content: new OA\\JsonContent(ref: '#/components/schemas/X'))])]\n#[OA\\Schema(schema: 'S', required: ['name'], properties: [new OA\\Property(property: 'name')])]\n";
+        let got: Vec<_> = wants(text, false, &Scope::default())
+            .into_iter()
+            .map(|(v, w)| (v, w.map(|w| format!("{w:?}"))))
+            .collect();
+        let find = |v: &str| {
+            got.iter()
+                .find(|(x, _)| x == v)
+                .and_then(|(_, w)| w.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(find("/users"), "RoutePaths");
+        assert_eq!(find("Users"), "OpenApiSection(\"tags\")");
+        assert_eq!(find("bearerAuth"), "OpenApiSection(\"securitySchemes\")");
+        assert!(find("id").starts_with("PathParams"));
+        assert!(find("path").starts_with("Static"));
+        assert!(find("integer").starts_with("Static"));
+        assert_eq!(find("#/components/schemas/X"), "OpenApiRef");
+        assert!(find("name").starts_with("SchemaProperties"));
+    }
+
+    #[test]
+    fn understands_package_helpers() {
+        let text = "<?php\n$user->hasRole('admin');\n$user->tokenCan('posts:read');\nArtisan::call('cache:clear');\nSocialite::driver('github');\nnew PrivateChannel('chat.1');\nRoute::middleware('role:admin');\n";
+        let got = wants(text, false, &Scope::default());
+        assert_eq!(got[0].1, k(RefKind::Role));
+        assert_eq!(got[1].1, k(RefKind::TokenAbility));
+        assert_eq!(got[2].1, k(RefKind::Command));
+        assert_eq!(got[3].1, k(RefKind::SocialiteDriver));
+        assert_eq!(got[4].1, k(RefKind::Channel));
+        assert_eq!(got[5].1, k(RefKind::Role));
+    }
+
+    #[test]
+    fn understands_eloquent_chains() {
+        let text = "<?php\nUser::query()->where('email', $e)->with(['posts.comments', 'team:id,name'])->orderBy('created_at')->get();\nPost::create(['title' => 't']);\n";
+        let got = wants(text, false, &Scope::default());
+        let user = || "User".to_owned();
+        assert_eq!(
+            got[0].1,
+            Some(Want::Columns {
+                model: Some(user()),
+                table: None
+            })
+        );
+        assert_eq!(
+            got[1].1,
+            Some(Want::Relations {
+                model: user(),
+                path: vec!["posts".into()]
+            })
+        );
+        assert_eq!(
+            got[2].1,
+            Some(Want::RelationColumns {
+                model: user(),
+                path: vec!["team".into()]
+            })
+        );
+        assert_eq!(
+            got[3].1,
+            Some(Want::Columns {
+                model: Some(user()),
+                table: None
+            })
+        );
+        assert_eq!(
+            got[4].1,
+            Some(Want::Columns {
+                model: Some("Post".into()),
+                table: None
+            })
+        );
+        let model = "<?php\nclass Post extends Model { protected $fillable = ['title', 'body']; protected $with = ['author']; }";
+        let scope = Scope {
+            class: Some("Post".into()),
+            model: true,
+        };
+        let got = wants(model, false, &scope);
+        assert_eq!(
+            got[0].1,
+            Some(Want::Columns {
+                model: Some("Post".into()),
+                table: None
+            })
+        );
+        assert_eq!(
+            got[2].1,
+            Some(Want::Relations {
+                model: "Post".into(),
+                path: vec![]
+            })
+        );
+    }
+}
