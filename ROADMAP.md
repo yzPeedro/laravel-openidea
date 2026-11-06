@@ -11,17 +11,15 @@ Laravel OpenIDEA is an independent project. It reuses no code, branding or text 
 - Inspections and quick fixes, *Generate @property PHPDoc*, related class or view.
 - The hub: 40+ sections with filters and sorting, Artisan, Tinker, logs, Live Audit, profiles, debug calls, ecosystem and AI agents.
 - MCP server for AI agents and Laravel Boost integration.
+- Folio pages as routes, named routes from the route cache, and pivot attributes.
 
 ## Next
 
 | Item | Notes |
 | --- | --- |
-| Storage path completion (`Storage::get('…')`) | From `storage/app` and the configured disks |
-| Pivot attributes on `->pivot` | From `withPivot()` and pivot models |
 | Hub: create missing classes | Quick fix to create a Livewire or Blade component class |
 | Route actions from the hub | "Add route" when a name is used but not defined |
-| Cached routes | Read `bootstrap/cache/routes-v7.php` when it exists |
-| More packages | laravel-data, Filament resources, Nova, Folio pages |
+| More packages | laravel-data, Filament resources, Nova |
 
 ## Needs new OpenIDEA plugin APIs
 
@@ -34,3 +32,4 @@ These need host APIs that OpenIDEA doesn't offer yet. They would be proposed ups
 | Rename a route, view or config key | rename provider |
 | Inline config and translation values | inlay hints provider |
 | Typed model members everywhere | access to the IDE's PHP symbols |
+| Storage path completion (`Storage::get('…')`) | listing ignored files (`storage/app` is git-ignored) |

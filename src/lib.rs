@@ -124,6 +124,29 @@ fn scope_of(text: &str) -> Scope {
     }
 }
 
+fn word_start(text: &str) -> usize {
+    text.char_indices()
+        .rev()
+        .find(|(_, c)| !(c.is_alphanumeric() || *c == '_'))
+        .map_or(0, |(i, c)| i + c.len_utf8())
+}
+
+fn pivot_access(text: &str, cursor: usize) -> Option<(String, usize)> {
+    let before = text.get(..cursor)?;
+    let start = word_start(before);
+    let head = before[..start].strip_suffix("->")?;
+    let head = head.strip_suffix('?').unwrap_or(head);
+    let accessor_start = word_start(head);
+    let accessor = &head[accessor_start..];
+    let lead = &head[..accessor_start];
+    let lead = lead.strip_suffix("->")?;
+    let lead = lead.strip_suffix('?').unwrap_or(lead);
+    let valid = !accessor.is_empty()
+        && !accessor.starts_with(|c: char| c.is_ascii_digit())
+        && lead.ends_with(|c: char| c.is_alphanumeric() || c == '_' || c == ')' || c == ']');
+    valid.then(|| (accessor.to_owned(), start))
+}
+
 fn is_env_file(path: &str) -> bool {
     path.rsplit(['/', '\\'])
         .next()
@@ -666,12 +689,14 @@ impl Laravel {
                 {
                     continue;
                 }
-                out.push(Diagnostic {
-                    range: lines.range(text, arg.start, arg.end),
-                    severity: Severity::Warning,
-                    message: format!("OpenAPI component '{}' not found", arg.value),
-                    code: Some("laravel.unknown-openapi-ref".into()),
-                });
+                out.push(
+                    Diagnostic::new(
+                        lines.range(text, arg.start, arg.end),
+                        Severity::Warning,
+                        format!("OpenAPI component '{}' not found", arg.value),
+                    )
+                    .code("laravel.unknown-openapi-ref"),
+                );
                 continue;
             }
             let Want::Kind(kind) = seg.want else { continue };
@@ -694,15 +719,17 @@ impl Laravel {
                 RefKind::Ability => "Ability",
                 _ => "Validation rule",
             };
-            out.push(Diagnostic {
-                range: lines.range(text, arg.start + seg.start, arg.start + seg.end),
-                severity: Severity::Warning,
-                message: format!("{label} '{value}' not found"),
-                code: Some(format!(
+            out.push(
+                Diagnostic::new(
+                    lines.range(text, arg.start + seg.start, arg.start + seg.end),
+                    Severity::Warning,
+                    format!("{label} '{value}' not found"),
+                )
+                .code(format!(
                     "laravel.unknown-{}",
                     label.to_lowercase().replace(' ', "-")
                 )),
-            });
+            );
         }
         out
     }
@@ -839,6 +866,7 @@ impl Laravel {
             ),
             kind: Some("refactor".into()),
             preferred: false,
+            data: None,
             edits: vec![(
                 doc.path.clone(),
                 vec![TextEdit {
@@ -900,6 +928,7 @@ impl Laravel {
                     title: format!("Add '{key}' to {relative}"),
                     kind: Some("quickfix".into()),
                     preferred: true,
+                    data: None,
                     edits: vec![(
                         join(root, &relative),
                         vec![TextEdit {
@@ -922,6 +951,7 @@ impl Laravel {
                 title: format!("Add '{key}' to {relative}"),
                 kind: Some("quickfix".into()),
                 preferred: out.is_empty(),
+                data: None,
                 edits: vec![(
                     join(root, &relative),
                     vec![TextEdit {
@@ -988,6 +1018,26 @@ impl Providers for Laravel {
         };
         if is_env_file(&doc.path) {
             return self.env_completion(&project, &root, doc, cursor, at);
+        }
+        if let Some((accessor, start)) = pivot_access(&doc.text, cursor) {
+            let prefix = format!("{accessor}.");
+            let entries: Vec<Entry> = index::pivots(&project, &root)
+                .into_iter()
+                .filter_map(|e| {
+                    Some(Entry {
+                        key: e.key.strip_prefix(&prefix)?.to_owned(),
+                        ..e
+                    })
+                })
+                .collect();
+            if !entries.is_empty() {
+                return items(
+                    RefKind::Column,
+                    &entries,
+                    &doc.text[start..cursor],
+                    Range::new(position(&doc.text, start), at),
+                );
+            }
         }
         let blade = is_blade(&doc.path);
         if blade && let Some(start) = directives::typed_at(&doc.text, cursor) {
@@ -1417,6 +1467,62 @@ mod tests {
             items[0].replace,
             Some(Range::new(at(text, "adm'", 0), at(text, "adm'", 3)))
         );
+    }
+
+    #[test]
+    fn completes_pivot_attributes() {
+        let host = setup();
+        host.add_file(
+            "app/Models/Team.php",
+            "<?php\nnamespace App\\Models;\n\nclass Team extends Model\n{\n    public function members()\n    {\n        return $this->belongsToMany(User::class)->withPivot('role')->withTimestamps();\n    }\n\n    public function subscribers()\n    {\n        return $this->belongsToMany(User::class, 'subscriptions')->as('subscription')->withPivot('plan');\n    }\n}\n",
+        );
+        let mut plugin = Laravel::default();
+        let text = "<?php\nforeach ($team->members as $user) {\n    echo $user->pivot->ro;\n}\n";
+        let items = plugin.completion(&doc("app/X.php", text), at(text, "pivot->ro", 9), None);
+        assert_eq!(labels(&items), ["role"]);
+        assert_eq!(items[0].detail.as_deref(), Some("pivot of Team::members()"));
+        let text = "@foreach ($team->subscribers as $u)\n{{ $u->subscription?-> }}\n@endforeach\n";
+        let items = plugin.completion(
+            &doc("resources/views/x.blade.php", text),
+            at(text, "?-> ", 3),
+            None,
+        );
+        assert_eq!(labels(&items), ["team_id", "user_id", "plan"]);
+        let text = "<?php\n$this->pivot->x;\n$a->b;\n";
+        assert!(
+            plugin
+                .completion(&doc("app/X.php", text), at(text, "->b", 3), None)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn completes_and_navigates_folio_pages() {
+        let host = setup();
+        host.add_file(
+            "app/Providers/FolioServiceProvider.php",
+            "<?php\nFolio::path(resource_path('views/pages'))->middleware([]);\n",
+        );
+        host.add_file(
+            "resources/views/pages/users/[User].blade.php",
+            "<?php\nuse function Laravel\\Folio\\name;\n\nname('users.show');\n?>\n<h1>{{ $user->name }}</h1>\n",
+        );
+        host.add_file("resources/views/pages/about.blade.php", "<h1>About</h1>\n");
+        let text = "<?php\nreturn to_route('users.');\n";
+        let mut plugin = Laravel::default();
+        let items = plugin.completion(&doc("app/X.php", text), at(text, "users.'", 6), None);
+        let page = items
+            .iter()
+            .find(|i| i.label == "users.show")
+            .expect("the page");
+        assert_eq!(page.detail.as_deref(), Some("GET /users/{user}"));
+        let found = plugin.definition(
+            &doc("app/X.php", "<?php\nreturn to_route('users.show');\n"),
+            at("<?php\nreturn to_route('users.show');\n", "users.show", 2),
+        );
+        assert_eq!(found.len(), 1);
+        assert!(found[0].path.ends_with("pages/users/[User].blade.php"));
+        assert_eq!(found[0].range.start.line, 3);
     }
 
     #[test]

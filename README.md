@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/yzPeedro/laravel-openidea/actions/workflows/ci.yml"><img src="https://github.com/yzPeedro/laravel-openidea/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/yzPeedro/laravel-openidea/releases/latest"><img src="https://img.shields.io/github/v/release/yzPeedro/laravel-openidea?color=ff2d20&label=release" alt="Latest release"></a>
-  <img src="https://img.shields.io/badge/OpenIDEA-plugin%20API%201.0-4f46e5" alt="OpenIDEA plugin API 1.0">
+  <img src="https://img.shields.io/badge/OpenIDEA-0.1.37%2B-4f46e5" alt="OpenIDEA 0.1.37 and newer">
   <img src="https://img.shields.io/badge/Laravel-10%2B-ff2d20?logo=laravel&logoColor=white" alt="Laravel 10 and newer">
   <img src="https://img.shields.io/badge/built%20with-Rust%20%2B%20WebAssembly-orange?logo=rust" alt="Rust and WebAssembly">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
@@ -54,10 +54,7 @@ https://github.com/user-attachments/assets/bc56e061-73f0-484d-8e1c-d9776cdc9692
 
 ## Installation
 
-**Requirements:** OpenIDEA with plugin API 1.0 and a Laravel 10 (or newer) project. PHP or Docker Compose is needed for the runtime features (Artisan, Tinker, Live Audit).
-
-> [!NOTE]
-> The plugin uses the `open-location` host function so hub rows can open files at a line. Until it lands in upstream OpenIDEA, run OpenIDEA built from the [`fix/plugin-completion-and-definitions`](https://github.com/yzPeedro/openidea/tree/fix/plugin-completion-and-definitions) branch.
+**Requirements:** [OpenIDEA](https://github.com/l0ng-ai/openidea/releases/latest) 0.1.37 or newer and a Laravel 10 (or newer) project. PHP or Docker Compose is needed for the runtime features (Artisan, Tinker, Live Audit).
 
 1. **Download** `laravel-openidea-<version>.zip` from the [latest release](https://github.com/yzPeedro/laravel-openidea/releases/latest).
 2. In OpenIDEA open **Settings › Plugins › ⚙ › Install Plugin from Package File…** and pick the zip.
@@ -74,7 +71,7 @@ https://github.com/user-attachments/assets/bc56e061-73f0-484d-8e1c-d9776cdc9692
 <summary><b>Build from source</b></summary>
 
 ```sh
-git clone https://github.com/yzPeedro/openidea --branch fix/plugin-completion-and-definitions
+git clone https://github.com/l0ng-ai/openidea --branch v0.1.37
 git clone https://github.com/yzPeedro/laravel-openidea
 cd laravel-openidea
 rustup target add wasm32-wasip2
@@ -104,6 +101,9 @@ Completion and navigation come from cached indexes of your project files, built 
 - **OpenAPI and packages:** swagger-php `$ref`s, tags and security schemes, Sanctum token abilities, Spatie roles and permissions, Socialite drivers, broadcast channels, Inertia pages and Livewire components.
 - **Types:** Laravel, package and project traits after `use`, interfaces after `implements` and base classes after `extends`, ranked by folder (models get `HasFactory` and `SoftDeletes` first, jobs get `ShouldQueue`, and so on).
 - **Inspections and quick fixes:** unknown views, routes, rules, middleware and OpenAPI refs; *Add translation*; *Generate @property PHPDoc* for models from migrations, casts and relations; *Laravel: Go to Related Class or View* for Livewire and Blade components.
+- **Folio:** pages under the Folio paths of `FolioServiceProvider` are routes: their `name()` completes in `route()`, Ctrl+click opens the page, and the hub's Routes section lists every page with its URI.
+- **Cached routes:** after `php artisan route:cache`, named routes from packages (Sanctum, Horizon, Filament…) are read from `bootstrap/cache/routes-v7.php`.
+- **Pivot attributes:** after `->pivot->`, or the name given with `->as()`, the keys, `withPivot()` columns and timestamps of many-to-many relations.
 - **`.env` files:** key and value completion (connections, stores, disks, channels, mailers, locales) with navigation to the config that reads each key.
 - **File icons** from the Material Icon Theme for Laravel files.
 

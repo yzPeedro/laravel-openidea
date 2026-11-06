@@ -165,6 +165,119 @@ pub fn relations(project: &Project, root: &str) -> Vec<Entry> {
     out
 }
 
+const MANY: [&str; 3] = ["belongsToMany", "morphToMany", "morphedByMany"];
+
+fn strings_in(tokens: &[crate::php::Token], open: usize) -> (Vec<String>, usize) {
+    let mut depth = 0;
+    let mut out = Vec::new();
+    for (k, t) in tokens.iter().enumerate().skip(open) {
+        match &t.kind {
+            Kind::Open(_) => depth += 1,
+            Kind::Close(_) => {
+                depth -= 1;
+                if depth == 0 {
+                    return (out, k);
+                }
+            }
+            Kind::Str { value, .. } => out.push(value.clone()),
+            _ => {}
+        }
+    }
+    (out, tokens.len())
+}
+
+pub fn pivot_of(model: &str, body: &str) -> Option<(String, Vec<String>)> {
+    let tokens = tokenize(body, 0, body.len());
+    let at = tokens
+        .iter()
+        .position(|t| matches!(&t.kind, Kind::Ident(n) if MANY.contains(&n.as_str())))?;
+    let Kind::Ident(kind) = &tokens[at].kind else {
+        return None;
+    };
+    if tokens.get(at + 1).map(|t| &t.kind) != Some(&Kind::Open('(')) {
+        return None;
+    }
+    let related = match tokens.get(at + 2).map(|t| &t.kind) {
+        Some(Kind::Ident(c)) => c.rsplit('\\').next().unwrap_or(c).to_owned(),
+        Some(Kind::Str { value, .. }) => value.rsplit('\\').next().unwrap_or(value).to_owned(),
+        _ => return None,
+    };
+    let (args, close) = strings_in(&tokens, at + 1);
+    let mut keys = Vec::new();
+    if kind == "belongsToMany" {
+        let parent_key = format!("{}_id", snake(model));
+        let related_key = format!("{}_id", snake(&related));
+        keys.push(args.get(1).cloned().unwrap_or(parent_key));
+        keys.push(args.get(2).cloned().unwrap_or(related_key));
+    } else {
+        let name = args.first().cloned().unwrap_or_default();
+        if !name.is_empty() {
+            keys.push(format!("{name}_id"));
+            keys.push(format!("{name}_type"));
+        }
+        let other = if kind == "morphToMany" {
+            &related
+        } else {
+            model
+        };
+        keys.push(
+            args.get(2)
+                .cloned()
+                .unwrap_or(format!("{}_id", snake(other))),
+        );
+    }
+    let mut accessor = "pivot".to_owned();
+    let mut k = close;
+    while k < tokens.len() {
+        let call = match (&tokens[k].kind, tokens.get(k + 1).map(|t| &t.kind)) {
+            (Kind::Ident(n), Some(Kind::Open('('))) => n.clone(),
+            _ => {
+                k += 1;
+                continue;
+            }
+        };
+        let (strings, end) = strings_in(&tokens, k + 1);
+        match call.as_str() {
+            "withPivot" => keys.extend(strings),
+            "withTimestamps" => {
+                keys.push(strings.first().cloned().unwrap_or("created_at".into()));
+                keys.push(strings.get(1).cloned().unwrap_or("updated_at".into()));
+            }
+            "as" => accessor = strings.first().cloned().unwrap_or(accessor),
+            _ => {}
+        }
+        k = end + 1;
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    keys.retain(|c| !c.is_empty() && seen.insert(c.clone()));
+    Some((accessor, keys))
+}
+
+pub fn pivots(project: &Project, root: &str) -> Vec<Entry> {
+    let mut out = Vec::new();
+    for (path, text, class) in models_in(project, root) {
+        let lines = Lines::new(&text);
+        for m in class
+            .methods
+            .iter()
+            .filter(|m| m.public && m.body.1 > m.body.0)
+        {
+            let Some((accessor, columns)) = pivot_of(&class.name, &text[m.body.0..m.body.1]) else {
+                continue;
+            };
+            for column in columns {
+                out.push(Entry::new(
+                    format!("{accessor}.{column}"),
+                    Some(format!("pivot of {}::{}()", class.name, m.name)),
+                    &path,
+                    lines.range(&text, m.start, m.end),
+                ));
+            }
+        }
+    }
+    out
+}
+
 pub fn scopes(project: &Project, root: &str) -> Vec<Entry> {
     let mut out = Vec::new();
     for (path, text, class) in models_in(project, root) {
@@ -222,6 +335,50 @@ mod tests {
             Some(("morphTo".into(), None))
         );
         assert_eq!(relation_of(" return 1; "), None);
+    }
+
+    #[test]
+    fn reads_pivot_attributes() {
+        let body = "return $this->belongsToMany(Role::class)->withPivot('expires_at', 'granted_by')->withTimestamps();";
+        assert_eq!(
+            pivot_of("User", body),
+            Some((
+                "pivot".to_owned(),
+                [
+                    "user_id",
+                    "role_id",
+                    "expires_at",
+                    "granted_by",
+                    "created_at",
+                    "updated_at"
+                ]
+                .map(String::from)
+                .to_vec()
+            ))
+        );
+        let body = "return $this->belongsToMany(Podcast::class, 'subscriptions', 'member_id')->as('subscription')->withPivot(['active']);";
+        assert_eq!(
+            pivot_of("User", body),
+            Some((
+                "subscription".to_owned(),
+                ["member_id", "podcast_id", "active"]
+                    .map(String::from)
+                    .to_vec()
+            ))
+        );
+        let body = "return $this->morphToMany(Tag::class, 'taggable');";
+        assert_eq!(
+            pivot_of("Post", body).map(|(_, c)| c),
+            Some(
+                ["taggable_id", "taggable_type", "tag_id"]
+                    .map(String::from)
+                    .to_vec()
+            )
+        );
+        assert_eq!(
+            pivot_of("User", "return $this->hasMany(Post::class);"),
+            None
+        );
     }
 
     #[test]

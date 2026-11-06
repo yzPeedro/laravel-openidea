@@ -669,10 +669,56 @@ impl Laravel {
                         method_location.as_ref().or(Some(&e.location)),
                     ));
                 }
+                let cached_actions: std::collections::BTreeMap<String, String> = project
+                    .read_file(crate::index::routes::CACHE)
+                    .map(|t| {
+                        crate::index::routes::cached(&t)
+                            .into_iter()
+                            .filter_map(|r| Some((r.name, r.action?)))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let pages = crate::index::folio::pages(project, root);
+                let page_paths: BTreeSet<&str> =
+                    pages.iter().map(|p| p.location.path.as_str()).collect();
                 for e in self.cache.get(RefKind::Route, project, root).iter() {
+                    if page_paths.contains(e.location.path.as_str()) {
+                        continue;
+                    }
                     if seen.insert((e.location.path.clone(), e.location.range.start.line)) {
                         let detail = text(&e.detail);
                         let (method, uri) = detail.split_once(' ').unwrap_or((detail.as_str(), ""));
+                        if e.location.path.ends_with(crate::index::routes::CACHE) {
+                            let action = cached_actions
+                                .get(&e.key)
+                                .cloned()
+                                .unwrap_or_else(|| "closure".into());
+                            let controller = action
+                                .split('@')
+                                .next()
+                                .unwrap_or_default()
+                                .rsplit('\\')
+                                .next()
+                                .unwrap_or_default()
+                                .to_owned();
+                            rows.push(row(
+                                root,
+                                vec![
+                                    method.into(),
+                                    uri.into(),
+                                    e.key.clone(),
+                                    action.replace('@', "::"),
+                                    prefix(uri),
+                                    if controller.is_empty() {
+                                        "cached".into()
+                                    } else {
+                                        controller
+                                    },
+                                ],
+                                Some(&e.location),
+                            ));
+                            continue;
+                        }
                         rows.push(row(
                             root,
                             vec![
@@ -684,6 +730,22 @@ impl Laravel {
                                 "closure".into(),
                             ],
                             Some(&e.location),
+                        ));
+                    }
+                }
+                for page in pages {
+                    if seen.insert((page.location.path.clone(), page.location.range.start.line)) {
+                        rows.push(row(
+                            root,
+                            vec![
+                                "GET".into(),
+                                page.uri.clone(),
+                                page.name.clone().unwrap_or_default(),
+                                "Folio page".into(),
+                                prefix(&page.uri),
+                                "folio".into(),
+                            ],
+                            Some(&page.location),
                         ));
                     }
                 }

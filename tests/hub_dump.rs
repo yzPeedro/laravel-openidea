@@ -38,6 +38,7 @@ fn dumps_hub_responses() {
         ".env.example",
         "bootstrap/app.php",
         "bootstrap/providers.php",
+        "bootstrap/cache/routes-v7.php",
         "vite.config.js",
         "package.json",
         "vendor/composer/autoload_classmap.php",

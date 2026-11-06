@@ -15,8 +15,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  SDK_REPOSITORY: yzPeedro/openidea
-  SDK_REF: fix/plugin-completion-and-definitions
+  SDK_REPOSITORY: l0ng-ai/openidea
+  SDK_REF: v0.1.37
 
 jobs:
   rust:

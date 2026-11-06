@@ -341,6 +341,7 @@ fn host_files(root: &Path) -> Vec<(String, String)> {
         root.join("app"),
         root.join("routes"),
         root.join("resources/views"),
+        root.join("bootstrap/cache"),
     ];
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {

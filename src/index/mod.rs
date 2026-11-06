@@ -5,12 +5,13 @@ mod classes;
 mod config;
 mod database;
 mod env;
+pub mod folio;
 mod lang;
 mod middleware;
 mod models;
 pub mod openapi;
 mod packages;
-mod routes;
+pub mod routes;
 pub mod rules;
 mod views;
 
@@ -22,7 +23,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 pub use classes::{Class, parse_class};
-pub use models::{is_model, plural, table_for};
+pub use models::{is_model, pivots, plural, table_for};
 pub use routes::parse as parse_routes;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -213,9 +214,13 @@ impl RefKind {
             .filter(|kind| match kind {
                 Self::Config => has(&["config/"]),
                 k if k.config_prefix().is_some() => has(&["config/"]),
-                Self::Route | Self::RouteAction => {
-                    has(&["routes/", "bootstrap/app.php", "app/Providers/"])
-                }
+                Self::Route | Self::RouteAction => has(&[
+                    "routes/",
+                    "bootstrap/app.php",
+                    "bootstrap/cache/",
+                    "app/Providers/",
+                    "resources/views/",
+                ]),
                 Self::View | Self::Section | Self::Stack => has(&["resources/views/"]),
                 Self::Env => has(&[".env"]),
                 Self::Translation => has(&["lang/", "resources/lang/"]),

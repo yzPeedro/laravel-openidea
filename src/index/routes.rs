@@ -39,7 +39,100 @@ pub fn index(project: &Project, root: &str) -> Vec<Entry> {
             })
         }));
     }
+    out.extend(super::folio::named_routes(project, root));
+    if let Ok(text) = project.read_file(CACHE) {
+        let known: std::collections::BTreeSet<String> = out.iter().map(|e| e.key.clone()).collect();
+        let lines = Lines::new(&text);
+        let path = crate::project::join(root, CACHE);
+        out.extend(
+            cached(&text)
+                .into_iter()
+                .filter(|r| !known.contains(&r.name))
+                .map(|r| Entry {
+                    key: r.name,
+                    detail: Some(format!("{} {}", r.method, r.uri)),
+                    location: Location {
+                        path: path.clone(),
+                        range: lines.range(&text, r.at, r.at),
+                    },
+                }),
+        );
+    }
     out.sort_by(|a, b| a.key.cmp(&b.key));
+    out
+}
+
+pub const CACHE: &str = "bootstrap/cache/routes-v7.php";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cached {
+    pub name: String,
+    pub method: String,
+    pub uri: String,
+    pub action: Option<String>,
+    pub at: usize,
+}
+
+fn exported(chunk: &str, key: &str) -> Option<(String, usize)> {
+    let marker = format!("'{key}' => '");
+    let start = chunk.find(&marker)? + marker.len();
+    let mut out = String::new();
+    let mut chars = chunk[start..].chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => out.extend(chars.next()),
+            '\'' => return Some((out, start)),
+            c => out.push(c),
+        }
+    }
+    None
+}
+
+pub fn cached(text: &str) -> Vec<Cached> {
+    let Some(attributes) = text.find("'attributes' =>") else {
+        return Vec::new();
+    };
+    let marker = "'methods' =>";
+    let mut starts: Vec<usize> = text[attributes..]
+        .match_indices(marker)
+        .map(|(i, _)| attributes + i)
+        .collect();
+    starts.push(text.len());
+    let mut out = Vec::new();
+    for pair in starts.windows(2) {
+        let chunk = &text[pair[0]..pair[1]];
+        let Some((uri, at)) = exported(chunk, "uri") else {
+            continue;
+        };
+        let Some((name, _)) = exported(chunk, "as") else {
+            continue;
+        };
+        if name.starts_with("generated::") {
+            continue;
+        }
+        let methods_end = chunk.find(')').unwrap_or(chunk.len());
+        let method = chunk[marker.len().min(methods_end)..methods_end]
+            .split('\'')
+            .skip(1)
+            .step_by(2)
+            .find(|m| *m != "HEAD")
+            .unwrap_or("GET")
+            .to_owned();
+        let uri = if uri.starts_with('/') {
+            uri
+        } else {
+            format!("/{uri}")
+        };
+        out.push(Cached {
+            name,
+            method,
+            uri,
+            action: exported(chunk, "uses")
+                .map(|(a, _)| a)
+                .filter(|a| !a.starts_with("O:")),
+            at: pair[0] + at,
+        });
+    }
     out
 }
 
@@ -425,6 +518,27 @@ Route::view('/about', 'about')->name('about');
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn reads_named_routes_from_the_route_cache() {
+        let text = "<?php\n\napp('router')->setCompiledRoutes(\n    array (\n  'compiled' => \n  array (\n    'static' => array ( ),\n  ),\n  'attributes' => \n  array (\n    'sanctum.csrf-cookie' => \n    array (\n      'methods' => \n      array (\n        0 => 'GET',\n        1 => 'HEAD',\n      ),\n      'uri' => 'sanctum/csrf-cookie',\n      'action' => \n      array (\n        'uses' => 'Laravel\\\\Sanctum\\\\Http\\\\Controllers\\\\CsrfCookieController@show',\n        'as' => 'sanctum.csrf-cookie',\n      ),\n    ),\n    'generated::a1' => \n    array (\n      'methods' => \n      array (\n        0 => 'POST',\n      ),\n      'uri' => 'webhook',\n      'action' => \n      array (\n        'as' => 'generated::a1',\n      ),\n    ),\n    'horizon.index' => \n    array (\n      'methods' => \n      array (\n        0 => 'GET',\n        1 => 'HEAD',\n      ),\n      'uri' => 'horizon/{view?}',\n      'action' => \n      array (\n        'as' => 'horizon.index',\n      ),\n    ),\n  ),\n));\n";
+        let routes = cached(text);
+        assert_eq!(
+            routes
+                .iter()
+                .map(|r| (r.name.as_str(), r.method.as_str(), r.uri.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("sanctum.csrf-cookie", "GET", "/sanctum/csrf-cookie"),
+                ("horizon.index", "GET", "/horizon/{view?}"),
+            ]
+        );
+        assert_eq!(
+            routes[0].action.as_deref(),
+            Some("Laravel\\Sanctum\\Http\\Controllers\\CsrfCookieController@show")
+        );
+        assert_eq!(&text[routes[0].at..routes[0].at + 7], "sanctum");
     }
 
     #[test]
