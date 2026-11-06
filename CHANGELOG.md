@@ -4,6 +4,13 @@ All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](h
 
 ## Unreleased
 
+## 0.13.0
+
+- Runs on official OpenIDEA 0.1.37 and newer, which ships the plugin APIs this plugin needs (views open files at a line, SVG tool window icons); no fork is needed anymore.
+- Folio: pages under the paths of `FolioServiceProvider` (or `resources/views/pages`) are routes, with `{param}`, model binding and `...` segments; named pages complete in `route()` and open with Ctrl+click, and the hub's Routes section lists every page.
+- Named routes from the route cache (`bootstrap/cache/routes-v7.php`), so package routes such as Sanctum, Horizon or Filament complete after `php artisan route:cache`; the hub shows their actions.
+- Pivot attributes: after `->pivot->`, or the accessor set with `->as()`, the pivot keys, `withPivot()` columns and timestamps of `belongsToMany`, `morphToMany` and `morphedByMany` relations.
+
 ## 0.12.0
 
 - Hub sections can be opened from messages (section, filters, search, Tinker snippets).
