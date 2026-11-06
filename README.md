@@ -31,6 +31,7 @@ https://github.com/user-attachments/assets/bc56e061-73f0-484d-8e1c-d9776cdc9692
   - [Editor intelligence](#editor-intelligence)
   - [The Laravel OpenIDEA hub](#the-laravel-openidea-hub)
   - [Tinker](#tinker)
+  - [SQL to Laravel](#sql-to-laravel)
   - [Live Audit](#live-audit)
   - [Logs, Artisan and the rest](#logs-artisan-and-the-rest)
   - [AI agents](#ai-agents)
@@ -48,6 +49,7 @@ https://github.com/user-attachments/assets/bc56e061-73f0-484d-8e1c-d9776cdc9692
 | 🧭 **Navigation** | Ctrl+click on a route name or URI opens the controller method; views, config keys, env keys and translations open where they are defined. Gutter icons link `route()` calls and views. |
 | 🧩 **A hub for your whole app** | 40+ sections: routes, controllers, requests, models, scopes, observers, events and listeners, jobs, schedule, translations, config, env, bindings and more. Every section has filters, and every row opens its file. |
 | 🐘 **Tinker in tabs** | Write PHP like in an editor, press Ctrl+Enter, get Tinker-style coloured output with dumps, SQL and timing. |
+| 🔄 **SQL to Laravel** | Type SQL in any dialect and watch it turn into Eloquent or query builder code as you type, then copy it or insert it at the cursor. |
 | 🔍 **Live Audit** | Requests, SQL with the line that ran it, events with payloads and listeners, jobs, cache, mail, HTTP client calls, gates, logs, exceptions and dumps, with N+1 and slow query insights. |
 | 🤖 **AI agents that know your app** | An MCP server that answers with the hub's runtime data, connected in one click next to Laravel Boost. |
 | 🐳 **Docker-aware** | Artisan, Tinker and the recorder run with `php` or in a throwaway Docker Compose container, detected automatically. |
@@ -94,7 +96,10 @@ Completion and navigation come from cached indexes of your project files, built 
 | **Traits, interfaces and base classes** | **Gutter links to routes and views** |
 | <img src="docs/media/editor-trait-completion.webp" alt="Trait completion"> | <img src="docs/media/editor-gutter.webp" alt="Gutter icons"> |
 
+<p align="center"><img src="docs/media/editor-member-completion.webp" alt="Model columns and relations after ->" width="70%"><br><sub>Model columns and relations after <code>-&gt;</code></sub></p>
+
 - **Strings that mean something:** `route()`, `to_route()`, `redirect()->route()`, `view()`, `config()`, `env()`, `__()`, `trans()`, `@lang`, `Route::has`, `routeIs`, `Storage::disk`, `Cache::store`, `Queue`, `Log::channel`, `DB::connection`, `Mail::mailer`, `auth()->guard`, middleware, gates, policies and rate limiters.
+- **Model members:** after `$order->` the model's columns (with their types) and relations, and after `$order->user->` the related model's columns. The model comes from typed parameters, `Order::create/find/first…`, `new Order`, `foreach ($order->items as $item)`, `/** @var Order $x */`, `$this` in a model and `auth()->user()`. Relations are listed apart from columns with their kind and target (`belongsTo → User`), and Ctrl+click on a relation opens the related model, on a column its migration.
 - **Eloquent:** columns and relations in `where`, `with`, `has`, `whereHas`, `orderBy`, `create`, `update`, `fill` and `pluck`, model attributes (`#[Fillable]`, `#[Hidden]`, `#[Table]`…), `casts()`, scopes, and member snippets for `$fillable`, `$casts` and relations.
 - **Validation:** rule names inside `'required|…'` strings and rule arrays, plus custom rules.
 - **Blade:** syntax highlighting, structure and folding, directives after `@` (including your own `Blade::directive` and `Blade::if`), `<x-…>` components, `<livewire:…>` tags, sections, stacks and assets.
@@ -127,7 +132,7 @@ One tool window for everything your app has. It refreshes from your files and op
 | Group | Sections |
 | --- | --- |
 | Project | Overview, Ecosystem (starter kit, Sanctum, Wayfinder, Horizon, Reverb, Octane, Pulse, Telescope…), AI Agents |
-| Develop | Artisan, Tinker |
+| Develop | Artisan, Tinker, SQL to Laravel |
 | HTTP | Routes, Controllers, Form Requests, API Resources, Middleware |
 | Data | Models, Scopes, Observers, Casts, Enums, Database, Factories & Seeders |
 | Views | Views, Components, Frontend (Vite assets, Inertia pages), Translations |
@@ -151,6 +156,12 @@ One tool window for everything your app has. It refreshes from your files and op
 As many tabs as you like, with PHP highlighting, snippets and remembered code. **Ctrl+Enter** runs the tab and **Ctrl+Shift+Enter** runs the selection. Each statement shows its value the way Tinker does, with echo output, `dump()` calls, SQL queries and timing. Models resolve by their short name.
 
 <img src="docs/media/hub-tinker.webp" alt="Tinker">
+
+### SQL to Laravel
+
+Write a query in the dialect you have at hand (MySQL, PostgreSQL, SQL Server, SQLite, Oracle) and the Laravel code updates on the right as you type, highlighted like the editor. Switch between **Eloquent**, which uses the model of each table, and the **Query Builder**. Joins, nested `AND`/`OR`, `IN`, `BETWEEN`, `EXISTS` and subqueries, dates, aggregates, `GROUP BY`/`HAVING`, `LIMIT`/`TOP`/`FETCH`, locks, `UNION`, `INSERT` (with upserts and `INSERT IGNORE`), `UPDATE` (with `increment`), `DELETE` and `TRUNCATE` become the matching builder calls; anything without one falls back to `whereRaw` or `DB::raw`, and the notes under the code say where. The copy button puts the code on the clipboard and the insert button writes it at the cursor of the editor you were in, indented like the line (they need the optional `clipboard` and `editor.read`/`editor.write` permissions).
+
+<img src="docs/media/hub-sql.webp" alt="SQL to Laravel">
 
 ### Live Audit
 
@@ -204,7 +215,7 @@ Live Audit reads two environment variables from your app: `OPENIDEA_AUDIT=false`
 
 ## Privacy and security
 
-- The plugin is a sandboxed WebAssembly component. It reads project files, and it runs processes only through the `process:php` and `process:docker` permissions you grant.
+- The plugin is a sandboxed WebAssembly component. It reads project files, and it runs processes only through the `process:php` and `process:docker` permissions you grant. It writes to the editor (`editor.read`, `editor.write`) and the clipboard (`clipboard`) only when you press the insert or copy button of SQL to Laravel, and only if you allowed it.
 - The Live Audit recorder runs only in the `local`, `development` and `dev` environments. It lives in `storage/openidea`, which has its own `.gitignore`, and loads through a marked hook in `vendor/autoload.php`, so no tracked file changes. *Turn off* removes both.
 - Passwords, tokens, keys, cookies and signatures are always masked in recorded payloads. Personal data such as e-mail, CPF, phone, documents and addresses is masked by default.
 - The MCP server masks secrets in config values. Its `run_tinker` tool runs code in your local app, so only connect agents you trust.

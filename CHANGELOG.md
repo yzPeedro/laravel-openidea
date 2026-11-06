@@ -4,6 +4,11 @@ All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](h
 
 ## Unreleased
 
+- Model members: after `$var->` the columns (with types) and relations of the variable's model, and after `$var->relation->` those of the related model. Models are inferred from typed parameters, `Model::create/find/first…`, `new Model`, `foreach` over relations, `@var` docblocks, `$this` in models and `auth()->user()`. Relations show their kind and target apart from columns; Ctrl+click on a relation opens the related model and on a column its migration.
+- SQL to Laravel in the hub: SQL in any dialect (MySQL, PostgreSQL, SQL Server, SQLite, Oracle) becomes Eloquent or query builder code as you type, with copy and insert-at-cursor buttons (optional `clipboard`, `editor.read` and `editor.write` permissions).
+- Model and relation indexes are only rebuilt when a model file changes, so completion stays within the editor's time budget while you type.
+- Blade files with multibyte characters (such as `—`) no longer stop Blade highlighting.
+
 ## 0.13.0
 
 - Runs on official OpenIDEA 0.1.37 and newer, which ships the plugin APIs this plugin needs (views open files at a line, SVG tool window icons); no fork is needed anymore.
