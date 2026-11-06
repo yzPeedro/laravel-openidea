@@ -1,5 +1,6 @@
 mod artisan;
 mod blade_syntax;
+mod casts;
 mod devtools;
 mod directives;
 mod dotenv;
@@ -543,6 +544,18 @@ impl Laravel {
         Some((current, many))
     }
 
+    fn model_text(&mut self, project: &Project, root: &str, model: &str) -> Option<String> {
+        let path = self
+            .cache
+            .get(RefKind::Model, project, root)
+            .iter()
+            .find(|e| e.key == model)?
+            .location
+            .path
+            .clone();
+        project.read_file(&path).ok()
+    }
+
     fn eloquent_members(
         &mut self,
         project: &Project,
@@ -567,7 +580,25 @@ impl Laravel {
         let replace = Range::new(position(&doc.text, access.start), at);
         let mut out = Vec::new();
         if let Some(table) = self.model_table(project, root, &model) {
-            let columns = self.prefixed(RefKind::Column, project, root, &table);
+            let model_text = self.model_text(project, root, &model).unwrap_or_default();
+            let columns: Vec<Entry> = self
+                .prefixed(RefKind::Column, project, root, &table)
+                .into_iter()
+                .map(|e| {
+                    let cast = casts::resolve(project, root, &model_text, &e.key);
+                    match (cast, e.detail.as_deref()) {
+                        (Some(c), Some(d)) => Entry {
+                            detail: Some(format!("{d} → {}", c.label)),
+                            ..e
+                        },
+                        (Some(c), None) => Entry {
+                            detail: Some(c.label),
+                            ..e
+                        },
+                        (None, _) => e,
+                    }
+                })
+                .collect();
             out.extend(items(RefKind::Column, &columns, typed, replace));
         }
         let relations: Vec<Entry> = self
@@ -635,6 +666,12 @@ impl Laravel {
             } else {
                 found
             });
+        }
+        if let Some(text) = self.model_text(project, root, &model)
+            && let Some(location) =
+                casts::resolve(project, root, &text, &word).and_then(|t| t.location)
+        {
+            return Some(vec![location]);
         }
         let table = self.model_table(project, root, &model)?;
         let column = format!("{table}.{word}");
@@ -1701,6 +1738,78 @@ mod tests {
                 .first()
                 .is_some_and(|l| l.path.contains("database/migrations")),
             "{found:?}"
+        );
+    }
+
+    #[test]
+    fn casts_lead_to_their_enum_or_result_class() {
+        let host = setup();
+        host.add_file(
+            "app/Models/Invoice.php",
+            "<?php\nnamespace App\\Models;\n\nuse App\\Casts\\AsMoney;\nuse App\\Casts\\Plain;\nuse App\\Enums\\InvoiceStatus;\n\nclass Invoice extends Model\n{\n    protected function casts(): array\n    {\n        return ['status' => InvoiceStatus::class, 'total' => AsMoney::class, 'rate' => Plain::class, 'paid_at' => 'datetime'];\n    }\n}\n",
+        );
+        host.add_file(
+            "app/Enums/InvoiceStatus.php",
+            "<?php\nnamespace App\\Enums;\n\nenum InvoiceStatus: string\n{\n    case Paid = 'paid';\n}\n",
+        );
+        host.add_file(
+            "app/Casts/AsMoney.php",
+            "<?php\nnamespace App\\Casts;\n\nuse App\\Support\\Money;\n\nclass AsMoney implements CastsAttributes\n{\n    public function get($model, string $key, mixed $value, array $attributes): ?Money\n    {\n        return new Money($value);\n    }\n}\n",
+        );
+        host.add_file(
+            "app/Support/Money.php",
+            "<?php\nnamespace App\\Support;\n\ninterface Money\n{\n}\n",
+        );
+        host.add_file(
+            "app/Casts/Plain.php",
+            "<?php\nnamespace App\\Casts;\n\nclass Plain implements CastsAttributes\n{\n    public function get($model, string $key, mixed $value, array $attributes): float\n    {\n        return $value / 100;\n    }\n}\n",
+        );
+        host.add_file(
+            "database/migrations/2024_02_01_000000_create_invoices_table.php",
+            "<?php\nreturn new class extends Migration {\n    public function up(): void {\n        Schema::create('invoices', function (Blueprint $table) {\n            $table->id();\n            $table->string('status');\n            $table->integer('total');\n            $table->integer('rate');\n            $table->timestamp('paid_at');\n        });\n    }\n};\n",
+        );
+        let mut plugin = Laravel::default();
+        let text = "<?php\nclass C\n{\n    public function show(Invoice $invoice)\n    {\n        $invoice->status;\n        $invoice->total;\n        $invoice->rate;\n        $invoice->paid_at;\n        $invoice->\n    }\n}\n";
+        let d = doc("app/Http/Controllers/C.php", text);
+        let go = |plugin: &mut Laravel, needle: &str| {
+            plugin
+                .definition(&d, at(text, needle, 11))
+                .first()
+                .map(|l| {
+                    (
+                        l.path.rsplit('/').next().unwrap_or_default().to_owned(),
+                        l.range.start.line,
+                    )
+                })
+        };
+        assert_eq!(
+            go(&mut plugin, "$invoice->status"),
+            Some(("InvoiceStatus.php".into(), 3))
+        );
+        assert_eq!(
+            go(&mut plugin, "$invoice->total"),
+            Some(("Money.php".into(), 3))
+        );
+        assert_eq!(
+            go(&mut plugin, "$invoice->rate;"),
+            Some(("Plain.php".into(), 3))
+        );
+        let migration = go(&mut plugin, "$invoice->paid_at");
+        assert!(migration.is_some_and(|(p, _)| p.contains("create_invoices_table")));
+
+        let items = plugin.completion(&d, at(text, "$invoice->\n", 10), None);
+        let detail = |label: &str| {
+            items
+                .iter()
+                .find(|i| i.label == label)
+                .and_then(|i| i.detail.clone())
+        };
+        assert_eq!(detail("status").as_deref(), Some("string → InvoiceStatus"));
+        assert_eq!(detail("total").as_deref(), Some("integer → Money"));
+        assert_eq!(detail("rate").as_deref(), Some("integer → float"));
+        assert_eq!(
+            detail("paid_at").as_deref(),
+            Some("timestamp → Carbon|null")
         );
     }
 
