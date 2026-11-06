@@ -359,7 +359,7 @@ fn directives(text: &str) -> Vec<Directive> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < b.len() {
-        if text[i..].starts_with("{{--") {
+        if b[i..].starts_with(b"{{--") {
             i = find(text, i, "--}}");
             continue;
         }
@@ -466,6 +466,17 @@ pub fn outline(text: &str) -> Vec<Symbol> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn directives_after_multibyte_text() {
+        let text = "<p>Price — {{ $total }}</p>
+@if ($a)
+<p>—</p>
+@endif
+";
+        let names: Vec<String> = directives(text).into_iter().map(|d| d.0).collect();
+        assert_eq!(names, ["if", "endif"]);
+    }
 
     fn kinds(text: &str) -> Vec<(&str, &'static str)> {
         highlights(text)
