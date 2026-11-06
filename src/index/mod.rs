@@ -23,7 +23,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 pub use classes::{Class, parse_class};
-pub use models::{is_model, pivots, plural, table_for};
+pub use models::{is_model, plural, table_for};
 pub use routes::parse as parse_routes;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -68,10 +68,11 @@ pub enum RefKind {
     Permission,
     SocialiteDriver,
     Directive,
+    Pivot,
 }
 
 impl RefKind {
-    pub const ALL: [RefKind; 40] = [
+    pub const ALL: [RefKind; 41] = [
         Self::Config,
         Self::Route,
         Self::RouteAction,
@@ -112,6 +113,7 @@ impl RefKind {
         Self::Permission,
         Self::SocialiteDriver,
         Self::Directive,
+        Self::Pivot,
     ];
 
     pub fn completion_kind(self) -> CompletionKind {
@@ -143,6 +145,7 @@ impl RefKind {
             Self::Channel | Self::QueueName | Self::SocialiteDriver => CompletionKind::Value,
             Self::Command => CompletionKind::Value,
             Self::Directive => CompletionKind::Keyword,
+            Self::Pivot => CompletionKind::Field,
         }
     }
 
@@ -188,6 +191,7 @@ impl RefKind {
             Self::Permission => "permissions",
             Self::SocialiteDriver => "Socialite drivers",
             Self::Directive => "Blade directives",
+            Self::Pivot => "pivot attributes",
         }
     }
 
@@ -227,7 +231,9 @@ impl RefKind {
                 Self::Middleware => has(&["bootstrap/app.php", "app/Http/Kernel.php"]),
                 Self::Ability | Self::RateLimiter => has(&["app/"]),
                 Self::Table | Self::Column => has(&["database/migrations/", "app/Models/"]),
-                Self::Model | Self::Relation | Self::Scope => has(&["app/Models/", "app/"]),
+                Self::Model | Self::Relation | Self::Scope | Self::Pivot => {
+                    p.starts_with("app/") && p.contains("/Models/")
+                }
                 Self::Controller => has(&["app/"]),
                 Self::Component => has(&["resources/views/components/", "app/View/Components/"]),
                 Self::Livewire => has(&[
@@ -388,6 +394,29 @@ fn build(kind: RefKind, project: &Project, root: &str, locale: &str) -> Vec<Entr
         RefKind::Role => packages::roles(project, root),
         RefKind::Permission => packages::permissions(project, root),
         RefKind::Directive => blade::custom_directives(project, root),
+        RefKind::Pivot => models::pivots(project, root),
         _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_model_files_invalidate_models_and_relations() {
+        let kinds = RefKind::affected_by("app/Http/Controllers/OrderController.php");
+        assert!(!kinds.contains(&RefKind::Model) && !kinds.contains(&RefKind::Relation));
+        assert!(kinds.contains(&RefKind::Controller));
+        for path in [
+            "app/Models/Order.php",
+            "app/Infrastructure/Persistence/Models/Order.php",
+        ] {
+            let kinds = RefKind::affected_by(path);
+            assert!(
+                kinds.contains(&RefKind::Model) && kinds.contains(&RefKind::Relation),
+                "{path}"
+            );
+        }
     }
 }

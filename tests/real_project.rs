@@ -326,6 +326,36 @@ fn indexes_a_real_project() {
             }
         }
     }
+    if let Ok(probe) = std::env::var("LARAVEL_MEMBER_PROBE")
+        && let Some((file, needle)) = probe.split_once("::")
+        && let Ok(text) = std::fs::read_to_string(root.join(file)).map(|t| {
+            match std::env::var("LARAVEL_MEMBER_INSERT") {
+                Ok(extra) => t.replacen(needle, &format!("{needle}{extra}"), 1),
+                Err(_) => t,
+            }
+        })
+        && let Some(found) = text.find(needle)
+    {
+        let doc = Document {
+            path: format!("/project/{file}"),
+            language: "php".into(),
+            version: 1,
+            text: text.clone(),
+        };
+        let extra = std::env::var("LARAVEL_MEMBER_INSERT").unwrap_or_default();
+        let items = plugin.completion(
+            &doc,
+            position(&text, found + needle.len() + extra.len()),
+            None,
+        );
+        println!(
+            "members after {needle}: {:?}",
+            items
+                .iter()
+                .map(|i| format!("{} ({})", i.label, i.detail.clone().unwrap_or_default()))
+                .collect::<Vec<_>>()
+        );
+    }
     let overview = host
         .view_messages()
         .into_iter()

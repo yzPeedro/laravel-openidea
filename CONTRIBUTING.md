@@ -63,7 +63,7 @@ LARAVEL_PROJECT=~/projects/my-app cargo test --release --test real_project -- --
 LARAVEL_PROJECT=~/projects/my-app HUB_DUMP=/tmp/hub cargo test --release --test hub_dump -- --ignored
 ```
 
-`real_project` prints index sizes, timings and every hub section. `LARAVEL_MODELS` (for example `User,Post`) and `LARAVEL_MODEL_FILES` choose the models it probes. `hub_dump` writes the rendered hub and every section's data to `HUB_DUMP`, which is handy for working on `web/hub.html` in a browser.
+`real_project` prints index sizes, timings and every hub section; `LARAVEL_MEMBER_PROBE=path::needle` (with `LARAVEL_MEMBER_INSERT` to add text after the needle) prints the member completion at that point of a file. `LARAVEL_MODELS` (for example `User,Post`) and `LARAVEL_MODEL_FILES` choose the models it probes. `hub_dump` writes the rendered hub and every section's data to `HUB_DUMP`, which is handy for working on `web/hub.html` in a browser.
 
 Never commit output from a private project: test fixtures must be made up.
 

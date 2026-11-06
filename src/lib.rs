@@ -3,6 +3,7 @@ mod blade_syntax;
 mod devtools;
 mod directives;
 mod dotenv;
+mod eloquent;
 mod hierarchy;
 mod index;
 mod inspect;
@@ -482,6 +483,169 @@ impl Laravel {
                     .map(|e| e.location.clone())
             })
             .collect()
+    }
+
+    fn model_of(
+        &mut self,
+        project: &Project,
+        root: &str,
+        (text, cursor): (&str, usize),
+        base: &eloquent::Base,
+        path: &[String],
+        depth: u8,
+    ) -> Option<(String, bool)> {
+        if depth > 4 {
+            return None;
+        }
+        let models: BTreeSet<String> = self
+            .cache
+            .get(RefKind::Model, project, root)
+            .iter()
+            .map(|e| e.key.clone())
+            .collect();
+        let (mut current, mut many) = match base {
+            eloquent::Base::This => {
+                let scope = scope_of(text);
+                (scope.class.filter(|_| scope.model)?, false)
+            }
+            eloquent::Base::AuthUser => ("User".to_owned(), false),
+            eloquent::Base::Var(var) => match eloquent::origin(text, cursor, var)? {
+                eloquent::Origin::Class { name, many } => (name, many),
+                eloquent::Origin::Chain {
+                    base,
+                    path,
+                    element,
+                } => {
+                    let (model, many) =
+                        self.model_of(project, root, (text, cursor), &base, &path, depth + 1)?;
+                    if element && !many {
+                        return None;
+                    }
+                    (model, many && !element)
+                }
+            },
+        };
+        if !models.contains(&current) {
+            return None;
+        }
+        let relations = self.cache.get(RefKind::Relation, project, root);
+        for step in path {
+            if many {
+                return None;
+            }
+            let entry = relations
+                .iter()
+                .find(|e| e.key == format!("{current}.{step}"))?;
+            let detail = entry.detail.as_deref()?;
+            many = eloquent::is_many(detail.split('(').next().unwrap_or(detail));
+            current = relation_target(Some(detail))?;
+        }
+        Some((current, many))
+    }
+
+    fn eloquent_members(
+        &mut self,
+        project: &Project,
+        root: &str,
+        doc: &Document,
+        cursor: usize,
+        at: Position,
+    ) -> Option<Vec<CompletionItem>> {
+        let access = eloquent::access_at(&doc.text, cursor, false)?;
+        let (model, many) = self.model_of(
+            project,
+            root,
+            (&doc.text, cursor),
+            &access.base,
+            &access.path,
+            0,
+        )?;
+        if many {
+            return None;
+        }
+        let typed = &doc.text[access.start..cursor];
+        let replace = Range::new(position(&doc.text, access.start), at);
+        let mut out = Vec::new();
+        if let Some(table) = self.model_table(project, root, &model) {
+            let columns = self.prefixed(RefKind::Column, project, root, &table);
+            out.extend(items(RefKind::Column, &columns, typed, replace));
+        }
+        let relations: Vec<Entry> = self
+            .prefixed(RefKind::Relation, project, root, &model)
+            .into_iter()
+            .map(|e| {
+                let detail = e.detail.as_deref().map(|d| {
+                    let kind = d.split('(').next().unwrap_or(d);
+                    match relation_target(Some(d)) {
+                        Some(target) => format!("{kind} → {target}"),
+                        None => kind.to_owned(),
+                    }
+                });
+                Entry { detail, ..e }
+            })
+            .collect();
+        out.extend(
+            items(RefKind::Model, &relations, typed, replace)
+                .into_iter()
+                .map(|mut i| {
+                    i.sort_text = i.sort_text.map(|s| format!("~{s}"));
+                    i
+                }),
+        );
+        Some(out)
+    }
+
+    fn eloquent_definition(
+        &mut self,
+        project: &Project,
+        root: &str,
+        doc: &Document,
+        cursor: usize,
+    ) -> Option<Vec<Location>> {
+        let access = eloquent::access_at(&doc.text, cursor, true)?;
+        let word = doc.text[access.start..access.end].to_owned();
+        let (model, many) = self.model_of(
+            project,
+            root,
+            (&doc.text, cursor),
+            &access.base,
+            &access.path,
+            0,
+        )?;
+        if many {
+            return None;
+        }
+        let relation = self
+            .cache
+            .get(RefKind::Relation, project, root)
+            .iter()
+            .find(|e| e.key == format!("{model}.{word}"))
+            .cloned();
+        if let Some(relation) = relation {
+            let target = relation_target(relation.detail.as_deref())?;
+            let found: Vec<Location> = self
+                .cache
+                .get(RefKind::Model, project, root)
+                .iter()
+                .filter(|e| e.key == target)
+                .map(|e| e.location.clone())
+                .collect();
+            return Some(if found.is_empty() {
+                vec![relation.location]
+            } else {
+                found
+            });
+        }
+        let table = self.model_table(project, root, &model)?;
+        let column = format!("{table}.{word}");
+        let found: Vec<Location> = self
+            .cache
+            .get(RefKind::Column, project, root)
+            .iter()
+            .filter(|e| e.key == column && !e.location.path.is_empty())
+            .map(|e| e.location.clone())
+            .collect();
+        (!found.is_empty()).then_some(found)
     }
 
     fn walk_relations(
@@ -1021,12 +1185,14 @@ impl Providers for Laravel {
         }
         if let Some((accessor, start)) = pivot_access(&doc.text, cursor) {
             let prefix = format!("{accessor}.");
-            let entries: Vec<Entry> = index::pivots(&project, &root)
-                .into_iter()
+            let entries: Vec<Entry> = self
+                .cache
+                .get(RefKind::Pivot, &project, &root)
+                .iter()
                 .filter_map(|e| {
                     Some(Entry {
                         key: e.key.strip_prefix(&prefix)?.to_owned(),
-                        ..e
+                        ..e.clone()
                     })
                 })
                 .collect();
@@ -1040,6 +1206,12 @@ impl Providers for Laravel {
             }
         }
         let blade = is_blade(&doc.path);
+        if php::open_arg_at(&doc.text, blade, cursor).is_none()
+            && let Some(found) = self.eloquent_members(&project, &root, doc, cursor, at)
+            && !found.is_empty()
+        {
+            return found;
+        }
         if blade && let Some(start) = directives::typed_at(&doc.text, cursor) {
             let mut entries: Vec<Entry> = directives::BUILTIN
                 .iter()
@@ -1147,6 +1319,11 @@ impl Providers for Laravel {
             }
         }
         let blade = is_blade(&doc.path);
+        if php::arg_at(&doc.text, blade, cursor).is_none()
+            && let Some(found) = self.eloquent_definition(&project, &root, doc, cursor)
+        {
+            return found;
+        }
         let (want, key) =
             if blade && let Some((kind, start, end)) = tag_at(&doc.text, cursor, &TAGS) {
                 (Want::Kind(kind), doc.text[start..end].to_owned())
@@ -1466,6 +1643,64 @@ mod tests {
         assert_eq!(
             items[0].replace,
             Some(Range::new(at(text, "adm'", 0), at(text, "adm'", 3)))
+        );
+    }
+
+    #[test]
+    fn completes_and_navigates_model_members() {
+        use openidea_plugin::providers::CompletionKind;
+        let host = setup();
+        host.add_file(
+            "app/Models/Order.php",
+            "<?php\nnamespace App\\Models;\n\nclass Order extends Model\n{\n    public function user()\n    {\n        return $this->belongsTo(User::class);\n    }\n\n    public function lines()\n    {\n        return $this->hasMany(Post::class);\n    }\n}\n",
+        );
+        let mut plugin = Laravel::default();
+        let text = "<?php\nclass OrderController\n{\n    public function store(Request $request)\n    {\n        $order = Order::create(['user_id' => 1]);\n        $order->\n        $order->user->na\n        foreach ($order->lines as $line) {\n            $line->\n        }\n        $order->lines->\n    }\n}\n";
+        let d = doc("app/Http/Controllers/OrderController.php", text);
+        let order = plugin.completion(&d, at(text, "$order->\n", 8), None);
+        let labels_of =
+            |items: &[CompletionItem]| items.iter().map(|i| i.label.clone()).collect::<Vec<_>>();
+        let order_labels = labels_of(&order);
+        assert!(
+            order_labels.contains(&"user".to_owned()) && order_labels.contains(&"lines".to_owned()),
+            "{order_labels:?}"
+        );
+        let user = order.iter().find(|i| i.label == "user").unwrap();
+        assert_eq!(user.detail.as_deref(), Some("belongsTo → User"));
+        assert_eq!(user.kind, Some(CompletionKind::Class));
+        let names = plugin.completion(&d, at(text, "user->na", 8), None);
+        assert_eq!(labels_of(&names), ["name"]);
+        assert_eq!(names[0].kind, Some(CompletionKind::Field));
+        let line = plugin.completion(&d, at(text, "$line->\n", 7), None);
+        assert!(
+            labels_of(&line).contains(&"title".to_owned()),
+            "{:?}",
+            labels_of(&line)
+        );
+        assert!(
+            plugin
+                .completion(&d, at(text, "$order->lines->", 15), None)
+                .is_empty()
+        );
+
+        let found = plugin.definition(&d, at(text, "user->na", 2));
+        assert_eq!(found.len(), 1);
+        assert!(found[0].path.ends_with("app/Models/User.php"), "{found:?}");
+        let named = text.replace(
+            "user->na
+",
+            "user->name;
+",
+        );
+        let found = plugin.definition(
+            &doc("app/Http/Controllers/OrderController.php", &named),
+            at(&named, "user->name;", 8),
+        );
+        assert!(
+            found
+                .first()
+                .is_some_and(|l| l.path.contains("database/migrations")),
+            "{found:?}"
         );
     }
 
