@@ -12,7 +12,7 @@ activation = ["on-language:php", "on-language:blade", "on-file:artisan"]
 
 [capabilities]
 required = ["project.read", "events"]
-optional = ["process:php", "process:docker"]
+optional = ["process:php", "process:docker", "editor.read", "editor.write", "clipboard"]
 
 [[contributes.providers]]
 kinds = ["completion", "definition", "line-markers", "code-actions"]

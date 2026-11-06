@@ -119,9 +119,37 @@ enum Request {
     Audittail { size: i64 },
     Agents { action: String },
     Composer { argv: Vec<String> },
+    Sqlload,
+    Sqlsave { state: serde_json::Value },
+    Sqlcopy { code: String },
+    Sqlinsert { code: String },
 }
 
 const TINKER_KEY: &str = "tinker.tabs";
+const SQL_KEY: &str = "sql.state";
+
+pub fn indent_snippet(code: &str, indent: &str) -> String {
+    let mut out = String::new();
+    for (i, line) in code.trim_end().lines().enumerate() {
+        if i > 0 {
+            out.push('\n');
+            if !line.is_empty() {
+                out.push_str(indent);
+            }
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+fn line_indent(text: &str, line: u32) -> String {
+    text.lines()
+        .nth(line as usize)
+        .unwrap_or_default()
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .collect()
+}
 
 fn quiet(stderr: &str) -> String {
     stderr
@@ -1228,6 +1256,24 @@ impl Laravel {
     }
 }
 
+impl Laravel {
+    fn insert_code(&mut self, ctx: &Invocation, code: &str) -> Result<String, Error> {
+        let editor = ctx
+            .editor()
+            .ok_or_else(|| Error::Invalid("Open a file in the editor first.".into()))?;
+        let doc = editor.document()?;
+        let selections = editor.selections()?;
+        let first = selections
+            .first()
+            .ok_or_else(|| Error::Invalid("Place the cursor in the editor first.".into()))?;
+        let indent = line_indent(&doc.text, first.start.line);
+        let snippet = indent_snippet(code, &indent);
+        editor.transform_selections(|_| snippet.clone())?;
+        let path = editor.path();
+        Ok(path.rsplit(['/', '\\']).next().unwrap_or(&path).to_owned())
+    }
+}
+
 impl Views for Laravel {
     fn render(
         &mut self,
@@ -1275,6 +1321,58 @@ impl Views for Laravel {
             Request::Audittail { size } => self.audit_tail(view, ctx, size),
             Request::Agents { action } => self.agents(view, ctx, &action),
             Request::Composer { argv } => self.composer(view, ctx, argv),
+            Request::Sqlload => {
+                let (project, root) = project(ctx)?;
+                let models: Vec<serde_json::Value> = self
+                    .cache
+                    .get(RefKind::Model, &project, &root)
+                    .iter()
+                    .filter_map(|e| {
+                        let table = e.detail.as_deref()?.strip_prefix("table ")?;
+                        Some(json!({ "name": e.key, "table": table }))
+                    })
+                    .collect();
+                let state: serde_json::Value = host::storage::get(SQL_KEY)
+                    .ok()
+                    .flatten()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or(serde_json::Value::Null);
+                post(
+                    view,
+                    json!({ "type": "sqlstate", "state": state, "models": models }),
+                );
+                Ok(())
+            }
+            Request::Sqlsave { state } => {
+                let _ = host::storage::set(SQL_KEY, &state.to_string());
+                Ok(())
+            }
+            Request::Sqlcopy { code } => {
+                let message = match host::copy_to_clipboard(&code) {
+                    Ok(()) => {
+                        json!({ "type": "sqlresult", "ok": true, "message": "Copied to the clipboard." })
+                    }
+                    Err(Error::Denied(cap)) => {
+                        json!({ "type": "sqlresult", "ok": false, "message": format!("Allow \"{cap}\" for Laravel OpenIDEA in Settings › Plugins to copy from the hub.") })
+                    }
+                    Err(e) => json!({ "type": "sqlresult", "ok": false, "message": e.to_string() }),
+                };
+                post(view, message);
+                Ok(())
+            }
+            Request::Sqlinsert { code } => {
+                let message = match self.insert_code(ctx, &code) {
+                    Ok(path) => {
+                        json!({ "type": "sqlresult", "ok": true, "message": format!("Inserted into {path}.") })
+                    }
+                    Err(Error::Denied(cap)) => {
+                        json!({ "type": "sqlresult", "ok": false, "message": format!("Allow \"{cap}\" for Laravel OpenIDEA in Settings › Plugins to insert into the editor.") })
+                    }
+                    Err(e) => json!({ "type": "sqlresult", "ok": false, "message": e.to_string() }),
+                };
+                post(view, message);
+                Ok(())
+            }
         }
     }
 }
@@ -1282,6 +1380,71 @@ impl Views for Laravel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inserts_converted_sql_at_the_cursor() {
+        use openidea_plugin::views::{ViewEvent, Views as _};
+        let host = openidea_plugin::mock::MockHost::install();
+        host.add_file("artisan", "#!/usr/bin/env php\n");
+        host.add_file(
+            "composer.json",
+            "{\"require\": {\"laravel/framework\": \"^12.0\"}}",
+        );
+        host.open_editor(
+            "/project/app/Http/Controllers/A.php",
+            "php",
+            "<?php\nclass A {\n    public function index()\n    {\n        \n    }\n}\n",
+            &[(4, 8, 4, 8)],
+        );
+        let mut plugin = Laravel::default();
+        let message =
+            json!({ "type": "sqlinsert", "code": "$users = DB::table('users')\n    ->get();\n" })
+                .to_string();
+        plugin
+            .handle(
+                "laravel",
+                ViewEvent::Message(message.clone()),
+                &host.invocation(),
+            )
+            .unwrap();
+        assert!(
+            host.editor_text()
+                .contains("        $users = DB::table('users')\n            ->get();\n    }"),
+            "{}",
+            host.editor_text()
+        );
+        assert!(
+            host.view_messages()
+                .iter()
+                .any(|(_, m)| m.contains("Inserted into A.php"))
+        );
+
+        let host = openidea_plugin::mock::MockHost::install()
+            .with_capabilities(&["project.read", "editor.read"]);
+        host.add_file("artisan", "#!/usr/bin/env php\n");
+        host.open_editor("/project/app/A.php", "php", "<?php\n", &[(1, 0, 1, 0)]);
+        Laravel::default()
+            .handle("laravel", ViewEvent::Message(message), &host.invocation())
+            .unwrap();
+        assert!(
+            host.view_messages()
+                .iter()
+                .any(|(_, m)| m.contains("editor.write")),
+            "{:?}",
+            host.view_messages()
+        );
+        assert_eq!(host.editor_text(), "<?php\n");
+    }
+
+    #[test]
+    fn indents_inserted_code_like_the_line() {
+        let code = "$users = DB::table('users')\n    ->where('a', 1)\n\n    ->get();\n";
+        assert_eq!(
+            indent_snippet(code, "        "),
+            "$users = DB::table('users')\n            ->where('a', 1)\n\n            ->get();"
+        );
+        assert_eq!(line_indent("<?php\n    \treturn;\n", 1), "    \t");
+    }
 
     #[test]
     fn matches_route_uris_in_tests() {
