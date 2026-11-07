@@ -4,6 +4,10 @@ All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](h
 
 ## Unreleased
 
+## 0.13.1
+
+- Blade files with multibyte characters (such as `…` or `—`) before a directive or comment no longer crash the plugin, which also left the hub stuck on *Loading* ([#4](https://github.com/yzPeedro/laravel-openidea/issues/4)).
+
 ## 0.13.0
 
 - Runs on official OpenIDEA 0.1.37 and newer, which ships the plugin APIs this plugin needs (views open files at a line, SVG tool window icons); no fork is needed anymore.
