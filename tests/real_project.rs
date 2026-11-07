@@ -396,3 +396,78 @@ fn host_files(root: &Path) -> Vec<(String, String)> {
     }
     out
 }
+
+fn php_files(root: &Path, dir: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            php_files(root, &path, out);
+        } else if path.extension().is_some_and(|e| e == "php")
+            && !path.to_string_lossy().ends_with(".blade.php")
+        {
+            let rel = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.push(format!("/project/{rel}"));
+        }
+    }
+}
+
+#[test]
+#[ignore = "needs LARAVEL_PROJECT pointing at a Laravel application"]
+fn inspects_a_real_project() {
+    let root = std::env::var("LARAVEL_PROJECT").expect("LARAVEL_PROJECT");
+    let root = Path::new(&root);
+    let host = MockHost::install();
+    for file in [
+        "artisan",
+        "composer.json",
+        "composer.lock",
+        ".env",
+        ".env.example",
+    ] {
+        if let Ok(text) = std::fs::read_to_string(root.join(file)) {
+            host.add_file(file, &text);
+        }
+    }
+    for dir in ["config", "routes", "app", "database/migrations"] {
+        load(&host, root, &root.join(dir));
+    }
+    let mut paths = Vec::new();
+    for dir in ["app", "routes"] {
+        php_files(root, &root.join(dir), &mut paths);
+    }
+    paths.push("/project/.env".into());
+    if let Ok(probe) = std::env::var("LARAVEL_PROBE") {
+        host.add_file("app/OpenideaProbe.php", &probe);
+        paths.push("/project/app/OpenideaProbe.php".into());
+    }
+    let mut plugin = Laravel::default();
+    let events: Vec<openidea_plugin::Event> = paths
+        .iter()
+        .map(|p| openidea_plugin::Event::FileOpened(p.clone()))
+        .collect();
+    let started = Instant::now();
+    plugin.handle_events(&events, &host.invocation());
+    println!(
+        "inspected {} files in {} ms",
+        paths.len(),
+        started.elapsed().as_millis()
+    );
+    for (path, items) in host.diagnostics() {
+        for d in items {
+            println!(
+                "{}:{} {} {}",
+                path.trim_start_matches("/project/"),
+                d.range.start.line + 1,
+                d.code.unwrap_or_default(),
+                d.message
+            );
+        }
+    }
+}

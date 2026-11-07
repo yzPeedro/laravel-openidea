@@ -107,7 +107,7 @@ pub fn index(project: &Project, root: &str) -> Vec<Entry> {
     let mut definitions = Vec::new();
     let mut tags = Vec::new();
     for path in paths {
-        let Ok(text) = project.read_file(&path) else {
+        let Ok(text) = crate::project::read_listed(project, &path) else {
             continue;
         };
         if !text.contains("OA\\") && !text.contains("OpenApi\\") {

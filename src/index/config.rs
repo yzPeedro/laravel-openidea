@@ -13,7 +13,7 @@ pub fn index(project: &Project, root: &str) -> Vec<Entry> {
         else {
             continue;
         };
-        let Ok(text) = project.read_file(&path) else {
+        let Ok(text) = crate::project::read_listed(project, &path) else {
             continue;
         };
         out.extend(entries(name.replace('/', "."), &relative, &path, &text));

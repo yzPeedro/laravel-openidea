@@ -24,6 +24,9 @@ pub enum Want {
     SchemaProperties(usize),
     RoutePaths,
     PathParams(usize),
+    Paths(&'static str),
+    DiskPaths(usize),
+    RequestFields,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,6 +56,175 @@ enum Ctx {
     SchemaProperties,
     RoutePaths,
     PathParams,
+    Paths(&'static str),
+    DiskPaths,
+    RequestFields,
+}
+
+pub const CONTAINER: [(&str, &str); 38] = [
+    ("app", "Illuminate\\Foundation\\Application"),
+    ("auth", "Illuminate\\Auth\\AuthManager"),
+    ("auth.driver", "Illuminate\\Contracts\\Auth\\Guard"),
+    (
+        "auth.password",
+        "Illuminate\\Auth\\Passwords\\PasswordBrokerManager",
+    ),
+    (
+        "auth.password.broker",
+        "Illuminate\\Auth\\Passwords\\PasswordBroker",
+    ),
+    (
+        "blade.compiler",
+        "Illuminate\\View\\Compilers\\BladeCompiler",
+    ),
+    ("cache", "Illuminate\\Cache\\CacheManager"),
+    ("cache.store", "Illuminate\\Cache\\Repository"),
+    (
+        "cache.psr6",
+        "Symfony\\Component\\Cache\\Adapter\\Psr16Adapter",
+    ),
+    ("config", "Illuminate\\Config\\Repository"),
+    ("cookie", "Illuminate\\Cookie\\CookieJar"),
+    ("db", "Illuminate\\Database\\DatabaseManager"),
+    ("db.connection", "Illuminate\\Database\\Connection"),
+    ("db.schema", "Illuminate\\Database\\Schema\\Builder"),
+    ("encrypter", "Illuminate\\Encryption\\Encrypter"),
+    ("events", "Illuminate\\Events\\Dispatcher"),
+    ("files", "Illuminate\\Filesystem\\Filesystem"),
+    ("filesystem", "Illuminate\\Filesystem\\FilesystemManager"),
+    (
+        "filesystem.disk",
+        "Illuminate\\Contracts\\Filesystem\\Filesystem",
+    ),
+    (
+        "filesystem.cloud",
+        "Illuminate\\Contracts\\Filesystem\\Cloud",
+    ),
+    ("hash", "Illuminate\\Hashing\\HashManager"),
+    ("hash.driver", "Illuminate\\Contracts\\Hashing\\Hasher"),
+    ("translator", "Illuminate\\Translation\\Translator"),
+    ("log", "Illuminate\\Log\\LogManager"),
+    ("mail.manager", "Illuminate\\Mail\\MailManager"),
+    ("mailer", "Illuminate\\Mail\\Mailer"),
+    ("queue", "Illuminate\\Queue\\QueueManager"),
+    ("queue.connection", "Illuminate\\Contracts\\Queue\\Queue"),
+    (
+        "queue.failer",
+        "Illuminate\\Queue\\Failed\\FailedJobProviderInterface",
+    ),
+    ("redirect", "Illuminate\\Routing\\Redirector"),
+    ("redis", "Illuminate\\Redis\\RedisManager"),
+    (
+        "redis.connection",
+        "Illuminate\\Redis\\Connections\\Connection",
+    ),
+    ("request", "Illuminate\\Http\\Request"),
+    ("router", "Illuminate\\Routing\\Router"),
+    ("session", "Illuminate\\Session\\SessionManager"),
+    ("session.store", "Illuminate\\Session\\Store"),
+    ("url", "Illuminate\\Routing\\UrlGenerator"),
+    ("validator", "Illuminate\\Validation\\Factory"),
+];
+
+pub fn path_base(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "base_path" | "basepath" => "",
+        "app_path" | "apppath" => "app/",
+        "config_path" | "configpath" => "config/",
+        "database_path" | "databasepath" => "database/",
+        "lang_path" | "langpath" => "lang/",
+        "public_path" | "publicpath" => "public/",
+        "resource_path" | "resourcepath" => "resources/",
+        "storage_path" | "storagepath" => "storage/",
+        "bootstrappath" => "bootstrap/",
+        _ => return None,
+    })
+}
+
+const STORAGE_PATHS: [&str; 31] = [
+    "get",
+    "put",
+    "exists",
+    "missing",
+    "delete",
+    "url",
+    "temporaryurl",
+    "path",
+    "download",
+    "size",
+    "lastmodified",
+    "mimetype",
+    "files",
+    "allfiles",
+    "directories",
+    "alldirectories",
+    "makedirectory",
+    "deletedirectory",
+    "copy",
+    "move",
+    "prepend",
+    "append",
+    "readstream",
+    "writestream",
+    "json",
+    "setvisibility",
+    "getvisibility",
+    "putfile",
+    "putfileas",
+    "response",
+    "checksum",
+];
+
+const REQUEST_INPUTS: [&str; 26] = [
+    "input",
+    "get",
+    "post",
+    "query",
+    "string",
+    "str",
+    "integer",
+    "float",
+    "boolean",
+    "date",
+    "enum",
+    "collect",
+    "array",
+    "has",
+    "hasany",
+    "filled",
+    "anyfilled",
+    "missing",
+    "exists",
+    "isnotfilled",
+    "only",
+    "except",
+    "file",
+    "hasfile",
+    "validated",
+    "safe",
+];
+
+fn storage_position(name: &str, arg: &StringArg) -> Option<(Ctx, usize, bool)> {
+    if !STORAGE_PATHS.contains(&name) {
+        return None;
+    }
+    let position = if matches!(name, "copy" | "move") && arg.arg < 2 {
+        arg.arg
+    } else {
+        0
+    };
+    Some((Ctx::DiskPaths, position, name == "delete"))
+}
+
+fn is_request(class: &str) -> bool {
+    matches!(
+        class,
+        "$request" | "request()" | "request" | "$this->request"
+    )
+}
+
+fn is_app(class: &str) -> bool {
+    matches!(class, "app()" | "$app" | "app" | "$this->app")
 }
 
 const SCHEMA_CALLS: [&str; 6] = [
@@ -197,6 +369,14 @@ fn ctx_of(arg: &StringArg, scope: &Scope) -> Option<(Ctx, usize, bool)> {
             "auth" => (S(RefKind::Guard), 0, false),
             "asset" | "secure_asset" | "mix" => (S(RefKind::Asset), 0, false),
             "inertia" => (S(RefKind::InertiaPage), 0, false),
+            "logs" => (S(RefKind::LogChannel), 0, false),
+            "url" | "redirect" => (Ctx::RoutePaths, 0, false),
+            "app" | "resolve" => (Ctx::Static(&CONTAINER), 0, false),
+            "old" => (Ctx::RequestFields, 0, false),
+            "request" => (Ctx::RequestFields, 0, true),
+            p if p.ends_with("_path") && path_base(p).is_some() => {
+                (Ctx::Paths(path_base(p)?), 0, false)
+            }
             "action" => (Ctx::Methods(arg.class_ref.clone()?), 0, true),
             "validator" => (Ctx::Rules, 1, true),
             "privatechannel" | "channel" | "presencechannel" | "encryptedprivatechannel" => {
@@ -229,6 +409,13 @@ fn ctx_of(arg: &StringArg, scope: &Scope) -> Option<(Ctx, usize, bool)> {
             ("storage", "disk" | "fake" | "persistentfake" | "build") => {
                 (S(RefKind::Disk), 0, false)
             }
+            ("storage", m) if STORAGE_PATHS.contains(&m) => return storage_position(m, arg),
+            ("app", m) if path_base(m).is_some() => (Ctx::Paths(path_base(m)?), 0, false),
+            ("app", "make" | "makewith" | "bound" | "has" | "get") => {
+                (Ctx::Static(&CONTAINER), 0, false)
+            }
+            ("url" | "redirect", "to") => (Ctx::RoutePaths, 0, false),
+            ("request", m) if REQUEST_INPUTS.contains(&m) => (Ctx::RequestFields, 0, true),
             ("cache", "store" | "driver" | "memo") => (S(RefKind::CacheStore), 0, false),
             ("queue", "connection") => (S(RefKind::Queue), 0, false),
             ("log", "channel") => (S(RefKind::LogChannel), 0, false),
@@ -262,6 +449,16 @@ fn ctx_of(arg: &StringArg, scope: &Scope) -> Option<(Ctx, usize, bool)> {
             _ => return model_ctx(arg, name),
         },
         CallKind::Method => match name {
+            m if arg.head.as_deref() == Some("Storage") && STORAGE_PATHS.contains(&m) => {
+                return storage_position(m, arg);
+            }
+            m if path_base(m).is_some() && !m.contains('_') => {
+                (Ctx::Paths(path_base(m)?), 0, false)
+            }
+            "path" if is_app(class) => (Ctx::Paths("app/"), 0, false),
+            "make" | "makewith" | "bound" if is_app(class) => (Ctx::Static(&CONTAINER), 0, false),
+            "to" if matches!(class, "url()" | "redirect()") => (Ctx::RoutePaths, 0, false),
+            m if is_request(class) && REQUEST_INPUTS.contains(&m) => (Ctx::RequestFields, 0, true),
             "route" if matches!(class, "$request" | "request()" | "$this") => return None,
             "route" | "signedroute" | "temporarysignedroute" | "torroute" => {
                 (S(RefKind::Route), 0, false)
@@ -530,8 +727,15 @@ pub fn segment(arg: &StringArg, at: usize, scope: &Scope) -> Option<Segment> {
         }
         Ctx::RoutePaths if !arg.is_key => whole(Want::RoutePaths),
         Ctx::PathParams if !arg.is_key => whole(Want::PathParams(arg.start)),
+        Ctx::Paths(base) if !arg.is_key => whole(Want::Paths(base)),
+        Ctx::DiskPaths if !arg.is_key => whole(Want::DiskPaths(arg.call_start)),
+        Ctx::RequestFields if !arg.is_key => whole(Want::RequestFields),
         _ => None,
     }
+}
+
+pub fn is_rule_key(arg: &StringArg) -> bool {
+    arg.is_key && matches!(ctx_of(arg, &Scope::default()), Some((Ctx::Rules, _, _)))
 }
 
 pub fn checkable(kind: RefKind, value: &str) -> bool {
@@ -560,6 +764,41 @@ mod tests {
 
     fn k(kind: RefKind) -> Option<Want> {
         Some(Want::Kind(kind))
+    }
+
+    #[test]
+    fn suggests_paths_disks_container_ids_uris_and_request_fields() {
+        let text = "<?php\npublic_path('css/app.css');\nstorage_path('logs');\nbase_path('');\napp()->storagePath('app');\nApp::langPath('en');\nStorage::put('a.txt', 'x');\nStorage::disk('public')->exists('img');\nStorage::copy('a', 'b');\nlogs('daily');\napp('cache');\nresolve('files');\nurl('/orders');\nredirect('/home');\nredirect()->to('/back');\nold('email');\nrequest('name');\n$request->input('total');\n$request->only(['a', 'b']);\n$collection->get('x');\n";
+        let got = wants(text, false, &Scope::default());
+        let disk = |s: &str| Some(Want::DiskPaths(text.find(s).unwrap()));
+        assert_eq!(
+            got,
+            [
+                ("css/app.css".into(), Some(Want::Paths("public/"))),
+                ("logs".into(), Some(Want::Paths("storage/"))),
+                ("".into(), Some(Want::Paths(""))),
+                ("app".into(), Some(Want::Paths("storage/"))),
+                ("en".into(), Some(Want::Paths("lang/"))),
+                ("a.txt".into(), disk("('a.txt'")),
+                ("x".into(), None),
+                ("public".into(), k(RefKind::Disk)),
+                ("img".into(), disk("('img'")),
+                ("a".into(), disk("('a', 'b')")),
+                ("b".into(), disk("('a', 'b')")),
+                ("daily".into(), k(RefKind::LogChannel)),
+                ("cache".into(), Some(Want::Static(&CONTAINER))),
+                ("files".into(), Some(Want::Static(&CONTAINER))),
+                ("/orders".into(), Some(Want::RoutePaths)),
+                ("/home".into(), Some(Want::RoutePaths)),
+                ("/back".into(), Some(Want::RoutePaths)),
+                ("email".into(), Some(Want::RequestFields)),
+                ("name".into(), Some(Want::RequestFields)),
+                ("total".into(), Some(Want::RequestFields)),
+                ("a".into(), Some(Want::RequestFields)),
+                ("b".into(), Some(Want::RequestFields)),
+                ("x".into(), None),
+            ]
+        );
     }
 
     #[test]

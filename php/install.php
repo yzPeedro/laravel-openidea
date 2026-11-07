@@ -27,6 +27,37 @@ $own = static function (string $path) use ($base): void {
 
 $hooked = static fn (): bool => is_file($autoload) && str_contains((string) file_get_contents($autoload), $marker);
 
+$tidy = static function () use ($dir): void {
+    if (is_dir($dir) && array_diff(scandir($dir) ?: [], ['.', '..', '.gitignore']) === []) {
+        @unlink($dir . '/.gitignore');
+        @rmdir($dir);
+    }
+};
+
+if ($action === 'helpers') {
+    $content = (string) stream_get_contents(STDIN);
+    $path = $dir . '/ide-helpers.php';
+    if ($content === '') {
+        @unlink($path);
+        $tidy();
+        $emit(['ok' => true, 'written' => false]);
+        exit(0);
+    }
+    if (! is_dir($dir) && ! @mkdir($dir, 0775, true) && ! is_dir($dir)) {
+        $emit(['ok' => false, 'error' => "cannot create $dir"]);
+        exit(1);
+    }
+    $own($dir);
+    if (! is_file($dir . '/.gitignore')) {
+        file_put_contents($dir . '/.gitignore', "*\n");
+        $own($dir . '/.gitignore');
+    }
+    file_put_contents($path, $content);
+    $own($path);
+    $emit(['ok' => true, 'written' => true]);
+    exit(0);
+}
+
 if ($action === 'install') {
     if (! is_file($autoload)) {
         $emit(['ok' => false, 'error' => 'vendor/autoload.php is missing; run composer install']);
@@ -76,10 +107,7 @@ if ($action === 'uninstall') {
         file_put_contents($autoload, $unhook(file_get_contents($autoload)));
     }
     @unlink($file);
-    if (! is_file($dir . '/mcp.php')) {
-        @unlink($dir . '/.gitignore');
-        @rmdir($dir);
-    }
+    $tidy();
     $emit(['ok' => true, 'active' => false]);
     exit(0);
 }
@@ -131,6 +159,35 @@ $agentStatus = static function () use ($base, $jsonFiles, $agentMarker, $dir): a
     return ['server' => is_file($dir . '/mcp.php'), 'configured' => $configured, 'guidelines' => $guidelines, 'boost' => $boost, 'present' => $boostFiles];
 };
 
+$writeMcp = static function (array $payload) use ($dir, $own): void {
+    $level = in_array($payload['access'] ?? 'read', ['read', 'write', 'full'], true) ? $payload['access'] : 'read';
+    $files = [
+        'mcp.php' => $payload['mcp'] ?? null,
+        'install.php' => $payload['install'] ?? null,
+        'recorder.source' => $payload['recorder'] ?? null,
+        'mcp-access.json' => json_encode(['level' => $level]) . "\n",
+    ];
+    foreach ($files as $name => $content) {
+        $path = $dir . '/' . $name;
+        if (! is_string($content) || $content === '' || (is_file($path) && file_get_contents($path) === $content)) {
+            continue;
+        }
+        file_put_contents($path, $content);
+        $own($path);
+    }
+};
+
+if ($action === 'mcp-sync') {
+    $payload = json_decode((string) stream_get_contents(STDIN), true);
+    if (! is_array($payload) || empty($payload['mcp']) || ! is_file($dir . '/mcp.php')) {
+        $emit(['ok' => true, 'synced' => false]);
+        exit(0);
+    }
+    $writeMcp($payload);
+    $emit(['ok' => true, 'synced' => true]);
+    exit(0);
+}
+
 if ($action === 'agents') {
     $payload = json_decode((string) stream_get_contents(STDIN), true);
     if (! is_array($payload) || empty($payload['mcp']) || empty($payload['command'])) {
@@ -143,8 +200,7 @@ if ($action === 'agents') {
     $own($dir);
     file_put_contents($dir . '/.gitignore', "*\n");
     $own($dir . '/.gitignore');
-    file_put_contents($dir . '/mcp.php', $payload['mcp']);
-    $own($dir . '/mcp.php');
+    $writeMcp($payload);
     $server = ['command' => $payload['command'], 'args' => $payload['args']];
     foreach ($jsonFiles as $file => $spec) {
         $path = $base . '/' . $file;
@@ -212,11 +268,10 @@ if ($action === 'agents-off') {
         }
     }
     @unlink($base . '/.ai/guidelines/laravel-openidea.md');
-    @unlink($dir . '/mcp.php');
-    if (! is_file($file)) {
-        @unlink($dir . '/.gitignore');
-        @rmdir($dir);
+    foreach (['mcp.php', 'install.php', 'recorder.source', 'mcp-access.json'] as $name) {
+        @unlink($dir . '/' . $name);
     }
+    $tidy();
     $emit(['ok' => true] + $agentStatus());
     exit(0);
 }

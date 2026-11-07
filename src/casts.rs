@@ -125,7 +125,11 @@ pub fn psr4(composer: &str) -> Vec<(String, String)> {
     out
 }
 
-fn file_of(project: &Project, map: &[(String, String)], fqn: &str) -> Option<(String, String)> {
+pub(crate) fn file_of(
+    project: &Project,
+    map: &[(String, String)],
+    fqn: &str,
+) -> Option<(String, String)> {
     for (prefix, dir) in map {
         if let Some(rest) = fqn.strip_prefix(prefix.as_str()) {
             let path = format!("{dir}{}.php", rest.replace('\\', "/"));

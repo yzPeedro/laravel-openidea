@@ -60,7 +60,7 @@ where
     let mut out = Vec::new();
     for glob in globs {
         for path in find(project, root, glob, 20_000) {
-            let Ok(text) = project.read_file(&path) else {
+            let Ok(text) = crate::project::read_listed(project, &path) else {
                 continue;
             };
             if !text.contains(needle) {
@@ -137,7 +137,7 @@ pub fn commands(project: &Project, root: &str) -> Vec<Entry> {
     let mut paths = find(project, root, "app/**/Commands/**/*.php", 5000);
     paths.extend(find(project, root, "routes/console.php", 1));
     for path in paths {
-        let Ok(text) = project.read_file(&path) else {
+        let Ok(text) = crate::project::read_listed(project, &path) else {
             continue;
         };
         let lines = Lines::new(&text);

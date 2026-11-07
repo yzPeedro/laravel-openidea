@@ -1,30 +1,44 @@
 mod artisan;
+mod audit;
 mod blade_syntax;
 mod casts;
+mod checks;
+mod completions;
 mod devtools;
 mod directives;
 mod dotenv;
 mod eloquent;
+mod formrequest;
+mod helpers;
 mod hierarchy;
 mod index;
 mod inspect;
+mod inspections;
 mod logs;
+mod mcp;
 mod members;
 mod modeldoc;
 mod panels;
+mod pest;
 mod php;
 mod project;
+mod queries;
+mod querysql;
 mod refs;
+mod renames;
 mod resources;
 mod runner;
 mod sections;
+mod toolconfig;
+mod tools;
 
+use audit::Logged;
 use index::{Cache, Entry, RefKind, is_model, parse_class};
 use openidea_plugin::providers::{CodeAction, CompletionItem, Document, LineMarker, Providers};
 use openidea_plugin::text::{offset, position};
 use openidea_plugin::{
-    Context, Diagnostic, Error, Event, EventKind, Invocation, Location, LogLevel, Position,
-    Project, Range, Severity, StatusItem, TextEdit, host,
+    Context, Diagnostic, Error, Event, EventKind, Invocation, Location, Position, Project, Range,
+    Severity, StatusItem, TextEdit, host,
 };
 use php::{StringArg, is_blade};
 use project::{Lines, join, project_of};
@@ -42,6 +56,14 @@ pub struct Laravel {
     projects: BTreeMap<String, bool>,
     commands: BTreeMap<String, std::rc::Rc<Vec<artisan::Command>>>,
     symbols: BTreeMap<String, std::rc::Rc<Vec<hierarchy::ProjectSymbol>>>,
+    saved: Vec<renames::Saved>,
+    originals: BTreeMap<String, String>,
+    analysis: BTreeMap<String, Vec<Diagnostic>>,
+    warned: BTreeSet<String>,
+    pest: BTreeMap<String, pest::Names>,
+    mcp_synced: BTreeMap<String, String>,
+    helpers_synced: BTreeMap<String, String>,
+    listed: BTreeMap<String, (u64, Vec<String>)>,
 }
 
 fn kebab(name: &str) -> String {
@@ -280,7 +302,6 @@ impl Laravel {
                 let known = project::is_laravel(&project);
                 self.projects.insert(root.clone(), known);
                 if known {
-                    host::log(LogLevel::Info, &format!("Laravel project at {root}"));
                     show_status(&project);
                 }
                 known
@@ -553,7 +574,7 @@ impl Laravel {
             .location
             .path
             .clone();
-        project.read_file(&path).ok()
+        crate::project::read_listed(project, &path).ok()
     }
 
     fn eloquent_members(
@@ -789,6 +810,21 @@ impl Laravel {
                 (RefKind::Column, schema_properties(doc, *call_start))
             }
             Want::PathParams(before) => (RefKind::Column, path_params(doc, *before)),
+            Want::Paths(base) => (RefKind::Asset, self.path_items(project, root, base)),
+            Want::DiskPaths(call_start) => {
+                let config = project
+                    .read_file("config/filesystems.php")
+                    .unwrap_or_default();
+                let disk = helpers::disk_before(&doc.text, *call_start);
+                let entries = helpers::disk_root(&config, disk.as_deref())
+                    .map(|base| self.path_items(project, root, &base))
+                    .unwrap_or_default();
+                (RefKind::Asset, entries)
+            }
+            Want::RequestFields => (
+                RefKind::Column,
+                self.request_fields(project, root, &doc.text, is_blade(&doc.path)),
+            ),
             Want::RoutePaths => {
                 let mut seen = BTreeSet::new();
                 let mut entries = Vec::new();
@@ -932,21 +968,30 @@ impl Laravel {
                 )),
             );
         }
+        let found = self.findings(&project, &root, path, text);
+        out.extend(Self::finding_diagnostics(text, &found));
         out
     }
 
     fn publish(&mut self, path: &str) {
-        if !path.ends_with(".php") {
+        if self.publish_env(path) || !path.ends_with(".php") {
             return;
         }
         let Some(project) = project_of(path) else {
             return;
         };
-        let Ok(text) = project.read_file(path) else {
+        let Some(text) = project
+            .read_file(path)
+            .or_warn(&format!("reading {path} for diagnostics"))
+        else {
             return;
         };
-        let items = self.inspect(path, &text);
-        let _ = host::publish_diagnostics(path, &items);
+        let mut items = self.inspect(path, &text);
+        if let Some(found) = self.analysis.get(path) {
+            items.extend(found.iter().cloned());
+        }
+        host::publish_diagnostics(path, &items)
+            .or_error(&format!("publishing diagnostics for {path}"));
     }
 
     fn artisan(&self, ctx: &Invocation, args: &[&str]) -> Result<Option<String>, Error> {
@@ -1220,6 +1265,9 @@ impl Providers for Laravel {
         if is_env_file(&doc.path) {
             return self.env_completion(&project, &root, doc, cursor, at);
         }
+        if let Some(items) = self.tool_completion(&project, &root, doc, cursor) {
+            return items;
+        }
         if let Some((accessor, start)) = pivot_access(&doc.text, cursor) {
             let prefix = format!("{accessor}.");
             let entries: Vec<Entry> = self
@@ -1391,6 +1439,7 @@ impl Providers for Laravel {
         let Some((project, root, refs)) = self.references(doc) else {
             return Vec::new();
         };
+        self.remember_original(&root, &doc.path, &doc.text, false);
         let lines = Lines::new(&doc.text);
         let mut out = Vec::new();
         for (seg, arg) in refs {
@@ -1431,6 +1480,16 @@ impl Providers for Laravel {
         out
     }
 
+    fn resolve_code_action(
+        &mut self,
+        doc: &Document,
+        action: CodeAction,
+    ) -> Result<CodeAction, Error> {
+        let title = action.title.clone();
+        self.resolve_pending(doc, action)
+            .inspect_err(|e| audit::failed(&format!("code action \"{title}\""), e))
+    }
+
     fn code_actions(&mut self, doc: &Document, selection: Range) -> Vec<CodeAction> {
         let Some((project, root)) = self.laravel_project(&doc.path) else {
             return Vec::new();
@@ -1438,6 +1497,12 @@ impl Providers for Laravel {
         let Some(cursor) = offset(&doc.text, selection.start) else {
             return Vec::new();
         };
+        let mut fixes = self.fix_actions(&project, &root, doc, cursor);
+        fixes.extend(self.rename_actions(&project, &root, doc, cursor));
+        fixes.extend(self.form_request_action(&project, doc, cursor));
+        if !fixes.is_empty() {
+            return fixes;
+        }
         if let Some(action) = self.model_doc_action(doc, &project, &root, cursor) {
             return vec![action];
         }
@@ -1463,31 +1528,8 @@ impl Providers for Laravel {
     }
 }
 
-impl openidea_plugin::Plugin for Laravel {
-    fn activate(&mut self, _ctx: &Context) -> Result<(), Error> {
-        self.cache.locale = host::setting_string("locale")
-            .filter(|l| !l.is_empty())
-            .unwrap_or_else(|| "en".into());
-        let _ = host::subscribe(EventKind::FileOpened);
-        let _ = host::subscribe(EventKind::FileSaved);
-        let _ = host::subscribe(EventKind::VcsChanged);
-        for project in host::projects().unwrap_or_default() {
-            if let Ok(root) = project.root()
-                && let Some((project, root)) = self.laravel_project(&root)
-            {
-                self.cache.warm(&project, &root);
-                self.project_symbols(&project, &root);
-            }
-        }
-        Ok(())
-    }
-
-    fn run_command(
-        &mut self,
-        id: &str,
-        ctx: &Invocation,
-        _arg: Option<&str>,
-    ) -> Result<Option<String>, Error> {
+impl Laravel {
+    fn command(&mut self, id: &str, ctx: &Invocation) -> Result<Option<String>, Error> {
         match id {
             "refresh-index" => {
                 self.cache.clear();
@@ -1513,12 +1555,57 @@ impl openidea_plugin::Plugin for Laravel {
                 host::open_terminal("Tinker", "php", &["artisan".into(), "tinker".into()])?;
                 Ok(None)
             }
+            "copy-query-sql" => self.copy_query_sql(ctx),
+            "run-in-tinker" => self.run_selection_in_tinker(ctx),
             "artisan-serve" => {
                 host::open_terminal("artisan serve", "php", &["artisan".into(), "serve".into()])?;
                 Ok(None)
             }
             _ => Err(Error::NotFound(format!("command {id}"))),
         }
+    }
+}
+
+impl openidea_plugin::Plugin for Laravel {
+    fn activate(&mut self, _ctx: &Context) -> Result<(), Error> {
+        self.cache.locale = host::setting_string("locale")
+            .filter(|l| !l.is_empty())
+            .unwrap_or_else(|| "en".into());
+        for kind in [
+            EventKind::FileOpened,
+            EventKind::FileSaved,
+            EventKind::VcsChanged,
+            EventKind::EditorFocused,
+        ] {
+            host::subscribe(kind).or_error(&format!("subscribing to {kind:?}"));
+        }
+        for project in host::projects()
+            .or_error("listing the open projects")
+            .unwrap_or_default()
+        {
+            if let Ok(root) = project.root()
+                && let Some((project, root)) = self.laravel_project(&root)
+            {
+                self.cache.warm(&project, &root);
+                self.project_symbols(&project, &root);
+                self.sync_mcp(&project);
+                self.sync_helpers(&project);
+            }
+        }
+        Ok(())
+    }
+
+    fn run_command(
+        &mut self,
+        id: &str,
+        ctx: &Invocation,
+        _arg: Option<&str>,
+    ) -> Result<Option<String>, Error> {
+        let result = self.command(id, ctx);
+        if let Err(e) = &result {
+            audit::failed(&format!("command {id}"), e);
+        }
+        result
     }
 
     fn handle_events(&mut self, events: &[Event], _ctx: &Invocation) {
@@ -1529,7 +1616,23 @@ impl openidea_plugin::Plugin for Laravel {
                     if let Some(project) = project_of(path)
                         && let Ok(root) = project.root()
                     {
+                        if path.replace('\\', "/").ends_with("/config/auth.php") {
+                            self.helpers_synced.remove(&root);
+                            self.sync_helpers(&project);
+                        }
+                        let before = self.snapshot_keys(&project, &root, path);
                         self.cache.invalidate(&root, path);
+                        let after = self.snapshot_keys(&project, &root, path);
+                        self.remember_renames(path, before, after);
+                        if let Ok(text) = project.read_file(path) {
+                            self.remember_original(&root, path, &text, true);
+                        }
+                        if path.replace('\\', "/").contains("/tests/") {
+                            self.pest.remove(&root);
+                        }
+                        if self.laravel_project(path).is_some() {
+                            self.tools_on_save(&project, &root, path);
+                        }
                         if path.ends_with(".php") {
                             self.symbols.remove(&root);
                         }
@@ -1537,12 +1640,24 @@ impl openidea_plugin::Plugin for Laravel {
                     paths.insert(path.clone());
                 }
                 Event::FileOpened(path) => {
+                    if let Some(project) = project_of(path)
+                        && let Ok(root) = project.root()
+                        && let Ok(text) = project.read_file(path)
+                    {
+                        self.remember_original(&root, path, &text, true);
+                    }
                     paths.insert(path.clone());
                 }
                 Event::VcsChanged(repo) => {
                     self.cache.clear();
                     self.symbols.clear();
                     paths.insert(repo.clone());
+                }
+                Event::EditorFocused(Some(path)) => {
+                    if let Some((project, _)) = self.laravel_project(path) {
+                        self.sync_mcp(&project);
+                        self.sync_helpers(&project);
+                    }
                 }
                 _ => {}
             }
@@ -1663,6 +1778,283 @@ mod tests {
 
     fn at(text: &str, needle: &str, plus: usize) -> Position {
         position(text, text.find(needle).unwrap() + plus)
+    }
+
+    #[test]
+    fn inspections_report_and_fix_query_mistakes() {
+        let _host = setup();
+        let mut plugin = Laravel::default();
+        let text = "<?php\nclass A\n{\n    public function index()\n    {\n        $users = User::where('emial', 'x')->get();\n        foreach ($users as $user) {\n            echo $user->posts->count();\n        }\n        User::create(['name' => 'a', 'email' => 'b']);\n        return env('APP_NAME');\n    }\n}\n";
+        let d = doc("app/Http/Controllers/A.php", text);
+        let codes: Vec<String> = plugin
+            .inspect(&d.path, text)
+            .into_iter()
+            .filter_map(|x| x.code)
+            .collect();
+        assert_eq!(
+            codes,
+            [
+                "laravel.unknown-column",
+                "laravel.n-plus-one",
+                "laravel.not-fillable",
+                "laravel.env-outside-config"
+            ]
+        );
+        let titles = |needle: &str, plus: usize, plugin: &mut Laravel| -> Vec<String> {
+            let p = at(text, needle, plus);
+            plugin
+                .code_actions(&d, Range { start: p, end: p })
+                .into_iter()
+                .map(|a| a.title)
+                .collect()
+        };
+        assert_eq!(titles("emial", 1, &mut plugin), ["Change to 'email'"]);
+        assert_eq!(
+            titles("$user->posts", 8, &mut plugin),
+            ["Eager load 'posts' with with('posts')"]
+        );
+        assert_eq!(
+            titles("'email' =>", 2, &mut plugin),
+            ["Add 'email' to $fillable of User"]
+        );
+        assert_eq!(
+            titles("env(", 1, &mut plugin),
+            ["Replace with config('app.name')"]
+        );
+        let p = at(text, "'email' =>", 2);
+        let fix = plugin
+            .code_actions(&d, Range { start: p, end: p })
+            .remove(0);
+        assert_eq!(fix.edits[0].0, "/project/app/Models/User.php");
+        assert_eq!(fix.edits[0].1[0].text, ", 'email'");
+
+        _host.add_file(
+            "config/features.php",
+            "<?php\nreturn ['debug' => (bool) env('APP_DEBUG', false)];\n",
+        );
+        let mut fresh = Laravel::default();
+        let cast = "<?php\n$debug = env('APP_DEBUG');\n";
+        let cd = doc("app/Support/Flags.php", cast);
+        let p = at(cast, "env(", 1);
+        let titles: Vec<String> = fresh
+            .code_actions(&cd, Range { start: p, end: p })
+            .into_iter()
+            .map(|a| a.title)
+            .collect();
+        assert_eq!(titles, ["Replace with config('features.debug')"]);
+    }
+
+    fn refactor(plugin: &mut Laravel, d: &Document, needle: &str, plus: usize) -> Vec<CodeAction> {
+        let p = at(&d.text, needle, plus);
+        plugin
+            .code_actions(d, Range { start: p, end: p })
+            .into_iter()
+            .filter(|a| a.kind.as_deref() == Some("refactor"))
+            .collect()
+    }
+
+    fn edited_files(action: &CodeAction) -> Vec<(String, Vec<String>)> {
+        action
+            .edits
+            .iter()
+            .map(|(p, e)| {
+                (
+                    p.trim_start_matches("/project/").to_owned(),
+                    e.iter().map(|t| t.text.clone()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn renaming_a_route_updates_its_usages_before_and_after_saving() {
+        let host = setup();
+        let mut plugin = Laravel::default();
+        let edited = ROUTES.replace("name('users.index')", "name('users.list')");
+        let d = doc("routes/web.php", &edited);
+        let actions = refactor(&mut plugin, &d, "users.list", 3);
+        assert_eq!(
+            actions.iter().map(|a| a.title.as_str()).collect::<Vec<_>>(),
+            ["Rename route 'admin.users.index' to 'admin.users.list' in every usage"]
+        );
+        let resolved = plugin.resolve_code_action(&d, actions[0].clone()).unwrap();
+        assert_eq!(
+            edited_files(&resolved),
+            [(
+                "resources/views/users/index.blade.php".to_owned(),
+                vec!["admin.users.list".to_owned()]
+            )]
+        );
+
+        let mut open = Laravel::default();
+        open.line_markers(&doc("routes/web.php", ROUTES));
+        host.add_file("routes/web.php", &edited);
+        let actions = refactor(&mut open, &d, "users.list", 3);
+        assert_eq!(
+            actions.len(),
+            1,
+            "the IDE reads the edited buffer: {actions:?}"
+        );
+        host.add_file("routes/web.php", ROUTES);
+
+        let mut saved = Laravel::default();
+        saved.handle_events(
+            &[Event::FileOpened("/project/routes/web.php".into())],
+            &host.invocation(),
+        );
+        host.add_file("routes/web.php", &edited);
+        saved.handle_events(
+            &[Event::FileSaved("/project/routes/web.php".into())],
+            &host.invocation(),
+        );
+        let actions = refactor(&mut saved, &d, "users.list", 3);
+        assert_eq!(actions.len(), 1, "{actions:?}");
+        assert!(
+            actions[0]
+                .title
+                .contains("'admin.users.index' to 'admin.users.list'")
+        );
+    }
+
+    #[test]
+    fn renaming_a_translation_key_updates_usages_and_other_locales() {
+        let host = setup();
+        host.add_file("lang/pt.json", "{\n    \"Hello\": \"Olá\"\n}\n");
+        host.add_file(
+            "resources/views/greet.blade.php",
+            "<p>{{ __('Hello') }}</p>\n",
+        );
+        let mut plugin = Laravel::default();
+        let d = Document {
+            path: "/project/lang/en.json".into(),
+            language: "json".into(),
+            version: 1,
+            text: "{\n    \"Hi there\": \"Hello\"\n}\n".into(),
+        };
+        let actions = refactor(&mut plugin, &d, "Hi there", 2);
+        assert_eq!(
+            actions[0].title,
+            "Rename translation 'Hello' to 'Hi there' in every locale and usage"
+        );
+        let mut files = edited_files(&plugin.resolve_code_action(&d, actions[0].clone()).unwrap());
+        files.sort();
+        assert_eq!(
+            files,
+            [
+                ("lang/pt.json".to_owned(), vec!["Hi there".to_owned()]),
+                (
+                    "resources/views/greet.blade.php".to_owned(),
+                    vec!["Hi there".to_owned()]
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn extracting_a_form_request_creates_the_class_and_rewrites_the_controller() {
+        let host = setup().with_capabilities(&["project.read", "editor.read", "process:php"]);
+        let runs = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = runs.clone();
+        host.on_process("php", move |args, stdin| {
+            sink.borrow_mut()
+                .push((args.to_vec(), stdin.unwrap_or_default().to_owned()));
+            Ok(openidea_plugin::ProcessOutput {
+                status: Some(0),
+                stdout: "ok\n".into(),
+                stderr: String::new(),
+            })
+        });
+        let mut plugin = Laravel::default();
+        let text = "<?php\nnamespace App\\Http\\Controllers;\n\nuse Illuminate\\Http\\Request;\n\nclass OrderController\n{\n    public function store(Request $request)\n    {\n        $data = $request->validate(['total' => 'required']);\n        return $data;\n    }\n}\n";
+        let d = doc("app/Http/Controllers/OrderController.php", text);
+        let action = refactor(&mut plugin, &d, "validate", 2).remove(0);
+        assert_eq!(
+            action.title,
+            "Extract the validation into a Form Request (StoreOrderRequest)"
+        );
+        let resolved = plugin.resolve_code_action(&d, action).unwrap();
+        let runs = runs.borrow();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            runs[0].0.last().map(String::as_str),
+            Some("app/Http/Requests/StoreOrderRequest.php")
+        );
+        assert!(
+            runs[0]
+                .1
+                .contains("class StoreOrderRequest extends FormRequest")
+        );
+        let texts: Vec<String> = resolved.edits[0].1.iter().map(|e| e.text.clone()).collect();
+        assert_eq!(
+            texts,
+            [
+                "$request->validated()",
+                "StoreOrderRequest",
+                "use App\\Http\\Requests\\StoreOrderRequest;"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_moved_view_is_fixed_in_one_place_or_everywhere() {
+        let host = setup();
+        host.add_file(
+            "resources/views/shop/orders/index.blade.php",
+            "<div></div>\n",
+        );
+        host.add_file(
+            "app/Http/Controllers/OrdersController.php",
+            "<?php\nclass OrdersController\n{\n    public function index() { return view('orders.index'); }\n}\n",
+        );
+        let mut plugin = Laravel::default();
+        let text =
+            "<?php\nclass A\n{\n    public function show() { return view('orders.index'); }\n}\n";
+        let d = doc("app/Http/Controllers/A.php", text);
+        let p = at(text, "orders.index", 2);
+        let actions = plugin.code_actions(&d, Range { start: p, end: p });
+        let titles: Vec<&str> = actions.iter().map(|a| a.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            [
+                "Change to 'shop.orders.index'",
+                "Change every usage of view 'orders.index' to 'shop.orders.index'"
+            ]
+        );
+        assert_eq!(actions[0].edits[0].1[0].text, "shop.orders.index");
+        let mut files = edited_files(&plugin.resolve_code_action(&d, actions[1].clone()).unwrap());
+        files.sort();
+        assert_eq!(
+            files.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(),
+            [
+                "app/Http/Controllers/A.php",
+                "app/Http/Controllers/OrdersController.php"
+            ]
+        );
+    }
+
+    #[test]
+    fn env_files_get_each_others_missing_keys() {
+        let host = setup();
+        host.add_file(".env", "APP_NAME=Shop\nSTRIPE_SECRET=sk_live_x\n");
+        let mut plugin = Laravel::default();
+        plugin.handle_events(
+            &[Event::FileSaved("/project/.env".into())],
+            &host.invocation(),
+        );
+        let published = host.diagnostics();
+        let env: Vec<&str> = published["/project/.env"]
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect();
+        assert_eq!(
+            env,
+            ["STRIPE_SECRET is missing from .env.example, so new checkouts won't know about it"]
+        );
+        assert!(
+            published
+                .get("/project/.env.example")
+                .is_none_or(|d| d.is_empty())
+        );
     }
 
     fn labels(items: &[CompletionItem]) -> Vec<&str> {
@@ -2232,5 +2624,73 @@ return Post::query()->create([
             ["resources/views/components/forms/text-input.blade.php"]
         );
         assert!(related_candidates("app/Models/User.php").is_empty());
+    }
+
+    #[test]
+    fn a_healthy_project_logs_nothing() {
+        let host = setup();
+        let mut plugin = Laravel::default();
+        plugin.handle_events(
+            &[
+                Event::FileOpened("/project/routes/web.php".into()),
+                Event::FileSaved("/project/app/Models/User.php".into()),
+            ],
+            &host.invocation(),
+        );
+        plugin
+            .run_command("refresh-index", &host.invocation(), None)
+            .unwrap();
+        assert_eq!(host.logs(), Vec::new());
+    }
+
+    #[test]
+    fn failures_are_logged_as_warnings_and_errors() {
+        let host = setup().with_capabilities(&["project.read", "process:php"]);
+        host.set_setting("phpstanOnSave", "true");
+        host.add_file(
+            "phpstan.neon",
+            "parameters:
+    level: 5
+",
+        );
+        host.add_file("vendor/bin/phpstan", "");
+        host.on_process("php", |_, _| {
+            Ok(openidea_plugin::ProcessOutput {
+                status: Some(255),
+                stdout: String::new(),
+                stderr: "PHP Fatal error: Allowed memory size
+"
+                .into(),
+            })
+        });
+        let mut plugin = Laravel::default();
+        plugin.handle_events(
+            &[Event::FileSaved("/project/app/Models/User.php".into())],
+            &host.invocation(),
+        );
+        let err = plugin
+            .run_command("nope", &host.invocation(), None)
+            .unwrap_err();
+        let logs = host.logs();
+        assert!(
+            logs.contains(&(
+                openidea_plugin::LogLevel::Error,
+                "phpstan on save: no results for app/Models/User.php: exit code 255
+PHP Fatal error: Allowed memory size"
+                    .into()
+            )),
+            "{logs:?}"
+        );
+        assert!(
+            logs.contains(&(
+                openidea_plugin::LogLevel::Warn,
+                format!("command nope: {err}")
+            )),
+            "{logs:?}"
+        );
+        assert!(logs.iter().all(|(level, _)| matches!(
+            level,
+            openidea_plugin::LogLevel::Warn | openidea_plugin::LogLevel::Error
+        )));
     }
 }

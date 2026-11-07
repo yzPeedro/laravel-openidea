@@ -18,8 +18,15 @@ optional = ["process:php", "process:docker", "editor.read", "editor.write", "cli
 kinds = ["completion", "definition", "line-markers", "code-actions"]
 languages = ["php", "blade", "dotenv"]
 
+[[contributes.providers]]
+kinds = ["completion", "code-actions"]
+languages = ["json", "neon"]
+
 [[contributes.languages]]
 path = "languages/blade.toml"
+
+[[contributes.languages]]
+path = "languages/neon.toml"
 
 [[contributes.views]]
 id = "laravel"
@@ -57,6 +64,82 @@ category = "Laravel"
 id = "artisan-serve"
 title = "Laravel: Artisan serve"
 category = "Laravel"
+
+[[contributes.commands]]
+id = "copy-query-sql"
+title = "Laravel: Copy Query as MySQL"
+category = "Laravel"
+when = "editorLangId == php"
+
+[[contributes.commands]]
+id = "run-in-tinker"
+title = "Laravel: Run Selection in Tinker"
+category = "Laravel"
+when = "editorLangId == php && editorHasSelection"
+
+[[contributes.menus]]
+menu = "editor.context"
+command = "copy-query-sql"
+when = "editorLangId == php"
+
+[[contributes.menus]]
+menu = "editor.context"
+command = "run-in-tinker"
+when = "editorLangId == php && editorHasSelection"
+
+[[contributes.fileTemplates]]
+id = "laravel-model"
+name = "Laravel Model"
+extension = "php"
+path = "templates/model.php"
+
+[[contributes.fileTemplates]]
+id = "laravel-controller"
+name = "Laravel Controller"
+extension = "php"
+path = "templates/controller.php"
+
+[[contributes.fileTemplates]]
+id = "laravel-form-request"
+name = "Laravel Form Request"
+extension = "php"
+path = "templates/form-request.php"
+
+[[contributes.fileTemplates]]
+id = "laravel-policy"
+name = "Laravel Policy"
+extension = "php"
+path = "templates/policy.php"
+
+[[contributes.fileTemplates]]
+id = "laravel-job"
+name = "Laravel Job"
+extension = "php"
+path = "templates/job.php"
+
+[[contributes.fileTemplates]]
+id = "laravel-event"
+name = "Laravel Event"
+extension = "php"
+path = "templates/event.php"
+
+[[contributes.fileTemplates]]
+id = "laravel-listener"
+name = "Laravel Listener"
+extension = "php"
+path = "templates/listener.php"
+
+[[contributes.fileTemplates]]
+id = "laravel-middleware"
+name = "Laravel Middleware"
+extension = "php"
+path = "templates/middleware.php"
+
+[[contributes.fileTemplates]]
+id = "pest-test"
+name = "Pest Test"
+extension = "php"
+path = "templates/pest-test.php"
 
 [[contributes.runDetectors]]
 id = "artisan-serve"

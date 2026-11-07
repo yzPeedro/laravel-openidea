@@ -489,7 +489,7 @@ pub fn scan(project: &Project, root: &str) -> Scan {
     paths.dedup();
     let mut out = Scan::default();
     for p in paths {
-        let Ok(text) = project.read_file(&p) else {
+        let Ok(text) = crate::project::read_listed(project, &p) else {
             continue;
         };
         let part = scan_text(rel(root, &p), &text);
@@ -791,7 +791,7 @@ pub fn array_pairs(body: &str) -> Vec<(String, String)> {
 pub fn listen_property(project: &Project, root: &str) -> Vec<Listener> {
     let mut out = Vec::new();
     for file in find(project, root, "app/Providers/**/*.php", 200) {
-        let Ok(text) = project.read_file(&file) else {
+        let Ok(text) = crate::project::read_listed(project, &file) else {
             continue;
         };
         let Some(at) = text.find("$listen") else {

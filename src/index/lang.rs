@@ -18,7 +18,7 @@ pub fn index(project: &Project, root: &str, locale: &str) -> Vec<Entry> {
             let Some(inner) = inner.strip_prefix("lang/") else {
                 continue;
             };
-            let Ok(text) = project.read_file(&path) else {
+            let Ok(text) = crate::project::read_listed(project, &path) else {
                 continue;
             };
             let entries = if let Some(file_locale) = inner.strip_suffix(".json") {

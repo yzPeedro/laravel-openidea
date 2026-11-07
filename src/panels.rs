@@ -1,5 +1,6 @@
 use crate::Laravel;
 use crate::artisan::{self, Command, GLOBAL_OPTIONS};
+use crate::audit::{self, Logged};
 use crate::devtools;
 use crate::index::{Entry, RefKind};
 use crate::inspect::{self, Found};
@@ -55,6 +56,7 @@ enum Request {
     Sqlsave { state: serde_json::Value },
     Sqlcopy { code: String },
     Sqlinsert { code: String },
+    Php2sql { code: String, seq: u64 },
 }
 
 const TINKER_KEY: &str = "tinker.tabs";
@@ -123,9 +125,9 @@ fn project(ctx: &Invocation) -> Result<(Project, String), Error> {
 
 fn history() -> Vec<Vec<String>> {
     host::storage::get(HISTORY_KEY)
-        .ok()
+        .or_warn("reading the Artisan history")
         .flatten()
-        .and_then(|s| serde_json::from_str(&s).ok())
+        .and_then(|s| serde_json::from_str(&s).or_warn("parsing the Artisan history"))
         .unwrap_or_default()
 }
 
@@ -135,13 +137,24 @@ fn remember(argv: &[String]) -> Vec<Vec<String>> {
     recent.insert(0, argv.to_vec());
     recent.truncate(HISTORY_SIZE);
     if let Ok(text) = serde_json::to_string(&recent) {
-        let _ = host::storage::set(HISTORY_KEY, &text);
+        host::storage::set(HISTORY_KEY, &text).or_warn("saving the Artisan history");
     }
     recent
 }
 
 fn post(view: &str, value: serde_json::Value) {
-    let _ = host::post_view_message(view, &value.to_string());
+    let kind = value["type"].as_str().unwrap_or_default();
+    let problem = match kind {
+        "error" => value["message"].as_str(),
+        "sqlresult" if value["ok"] == false => value["message"].as_str(),
+        "php2sql" => None,
+        _ => value["error"].as_str(),
+    };
+    if let Some(problem) = problem.filter(|p| !p.trim().is_empty()) {
+        audit::warn(&format!("hub {kind}"), problem);
+    }
+    host::post_view_message(view, &value.to_string())
+        .or_warn(&format!("posting {kind} to the {view} view"));
 }
 
 fn denied(e: Error, mode: &Mode) -> String {
@@ -427,6 +440,7 @@ impl Laravel {
                 json!({ "type": "output", "argv": argv, "ok": out.status == Some(0), "text": text, "runner": mode.label() })
             }
             Err(e) => {
+                audit::failed(&format!("hub artisan {}", argv.join(" ")), &e);
                 json!({ "type": "output", "argv": argv, "ok": false, "text": denied(e, &mode), "runner": mode.label() })
             }
         };
@@ -707,7 +721,7 @@ impl Laravel {
                     crate::project::find(project, root, "tests/**/*.php", 20_000)
                         .into_iter()
                         .filter_map(|p| {
-                            let text = project.read_file(&p).ok()?;
+                            let text = crate::project::read_listed(project, &p).ok()?;
                             Some((
                                 rel(root, &p)
                                     .rsplit('/')
@@ -1037,6 +1051,7 @@ impl Laravel {
                 json!({ "type": "tinker", "tab": tab, "records": records, "noise": noise, "ok": out.status == Some(0), "runner": mode.label() })
             }
             Err(e) => {
+                audit::failed("hub tinker", &e);
                 json!({ "type": "tinker", "tab": tab, "records": [], "noise": denied(e, &mode), "ok": false, "runner": mode.label() })
             }
         };
@@ -1103,15 +1118,13 @@ impl Laravel {
             return Err(Error::Invalid(format!("unknown agents action {action}")));
         }
         let (project, root) = project(ctx)?;
+        if action == "agents-status" {
+            self.sync_mcp(&project);
+        }
         let mode = runner::detect(&project);
         let (command, args) = mode.mcp_server(&root, runner::compose_file(&project));
-        let payload = json!({
-            "mcp": devtools::MCP_PHP,
-            "command": command,
-            "args": args,
-            "guidelines": devtools::GUIDELINES,
-        })
-        .to_string();
+        let access = crate::mcp::access_setting();
+        let payload = crate::mcp::payload(&command, &args, access);
         let task = host::begin_task("AI agents", true);
         let run = mode.php_args(&[
             "-r".into(),
@@ -1138,10 +1151,11 @@ impl Laravel {
                 last["command"] = json!(format!("{command} {}", args.join(" ")));
                 last["boostVersion"] = json!(devtools::lock_version(&lock, "laravel/boost"));
                 last["runner"] = json!(mode.label());
+                last["access"] = json!(access);
                 last
             }
             Err(e) => {
-                json!({ "type": "agents", "action": action, "ok": false, "error": denied(e, &mode) })
+                json!({ "type": "agents", "action": action, "ok": false, "error": denied(e, &mode), "access": access })
             }
         };
         post(view, message);
@@ -1209,6 +1223,21 @@ impl Views for Laravel {
     }
 
     fn handle(&mut self, view: &str, event: ViewEvent, ctx: &Invocation) -> Result<(), Error> {
+        let result = self.handle_request(view, event, ctx);
+        if let Err(e) = &result {
+            audit::failed(&format!("hub request on {view}"), e);
+        }
+        result
+    }
+}
+
+impl Laravel {
+    fn handle_request(
+        &mut self,
+        view: &str,
+        event: ViewEvent,
+        ctx: &Invocation,
+    ) -> Result<(), Error> {
         let ViewEvent::Message(text) = event else {
             return Ok(());
         };
@@ -1226,14 +1255,14 @@ impl Views for Laravel {
             Request::Open { path, line } => self.open_file(view, ctx, &path, line),
             Request::Tinker { code, tab } => self.tinker(view, ctx, &code, &tab),
             Request::Tinkersave { tabs } => {
-                let _ = host::storage::set(TINKER_KEY, &tabs.to_string());
+                host::storage::set(TINKER_KEY, &tabs.to_string()).or_warn("saving the Tinker tabs");
                 Ok(())
             }
             Request::Tinkerload => {
                 let tabs: serde_json::Value = host::storage::get(TINKER_KEY)
-                    .ok()
+                    .or_warn("reading the Tinker tabs")
                     .flatten()
-                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .and_then(|s| serde_json::from_str(&s).or_warn("parsing the Tinker tabs"))
                     .unwrap_or(serde_json::Value::Null);
                 post(view, json!({ "type": "tinkertabs", "tabs": tabs }));
                 Ok(())
@@ -1254,9 +1283,11 @@ impl Views for Laravel {
                     })
                     .collect();
                 let state: serde_json::Value = host::storage::get(SQL_KEY)
-                    .ok()
+                    .or_warn("reading the SQL to Laravel state")
                     .flatten()
-                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .and_then(|s| {
+                        serde_json::from_str(&s).or_warn("parsing the SQL to Laravel state")
+                    })
                     .unwrap_or(serde_json::Value::Null);
                 post(
                     view,
@@ -1265,7 +1296,8 @@ impl Views for Laravel {
                 Ok(())
             }
             Request::Sqlsave { state } => {
-                let _ = host::storage::set(SQL_KEY, &state.to_string());
+                host::storage::set(SQL_KEY, &state.to_string())
+                    .or_warn("saving the SQL to Laravel state");
                 Ok(())
             }
             Request::Sqlcopy { code } => {
@@ -1277,6 +1309,18 @@ impl Views for Laravel {
                         json!({ "type": "sqlresult", "ok": false, "message": format!("Allow \"{cap}\" for Laravel OpenIDEA in Settings › Plugins to copy from the hub.") })
                     }
                     Err(e) => json!({ "type": "sqlresult", "ok": false, "message": e.to_string() }),
+                };
+                post(view, message);
+                Ok(())
+            }
+            Request::Php2sql { code, seq } => {
+                let project = project(ctx).ok();
+                let result = self.php_to_sql(project.as_ref().map(|(p, r)| (p, r.as_str())), &code);
+                let message = match result {
+                    Ok(out) => {
+                        json!({ "type": "php2sql", "seq": seq, "sql": out.sql, "notes": out.notes })
+                    }
+                    Err(error) => json!({ "type": "php2sql", "seq": seq, "error": error }),
                 };
                 post(view, message);
                 Ok(())
@@ -1301,6 +1345,32 @@ impl Views for Laravel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn translates_laravel_code_to_mysql_for_the_hub() {
+        use openidea_plugin::views::{ViewEvent, Views as _};
+        let host = openidea_plugin::mock::MockHost::install();
+        host.add_file("artisan", "#!/usr/bin/env php\n");
+        let mut plugin = Laravel::default();
+        let message = json!({ "type": "php2sql", "seq": 7, "code": "DB::table('users')->where('active', 1)->count();" }).to_string();
+        plugin
+            .handle("laravel", ViewEvent::Message(message), &host.invocation())
+            .unwrap();
+        let reply: serde_json::Value =
+            serde_json::from_str(&host.view_messages().last().unwrap().1).unwrap();
+        assert_eq!(reply["seq"], 7);
+        assert_eq!(
+            reply["sql"],
+            "SELECT COUNT(*) AS `aggregate`\nFROM `users`\nWHERE `active` = 1"
+        );
+        let bad = json!({ "type": "php2sql", "seq": 8, "code": "$user->posts" }).to_string();
+        plugin
+            .handle("laravel", ViewEvent::Message(bad), &host.invocation())
+            .unwrap();
+        let reply: serde_json::Value =
+            serde_json::from_str(&host.view_messages().last().unwrap().1).unwrap();
+        assert!(reply["error"].as_str().unwrap().contains("Start the chain"));
+    }
 
     #[test]
     fn inserts_converted_sql_at_the_cursor() {

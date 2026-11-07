@@ -90,7 +90,7 @@ fn models_in(project: &Project, root: &str) -> Vec<(String, String, Class)> {
     paths
         .into_iter()
         .filter_map(|path| {
-            let text = project.read_file(&path).ok()?;
+            let text = crate::project::read_listed(project, &path).ok()?;
             let class = parse_class(&text)?;
             is_model(&class).then_some((path, text, class))
         })

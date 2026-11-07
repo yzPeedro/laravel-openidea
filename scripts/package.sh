@@ -15,7 +15,7 @@ rm -rf build
 mkdir -p "${out}/dist"
 cp plugin.toml settings.schema.json LICENSE README.md "${out}/"
 cp dist/plugin.wasm "${out}/dist/"
-cp -r icons languages web "${out}/"
+cp -r icons languages templates web "${out}/"
 
 python3 - "build" "${name}" <<'PY'
 import os, sys, zipfile
