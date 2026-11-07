@@ -4,6 +4,8 @@ All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](h
 
 ## Unreleased
 
+- The hub opens on Windows and macOS: it is now a web view loaded from the plugin's own files, so the IDE's content security policy no longer blocks its scripts and leaves it stuck on *Loading* ([#4](https://github.com/yzPeedro/laravel-openidea/issues/4)).
+
 ## 0.13.1
 
 - Blade files with multibyte characters (such as `…` or `—`) before a directive or comment no longer crash the plugin, which also left the hub stuck on *Loading* ([#4](https://github.com/yzPeedro/laravel-openidea/issues/4)).
