@@ -6,6 +6,7 @@ mod devtools;
 mod directives;
 mod dotenv;
 mod eloquent;
+mod formrequest;
 mod hierarchy;
 mod index;
 mod inspect;
@@ -19,6 +20,7 @@ mod project;
 mod queries;
 mod querysql;
 mod refs;
+mod renames;
 mod resources;
 mod runner;
 mod sections;
@@ -46,6 +48,8 @@ pub struct Laravel {
     projects: BTreeMap<String, bool>,
     commands: BTreeMap<String, std::rc::Rc<Vec<artisan::Command>>>,
     symbols: BTreeMap<String, std::rc::Rc<Vec<hierarchy::ProjectSymbol>>>,
+    saved: Vec<renames::Saved>,
+    originals: BTreeMap<String, String>,
 }
 
 fn kebab(name: &str) -> String {
@@ -1397,6 +1401,7 @@ impl Providers for Laravel {
         let Some((project, root, refs)) = self.references(doc) else {
             return Vec::new();
         };
+        self.remember_original(&root, &doc.path, &doc.text, false);
         let lines = Lines::new(&doc.text);
         let mut out = Vec::new();
         for (seg, arg) in refs {
@@ -1437,6 +1442,14 @@ impl Providers for Laravel {
         out
     }
 
+    fn resolve_code_action(
+        &mut self,
+        doc: &Document,
+        action: CodeAction,
+    ) -> Result<CodeAction, Error> {
+        self.resolve_pending(doc, action)
+    }
+
     fn code_actions(&mut self, doc: &Document, selection: Range) -> Vec<CodeAction> {
         let Some((project, root)) = self.laravel_project(&doc.path) else {
             return Vec::new();
@@ -1444,7 +1457,9 @@ impl Providers for Laravel {
         let Some(cursor) = offset(&doc.text, selection.start) else {
             return Vec::new();
         };
-        let fixes = self.fix_actions(&project, &root, doc, cursor);
+        let mut fixes = self.fix_actions(&project, &root, doc, cursor);
+        fixes.extend(self.rename_actions(&project, &root, doc, cursor));
+        fixes.extend(self.form_request_action(&project, doc, cursor));
         if !fixes.is_empty() {
             return fixes;
         }
@@ -1541,7 +1556,13 @@ impl openidea_plugin::Plugin for Laravel {
                     if let Some(project) = project_of(path)
                         && let Ok(root) = project.root()
                     {
+                        let before = self.snapshot_keys(&project, &root, path);
                         self.cache.invalidate(&root, path);
+                        let after = self.snapshot_keys(&project, &root, path);
+                        self.remember_renames(path, before, after);
+                        if let Ok(text) = project.read_file(path) {
+                            self.remember_original(&root, path, &text, true);
+                        }
                         if path.ends_with(".php") {
                             self.symbols.remove(&root);
                         }
@@ -1549,6 +1570,12 @@ impl openidea_plugin::Plugin for Laravel {
                     paths.insert(path.clone());
                 }
                 Event::FileOpened(path) => {
+                    if let Some(project) = project_of(path)
+                        && let Ok(root) = project.root()
+                        && let Ok(text) = project.read_file(path)
+                    {
+                        self.remember_original(&root, path, &text, true);
+                    }
                     paths.insert(path.clone());
                 }
                 Event::VcsChanged(repo) => {
@@ -1739,6 +1766,194 @@ mod tests {
             .map(|a| a.title)
             .collect();
         assert_eq!(titles, ["Replace with config('features.debug')"]);
+    }
+
+    fn refactor(plugin: &mut Laravel, d: &Document, needle: &str, plus: usize) -> Vec<CodeAction> {
+        let p = at(&d.text, needle, plus);
+        plugin
+            .code_actions(d, Range { start: p, end: p })
+            .into_iter()
+            .filter(|a| a.kind.as_deref() == Some("refactor"))
+            .collect()
+    }
+
+    fn edited_files(action: &CodeAction) -> Vec<(String, Vec<String>)> {
+        action
+            .edits
+            .iter()
+            .map(|(p, e)| {
+                (
+                    p.trim_start_matches("/project/").to_owned(),
+                    e.iter().map(|t| t.text.clone()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn renaming_a_route_updates_its_usages_before_and_after_saving() {
+        let host = setup();
+        let mut plugin = Laravel::default();
+        let edited = ROUTES.replace("name('users.index')", "name('users.list')");
+        let d = doc("routes/web.php", &edited);
+        let actions = refactor(&mut plugin, &d, "users.list", 3);
+        assert_eq!(
+            actions.iter().map(|a| a.title.as_str()).collect::<Vec<_>>(),
+            ["Rename route 'admin.users.index' to 'admin.users.list' in every usage"]
+        );
+        let resolved = plugin.resolve_code_action(&d, actions[0].clone()).unwrap();
+        assert_eq!(
+            edited_files(&resolved),
+            [(
+                "resources/views/users/index.blade.php".to_owned(),
+                vec!["admin.users.list".to_owned()]
+            )]
+        );
+
+        let mut open = Laravel::default();
+        open.line_markers(&doc("routes/web.php", ROUTES));
+        host.add_file("routes/web.php", &edited);
+        let actions = refactor(&mut open, &d, "users.list", 3);
+        assert_eq!(
+            actions.len(),
+            1,
+            "the IDE reads the edited buffer: {actions:?}"
+        );
+        host.add_file("routes/web.php", ROUTES);
+
+        let mut saved = Laravel::default();
+        saved.handle_events(
+            &[Event::FileOpened("/project/routes/web.php".into())],
+            &host.invocation(),
+        );
+        host.add_file("routes/web.php", &edited);
+        saved.handle_events(
+            &[Event::FileSaved("/project/routes/web.php".into())],
+            &host.invocation(),
+        );
+        let actions = refactor(&mut saved, &d, "users.list", 3);
+        assert_eq!(actions.len(), 1, "{actions:?}");
+        assert!(
+            actions[0]
+                .title
+                .contains("'admin.users.index' to 'admin.users.list'")
+        );
+    }
+
+    #[test]
+    fn renaming_a_translation_key_updates_usages_and_other_locales() {
+        let host = setup();
+        host.add_file("lang/pt.json", "{\n    \"Hello\": \"Olá\"\n}\n");
+        host.add_file(
+            "resources/views/greet.blade.php",
+            "<p>{{ __('Hello') }}</p>\n",
+        );
+        let mut plugin = Laravel::default();
+        let d = Document {
+            path: "/project/lang/en.json".into(),
+            language: "json".into(),
+            version: 1,
+            text: "{\n    \"Hi there\": \"Hello\"\n}\n".into(),
+        };
+        let actions = refactor(&mut plugin, &d, "Hi there", 2);
+        assert_eq!(
+            actions[0].title,
+            "Rename translation 'Hello' to 'Hi there' in every locale and usage"
+        );
+        let mut files = edited_files(&plugin.resolve_code_action(&d, actions[0].clone()).unwrap());
+        files.sort();
+        assert_eq!(
+            files,
+            [
+                ("lang/pt.json".to_owned(), vec!["Hi there".to_owned()]),
+                (
+                    "resources/views/greet.blade.php".to_owned(),
+                    vec!["Hi there".to_owned()]
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn extracting_a_form_request_creates_the_class_and_rewrites_the_controller() {
+        let host = setup().with_capabilities(&["project.read", "editor.read", "process:php"]);
+        let runs = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = runs.clone();
+        host.on_process("php", move |args, stdin| {
+            sink.borrow_mut()
+                .push((args.to_vec(), stdin.unwrap_or_default().to_owned()));
+            Ok(openidea_plugin::ProcessOutput {
+                status: Some(0),
+                stdout: "ok\n".into(),
+                stderr: String::new(),
+            })
+        });
+        let mut plugin = Laravel::default();
+        let text = "<?php\nnamespace App\\Http\\Controllers;\n\nuse Illuminate\\Http\\Request;\n\nclass OrderController\n{\n    public function store(Request $request)\n    {\n        $data = $request->validate(['total' => 'required']);\n        return $data;\n    }\n}\n";
+        let d = doc("app/Http/Controllers/OrderController.php", text);
+        let action = refactor(&mut plugin, &d, "validate", 2).remove(0);
+        assert_eq!(
+            action.title,
+            "Extract the validation into a Form Request (StoreOrderRequest)"
+        );
+        let resolved = plugin.resolve_code_action(&d, action).unwrap();
+        let runs = runs.borrow();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            runs[0].0.last().map(String::as_str),
+            Some("app/Http/Requests/StoreOrderRequest.php")
+        );
+        assert!(
+            runs[0]
+                .1
+                .contains("class StoreOrderRequest extends FormRequest")
+        );
+        let texts: Vec<String> = resolved.edits[0].1.iter().map(|e| e.text.clone()).collect();
+        assert_eq!(
+            texts,
+            [
+                "$request->validated()",
+                "StoreOrderRequest",
+                "use App\\Http\\Requests\\StoreOrderRequest;"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_moved_view_is_fixed_in_one_place_or_everywhere() {
+        let host = setup();
+        host.add_file(
+            "resources/views/shop/orders/index.blade.php",
+            "<div></div>\n",
+        );
+        host.add_file(
+            "app/Http/Controllers/OrdersController.php",
+            "<?php\nclass OrdersController\n{\n    public function index() { return view('orders.index'); }\n}\n",
+        );
+        let mut plugin = Laravel::default();
+        let text =
+            "<?php\nclass A\n{\n    public function show() { return view('orders.index'); }\n}\n";
+        let d = doc("app/Http/Controllers/A.php", text);
+        let p = at(text, "orders.index", 2);
+        let actions = plugin.code_actions(&d, Range { start: p, end: p });
+        let titles: Vec<&str> = actions.iter().map(|a| a.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            [
+                "Change to 'shop.orders.index'",
+                "Change every usage of view 'orders.index' to 'shop.orders.index'"
+            ]
+        );
+        assert_eq!(actions[0].edits[0].1[0].text, "shop.orders.index");
+        let mut files = edited_files(&plugin.resolve_code_action(&d, actions[1].clone()).unwrap());
+        files.sort();
+        assert_eq!(
+            files.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(),
+            [
+                "app/Http/Controllers/A.php",
+                "app/Http/Controllers/OrdersController.php"
+            ]
+        );
     }
 
     #[test]

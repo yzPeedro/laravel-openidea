@@ -18,6 +18,10 @@ optional = ["process:php", "process:docker", "editor.read", "editor.write", "cli
 kinds = ["completion", "definition", "line-markers", "code-actions"]
 languages = ["php", "blade", "dotenv"]
 
+[[contributes.providers]]
+kinds = ["code-actions"]
+languages = ["json"]
+
 [[contributes.languages]]
 path = "languages/blade.toml"
 

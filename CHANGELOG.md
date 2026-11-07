@@ -11,6 +11,7 @@ All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](h
 - *Laravel: Copy Query as MySQL* in the editor's context menu copies the query under the cursor (or the selection) as MySQL.
 - *Laravel: Run Selection in Tinker* in the editor's context menu opens `artisan tinker` in a terminal (php or Docker Compose) with the file's imports, dumps each statement of the selection and stays open with its variables.
 - Inspections with quick fixes: N+1 queries (a relation read on each item of a `foreach` over a query that doesn't eager load it → add `with()`), columns that don't exist in the model's table (→ the closest column), `env()` outside `config/` (→ the `config()` key that reads the same variable), `create()` keys outside `$fillable` (→ add them to the model) and keys missing between `.env` and `.env.example` (→ copy them over, without the value when going to `.env.example`). Each one can be turned off in the plugin's settings.
+- Refactorings with Alt+Enter: after changing a route's `->name()` or a translation key, *Rename route* / *Rename translation* updates every usage (and the key in the other locales), before or after saving; a renamed or moved view offers the closest existing view in one usage or in all of them; *Extract the validation into a Form Request* creates the request class from `validate()` and rewrites the controller.
 - Model and relation indexes are only rebuilt when a model file changes, so completion stays within the editor's time budget while you type.
 
 ## 0.13.1
