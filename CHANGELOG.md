@@ -8,6 +8,9 @@ All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](h
 - Cast columns show what they become (`status · string → OrderStatus`), and Ctrl+click on them opens the enum, or the class or interface the cast's `get()` returns (the cast class when it returns a scalar), resolved through `use` statements and the composer PSR-4 map.
 - SQL to Laravel in the hub: SQL in any dialect (MySQL, PostgreSQL, SQL Server, SQLite, Oracle) becomes Eloquent or query builder code as you type, with copy and insert-at-cursor buttons (optional `clipboard`, `editor.read` and `editor.write` permissions).
 - Model and relation indexes are only rebuilt when a model file changes, so completion stays within the editor's time budget while you type.
+
+## 0.13.1
+
 - Blade files with multibyte characters (such as `…` or `—`) before a directive or comment no longer crash the plugin, which also left the hub stuck on *Loading* ([#4](https://github.com/yzPeedro/laravel-openidea/issues/4)).
 
 ## 0.13.0
