@@ -1,6 +1,7 @@
 mod artisan;
 mod blade_syntax;
 mod casts;
+mod checks;
 mod devtools;
 mod directives;
 mod dotenv;
@@ -8,6 +9,7 @@ mod eloquent;
 mod hierarchy;
 mod index;
 mod inspect;
+mod inspections;
 mod logs;
 mod members;
 mod modeldoc;
@@ -934,11 +936,13 @@ impl Laravel {
                 )),
             );
         }
+        let found = self.findings(&project, &root, path, text);
+        out.extend(Self::finding_diagnostics(text, &found));
         out
     }
 
     fn publish(&mut self, path: &str) {
-        if !path.ends_with(".php") {
+        if self.publish_env(path) || !path.ends_with(".php") {
             return;
         }
         let Some(project) = project_of(path) else {
@@ -1440,6 +1444,10 @@ impl Providers for Laravel {
         let Some(cursor) = offset(&doc.text, selection.start) else {
             return Vec::new();
         };
+        let fixes = self.fix_actions(&project, &root, doc, cursor);
+        if !fixes.is_empty() {
+            return fixes;
+        }
         if let Some(action) = self.model_doc_action(doc, &project, &root, cursor) {
             return vec![action];
         }
@@ -1667,6 +1675,95 @@ mod tests {
 
     fn at(text: &str, needle: &str, plus: usize) -> Position {
         position(text, text.find(needle).unwrap() + plus)
+    }
+
+    #[test]
+    fn inspections_report_and_fix_query_mistakes() {
+        let _host = setup();
+        let mut plugin = Laravel::default();
+        let text = "<?php\nclass A\n{\n    public function index()\n    {\n        $users = User::where('emial', 'x')->get();\n        foreach ($users as $user) {\n            echo $user->posts->count();\n        }\n        User::create(['name' => 'a', 'email' => 'b']);\n        return env('APP_NAME');\n    }\n}\n";
+        let d = doc("app/Http/Controllers/A.php", text);
+        let codes: Vec<String> = plugin
+            .inspect(&d.path, text)
+            .into_iter()
+            .filter_map(|x| x.code)
+            .collect();
+        assert_eq!(
+            codes,
+            [
+                "laravel.unknown-column",
+                "laravel.n-plus-one",
+                "laravel.not-fillable",
+                "laravel.env-outside-config"
+            ]
+        );
+        let titles = |needle: &str, plus: usize, plugin: &mut Laravel| -> Vec<String> {
+            let p = at(text, needle, plus);
+            plugin
+                .code_actions(&d, Range { start: p, end: p })
+                .into_iter()
+                .map(|a| a.title)
+                .collect()
+        };
+        assert_eq!(titles("emial", 1, &mut plugin), ["Change to 'email'"]);
+        assert_eq!(
+            titles("$user->posts", 8, &mut plugin),
+            ["Eager load 'posts' with with('posts')"]
+        );
+        assert_eq!(
+            titles("'email' =>", 2, &mut plugin),
+            ["Add 'email' to $fillable of User"]
+        );
+        assert_eq!(
+            titles("env(", 1, &mut plugin),
+            ["Replace with config('app.name')"]
+        );
+        let p = at(text, "'email' =>", 2);
+        let fix = plugin
+            .code_actions(&d, Range { start: p, end: p })
+            .remove(0);
+        assert_eq!(fix.edits[0].0, "/project/app/Models/User.php");
+        assert_eq!(fix.edits[0].1[0].text, ", 'email'");
+
+        _host.add_file(
+            "config/features.php",
+            "<?php\nreturn ['debug' => (bool) env('APP_DEBUG', false)];\n",
+        );
+        let mut fresh = Laravel::default();
+        let cast = "<?php\n$debug = env('APP_DEBUG');\n";
+        let cd = doc("app/Support/Flags.php", cast);
+        let p = at(cast, "env(", 1);
+        let titles: Vec<String> = fresh
+            .code_actions(&cd, Range { start: p, end: p })
+            .into_iter()
+            .map(|a| a.title)
+            .collect();
+        assert_eq!(titles, ["Replace with config('features.debug')"]);
+    }
+
+    #[test]
+    fn env_files_get_each_others_missing_keys() {
+        let host = setup();
+        host.add_file(".env", "APP_NAME=Shop\nSTRIPE_SECRET=sk_live_x\n");
+        let mut plugin = Laravel::default();
+        plugin.handle_events(
+            &[Event::FileSaved("/project/.env".into())],
+            &host.invocation(),
+        );
+        let published = host.diagnostics();
+        let env: Vec<&str> = published["/project/.env"]
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect();
+        assert_eq!(
+            env,
+            ["STRIPE_SECRET is missing from .env.example, so new checkouts won't know about it"]
+        );
+        assert!(
+            published
+                .get("/project/.env.example")
+                .is_none_or(|d| d.is_empty())
+        );
     }
 
     fn labels(items: &[CompletionItem]) -> Vec<&str> {

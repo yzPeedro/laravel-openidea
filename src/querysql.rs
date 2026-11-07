@@ -107,7 +107,7 @@ pub struct Output {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum Kind {
+pub(crate) enum Kind {
     Var,
     Ident,
     Str,
@@ -116,14 +116,14 @@ enum Kind {
 }
 
 #[derive(Clone, Debug)]
-struct Tok {
-    kind: Kind,
-    text: String,
-    start: usize,
-    end: usize,
+pub(crate) struct Tok {
+    pub(crate) kind: Kind,
+    pub(crate) text: String,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 
-fn tokenize(src: &str) -> Vec<Tok> {
+pub(crate) fn tokenize(src: &str) -> Vec<Tok> {
     let b = src.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;

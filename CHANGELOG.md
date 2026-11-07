@@ -10,6 +10,7 @@ All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](h
 - SQL to Laravel works both ways: the swap button turns Eloquent or query builder code into MySQL as you type, with the models' tables, soft deletes and local scopes applied and a note for what isn't translated; the run button opens the Laravel code in a new Tinker tab and runs it, asking first when it changes data.
 - *Laravel: Copy Query as MySQL* in the editor's context menu copies the query under the cursor (or the selection) as MySQL.
 - *Laravel: Run Selection in Tinker* in the editor's context menu opens `artisan tinker` in a terminal (php or Docker Compose) with the file's imports, dumps each statement of the selection and stays open with its variables.
+- Inspections with quick fixes: N+1 queries (a relation read on each item of a `foreach` over a query that doesn't eager load it → add `with()`), columns that don't exist in the model's table (→ the closest column), `env()` outside `config/` (→ the `config()` key that reads the same variable), `create()` keys outside `$fillable` (→ add them to the model) and keys missing between `.env` and `.env.example` (→ copy them over, without the value when going to `.env.example`). Each one can be turned off in the plugin's settings.
 - Model and relation indexes are only rebuilt when a model file changes, so completion stays within the editor's time budget while you type.
 
 ## 0.13.1

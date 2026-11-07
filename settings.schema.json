@@ -15,6 +15,31 @@
       "title": "Report unknown validation rules",
       "default": true
     },
+    "unknownColumnInspection": {
+      "type": "boolean",
+      "title": "Report columns that don't exist in the model's table (where, orderBy, pluck\u2026)",
+      "default": true
+    },
+    "envCallInspection": {
+      "type": "boolean",
+      "title": "Report env() calls outside config files",
+      "default": true
+    },
+    "fillableInspection": {
+      "type": "boolean",
+      "title": "Report create() and similar keys that $fillable leaves out",
+      "default": true
+    },
+    "nPlusOneInspection": {
+      "type": "boolean",
+      "title": "Report relations loaded once per item in a foreach (N+1 queries)",
+      "default": true
+    },
+    "envKeysInspection": {
+      "type": "boolean",
+      "title": "Report keys that are in .env but not in .env.example, and the other way around",
+      "default": true
+    },
     "unknownAuthInspection": {
       "type": "boolean",
       "title": "Report unknown middleware and abilities",

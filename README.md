@@ -105,7 +105,7 @@ Completion and navigation come from cached indexes of your project files, built 
 - **Blade:** syntax highlighting, structure and folding, directives after `@` (including your own `Blade::directive` and `Blade::if`), `<x-…>` components, `<livewire:…>` tags, sections, stacks and assets.
 - **OpenAPI and packages:** swagger-php `$ref`s, tags and security schemes, Sanctum token abilities, Spatie roles and permissions, Socialite drivers, broadcast channels, Inertia pages and Livewire components.
 - **Types:** Laravel, package and project traits after `use`, interfaces after `implements` and base classes after `extends`, ranked by folder (models get `HasFactory` and `SoftDeletes` first, jobs get `ShouldQueue`, and so on).
-- **Inspections and quick fixes:** unknown views, routes, rules, middleware and OpenAPI refs; *Add translation*; *Generate @property PHPDoc* for models from migrations, casts and relations; *Laravel: Go to Related Class or View* for Livewire and Blade components.
+- **Inspections and quick fixes:** unknown views, routes, rules, middleware and OpenAPI refs; N+1 queries (a relation read on each item of a `foreach` over a query that doesn't eager load it, fixed by adding `with()`); columns that don't exist in the model's table in `where`, `orderBy`, `pluck` and similar calls, with the closest column as the fix; `env()` outside `config/`, replaced by the `config()` key that reads the same variable; `create()` keys that `$fillable` leaves out, added to the model's `$fillable`; keys missing between `.env` and `.env.example`, copied over (a new key goes to `.env.example` without its value); *Add translation*; *Generate @property PHPDoc* for models from migrations, casts and relations; *Laravel: Go to Related Class or View* for Livewire and Blade components.
 - **Folio:** pages under the Folio paths of `FolioServiceProvider` are routes: their `name()` completes in `route()`, Ctrl+click opens the page, and the hub's Routes section lists every page with its URI.
 - **Cached routes:** after `php artisan route:cache`, named routes from packages (Sanctum, Horizon, Filament…) are read from `bootstrap/cache/routes-v7.php`.
 - **Pivot attributes:** after `->pivot->`, or the name given with `->as()`, the keys, `withPivot()` columns and timestamps of many-to-many relations.
@@ -218,6 +218,11 @@ The hub groups records by request, filters them by type, and flags **N+1 queries
 | `unknownRuleInspection` | on | Report unknown validation rules |
 | `unknownAuthInspection` | off | Report unknown middleware and abilities |
 | `unknownOpenApiRefInspection` | on | Report unknown OpenAPI `$ref` components |
+| `unknownColumnInspection` | on | Report columns that don't exist in the model's table |
+| `envCallInspection` | on | Report `env()` calls outside config files |
+| `fillableInspection` | on | Report `create()` keys that `$fillable` leaves out |
+| `nPlusOneInspection` | on | Report relations loaded once per item in a `foreach` |
+| `envKeysInspection` | on | Report keys missing between `.env` and `.env.example` |
 
 Live Audit reads two environment variables from your app: `OPENIDEA_AUDIT=false` turns the recorder off and `OPENIDEA_AUDIT_SHOW_PII=true` shows personal data.
 
