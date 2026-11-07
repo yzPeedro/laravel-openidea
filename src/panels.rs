@@ -123,6 +123,7 @@ enum Request {
     Sqlsave { state: serde_json::Value },
     Sqlcopy { code: String },
     Sqlinsert { code: String },
+    Php2sql { code: String, seq: u64 },
 }
 
 const TINKER_KEY: &str = "tinker.tabs";
@@ -1360,6 +1361,18 @@ impl Views for Laravel {
                 post(view, message);
                 Ok(())
             }
+            Request::Php2sql { code, seq } => {
+                let project = project(ctx).ok();
+                let result = self.php_to_sql(project.as_ref().map(|(p, r)| (p, r.as_str())), &code);
+                let message = match result {
+                    Ok(out) => {
+                        json!({ "type": "php2sql", "seq": seq, "sql": out.sql, "notes": out.notes })
+                    }
+                    Err(error) => json!({ "type": "php2sql", "seq": seq, "error": error }),
+                };
+                post(view, message);
+                Ok(())
+            }
             Request::Sqlinsert { code } => {
                 let message = match self.insert_code(ctx, &code) {
                     Ok(path) => {
@@ -1380,6 +1393,32 @@ impl Views for Laravel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn translates_laravel_code_to_mysql_for_the_hub() {
+        use openidea_plugin::views::{ViewEvent, Views as _};
+        let host = openidea_plugin::mock::MockHost::install();
+        host.add_file("artisan", "#!/usr/bin/env php\n");
+        let mut plugin = Laravel::default();
+        let message = json!({ "type": "php2sql", "seq": 7, "code": "DB::table('users')->where('active', 1)->count();" }).to_string();
+        plugin
+            .handle("laravel", ViewEvent::Message(message), &host.invocation())
+            .unwrap();
+        let reply: serde_json::Value =
+            serde_json::from_str(&host.view_messages().last().unwrap().1).unwrap();
+        assert_eq!(reply["seq"], 7);
+        assert_eq!(
+            reply["sql"],
+            "SELECT COUNT(*) AS `aggregate`\nFROM `users`\nWHERE `active` = 1"
+        );
+        let bad = json!({ "type": "php2sql", "seq": 8, "code": "$user->posts" }).to_string();
+        plugin
+            .handle("laravel", ViewEvent::Message(bad), &host.invocation())
+            .unwrap();
+        let reply: serde_json::Value =
+            serde_json::from_str(&host.view_messages().last().unwrap().1).unwrap();
+        assert!(reply["error"].as_str().unwrap().contains("Start the chain"));
+    }
 
     #[test]
     fn inserts_converted_sql_at_the_cursor() {

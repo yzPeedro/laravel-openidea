@@ -14,6 +14,8 @@ mod modeldoc;
 mod panels;
 mod php;
 mod project;
+mod queries;
+mod querysql;
 mod refs;
 mod resources;
 mod runner;
@@ -1513,6 +1515,8 @@ impl openidea_plugin::Plugin for Laravel {
                 host::open_terminal("Tinker", "php", &["artisan".into(), "tinker".into()])?;
                 Ok(None)
             }
+            "copy-query-sql" => self.copy_query_sql(ctx),
+            "run-in-tinker" => self.run_selection_in_tinker(ctx),
             "artisan-serve" => {
                 host::open_terminal("artisan serve", "php", &["artisan".into(), "serve".into()])?;
                 Ok(None)

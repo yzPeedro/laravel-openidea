@@ -317,7 +317,7 @@ const SECTIONS = [
   { group: "Project", id: "ai", title: "AI Agents", icon: "robot", desc: "Give Claude Code, Codex, Cursor, Copilot, Junie and Gemini the hub through MCP, with Laravel Boost" },
   { group: "Develop", id: "artisan", title: "Artisan", icon: "console", desc: "Every command of the app and its packages, with its arguments and options" },
   { group: "Develop", id: "tinker", title: "Tinker", icon: "php", desc: "Run PHP inside your app, in as many tabs as you like · Ctrl+Enter runs" },
-  { group: "Develop", id: "sql", title: "SQL to Laravel", icon: "database", desc: "Type SQL in any dialect and watch it turn into Eloquent or query builder code" },
+  { group: "Develop", id: "sql", title: "SQL to Laravel", icon: "database", desc: "Type SQL in any dialect and watch it turn into Eloquent or query builder code, or swap sides to turn Laravel code into MySQL" },
   { group: "HTTP", id: "routes", title: "Routes", icon: "routing", desc: "Click a route to open its controller method", count: "routes" },
   { group: "HTTP", id: "controllers", title: "Controllers", icon: "controller", desc: "Controllers and their actions", count: "controllers" },
   { group: "HTTP", id: "requests", title: "Form Requests", icon: "api", desc: "Validated requests and their fields", count: "requests" },
@@ -1869,15 +1869,19 @@ const Sql = (() => {
   return { convert, highlight, tokenize, dialect };
 })();
 
-state.sql = { text: null, mode: "eloquent", models: [], loaded: false, last: null };
+state.sql = { text: null, php: null, mode: "eloquent", direction: "sql", models: [], loaded: false, last: null, sql: null, seq: 0, onSql: null };
 let sqlSaveTimer = null;
 function sqlSave() {
   clearTimeout(sqlSaveTimer);
-  sqlSaveTimer = setTimeout(() => send({ type: "sqlsave", state: { text: state.sql.text, mode: state.sql.mode } }), 400);
+  sqlSaveTimer = setTimeout(() => send({ type: "sqlsave", state: { text: state.sql.text, php: state.sql.php, mode: state.sql.mode, direction: state.sql.direction } }), 400);
 }
 const SQL_SAMPLE = "SELECT u.id, u.name, COUNT(o.id) AS orders\nFROM users u\nLEFT JOIN orders o ON o.user_id = u.id\nWHERE u.active = 1\n  AND u.created_at >= '2024-01-01'\nGROUP BY u.id, u.name\nORDER BY orders DESC\nLIMIT 10;\n";
+const PHP_SAMPLE = "$users = User::query()\n    ->where('active', true)\n    ->where(fn ($q) => $q->where('role', 'admin')->orWhere('role', 'owner'))\n    ->latest()\n    ->take(10)\n    ->get();\n";
 const SVG_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>';
 const SVG_INSERT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10"/><path d="M4 12h6"/><path d="M4 18h10"/><path d="m15 9 5 3-5 3"/><path d="M20 12h-8"/></svg>';
+const SVG_SWAP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4 3 8l4 4"/><path d="M3 8h14"/><path d="m17 20 4-4-4-4"/><path d="M21 16H7"/></svg>';
+const SVG_RUN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16l13-8z"/></svg>';
+const WRITE_CODE = /->\s*(update|delete|forceDelete|insert\w*|upsert|increment\w*|decrement\w*|truncate|create|forceCreate|save|destroy)\s*\(|::\s*(destroy|create|forceCreate|insert\w*|upsert|truncate)\s*\(|DB::\s*(statement|insert|update|delete|unprepared|affectingStatement)\s*\(/;
 
 function sqlIconButton(svg, label) {
   const b = el("button", { className: "icon-btn", title: label, "aria-label": label });
@@ -1885,12 +1889,21 @@ function sqlIconButton(svg, label) {
   return b;
 }
 
+function runInTinker(code) {
+  if (!code || !code.trim()) return;
+  if (WRITE_CODE.test(code) && !confirm("This code changes data in the database of " + (state.runner || "the app") + ". Run it in Tinker?")) return;
+  state.tinker.pending = { code, run: true, tab: "SQL" };
+  go("tinker");
+}
+
 function renderSql() {
   const S = state.sql;
   if (!S.loaded) { S.loaded = true; loading(); send({ type: "sqlload" }); return; }
   if (S.text == null) S.text = SQL_SAMPLE;
+  if (S.php == null) S.php = PHP_SAMPLE;
+  const toSql = S.direction === "php";
 
-  const dialectBadge = el("span", { className: "badge sql-dialect", title: "Dialect detected from the syntax" });
+  const dialectBadge = el("span", { className: "badge sql-dialect", title: toSql ? "The SQL is written for MySQL" : "Dialect detected from the syntax" });
   const seg = el("div", { className: "seg", role: "group", "aria-label": "Output" });
   const modes = [["eloquent", "Eloquent"], ["builder", "Query Builder"]];
   const segButtons = modes.map(([id, label]) => {
@@ -1899,13 +1912,16 @@ function renderSql() {
     seg.append(b);
     return b;
   });
-  const copy = sqlIconButton(SVG_COPY, "Copy the code");
+  if (toSql) seg.style.display = "none";
+  const swap = sqlIconButton(SVG_SWAP, toSql ? "Swap sides: write SQL, get Laravel code" : "Swap sides: write Eloquent or query builder code, get SQL");
+  const run = sqlIconButton(SVG_RUN, "Run the Laravel code in Tinker");
+  const copy = sqlIconButton(SVG_COPY, toSql ? "Copy the SQL" : "Copy the code");
   const insert = sqlIconButton(SVG_INSERT, "Insert at the cursor in the editor");
-  const bar = el("div", { className: "sql-bar" }, el("span", { className: "sql-label", textContent: "Dialect" }), dialectBadge, el("span", { className: "spacer" }), seg, copy, insert);
+  const bar = el("div", { className: "sql-bar" }, el("span", { className: "sql-label", textContent: "Dialect" }), dialectBadge, el("span", { className: "spacer" }), seg, swap, run, copy, insert);
 
   const gutter = el("div", { className: "gutter" });
   const pre = el("pre");
-  const ta = el("textarea", { spellcheck: false, value: S.text, "aria-label": "SQL query" });
+  const ta = el("textarea", { spellcheck: false, value: toSql ? S.php : S.text, "aria-label": toSql ? "Laravel code" : "SQL query" });
   ta.setAttribute("autocapitalize", "off");
   const wrap = el("div", { className: "code-wrap" }, pre, ta);
   const editor = el("div", { className: "editor" }, gutter, wrap);
@@ -1913,49 +1929,69 @@ function renderSql() {
   const outGutter = el("div", { className: "gutter" });
   const outPre = el("pre", { className: "sql-code" });
   const outWrap = el("div", { className: "code-wrap" }, outPre);
-  const output = el("div", { className: "editor sql-out", tabIndex: 0, "aria-label": "Laravel code" }, outGutter, outWrap);
+  const output = el("div", { className: "editor sql-out", tabIndex: 0, "aria-label": toSql ? "SQL" : "Laravel code" }, outGutter, outWrap);
   const status = el("div", { className: "sql-status", role: "status" });
 
-  const left = el("section", { className: "sql-pane" }, el("div", { className: "pane-title", textContent: "Query" }), editor);
-  const right = el("section", { className: "sql-pane" }, el("div", { className: "pane-title", textContent: "Laravel" }), output, status);
+  const left = el("section", { className: "sql-pane" }, el("div", { className: "pane-title", textContent: toSql ? "Laravel" : "Query" }), editor);
+  const right = el("section", { className: "sql-pane" }, el("div", { className: "pane-title", textContent: toSql ? "MySQL" : "Laravel" }), output, status);
   $("content").replaceChildren(el("div", { className: "sqlx" }, bar, el("div", { className: "sql-panes" }, left, right)));
 
   const paint = () => {
-    pre.replaceChildren(Sql.highlight(ta.value), "\n");
+    pre.replaceChildren(toSql ? highlightPhp(ta.value) : Sql.highlight(ta.value), "\n");
     const n = ta.value.split("\n").length;
     gutter.textContent = Array.from({ length: n }, (_, i) => i + 1).join("\n");
     ta.style.height = pre.scrollHeight + "px";
     ta.style.width = Math.max(pre.scrollWidth, wrap.clientWidth) + "px";
   };
+  const show = (code, highlight, notes, error) => {
+    status.replaceChildren();
+    output.classList.toggle("stale", !!error);
+    if (error) status.append(el("div", { className: "sql-error", textContent: error }));
+    for (const note of notes || []) status.append(el("div", { className: "sql-note", textContent: note }));
+    outPre.replaceChildren(highlight(code || ""));
+    outGutter.textContent = Array.from({ length: Math.max(1, (code || "").split("\n").length) }, (_, i) => i + 1).join("\n");
+    copy.disabled = insert.disabled = !code;
+    run.disabled = toSql ? !S.php.trim() : !S.last;
+  };
+  let timer = null;
   const update = () => {
+    if (toSql) {
+      dialectBadge.textContent = "MySQL";
+      clearTimeout(timer);
+      timer = setTimeout(() => { S.seq += 1; send({ type: "php2sql", code: S.php, seq: S.seq }); }, 120);
+      run.disabled = !S.php.trim();
+      return;
+    }
     const r = Sql.convert(S.text, { mode: S.mode, models: S.models });
     dialectBadge.textContent = r.dialect;
-    status.replaceChildren();
-    if (r.error) {
-      output.classList.add("stale");
-      status.append(el("div", { className: "sql-error", textContent: r.error }));
-    } else {
-      output.classList.remove("stale");
-      S.last = r.code || "";
-      for (const note of r.notes || []) status.append(el("div", { className: "sql-note", textContent: note }));
-    }
-    const code = S.last || "";
-    outPre.replaceChildren(highlightPhp(code));
-    outGutter.textContent = Array.from({ length: Math.max(1, code.split("\n").length) }, (_, i) => i + 1).join("\n");
-    copy.disabled = insert.disabled = !code;
+    if (!r.error) S.last = r.code || "";
+    show(S.last || "", highlightPhp, r.error ? [] : r.notes, r.error);
+  };
+  S.onSql = (msg) => {
+    if (!toSql || msg.seq !== S.seq) return;
+    if (!msg.error) S.sql = msg.sql || "";
+    show(S.sql || "", (code) => { const f = Sql.highlight(code); f.append("\n"); return f; }, msg.error ? [] : msg.notes, msg.error);
   };
 
-  ta.addEventListener("input", () => { S.text = ta.value; paint(); update(); sqlSave(); });
+  ta.addEventListener("input", () => { if (toSql) S.php = ta.value; else S.text = ta.value; paint(); update(); sqlSave(); });
   ta.addEventListener("keydown", (e) => {
     if (e.key === "Tab") {
       e.preventDefault();
-      ta.setRangeText("  ", ta.selectionStart, ta.selectionEnd, "end");
+      ta.setRangeText(toSql ? "    " : "  ", ta.selectionStart, ta.selectionEnd, "end");
       ta.dispatchEvent(new Event("input"));
     }
   });
-  copy.addEventListener("click", () => { if (S.last) send({ type: "sqlcopy", code: S.last }); });
-  insert.addEventListener("click", () => { if (S.last) send({ type: "sqlinsert", code: S.last }); });
+  swap.addEventListener("click", () => {
+    if (toSql) { if (S.sql) S.text = S.sql.endsWith(";") ? S.sql + "\n" : S.sql + ";\n"; S.direction = "sql"; }
+    else { if (S.last) S.php = S.last.endsWith("\n") ? S.last : S.last + "\n"; S.direction = "php"; S.sql = null; }
+    sqlSave();
+    renderSql();
+  });
+  run.addEventListener("click", () => runInTinker(toSql ? S.php : S.last));
+  copy.addEventListener("click", () => { const code = toSql ? S.sql : S.last; if (code) send({ type: "sqlcopy", code }); });
+  insert.addEventListener("click", () => { const code = toSql ? S.sql : S.last; if (code) send({ type: "sqlinsert", code }); });
   paint();
+  if (toSql) show(S.sql || "", (code) => { const f = Sql.highlight(code); f.append("\n"); return f; }, [], null);
   update();
   ta.focus();
 }
@@ -1992,6 +2028,11 @@ function renderTinker() {
   const T = state.tinker;
   if (!T.loaded) { T.loaded = true; loading(); send({ type: "tinkerload" }); return; }
   if (!T.tabs || !T.tabs.length) { T.tabs = [{ id: "t1", name: "Tinker 1", code: "// Ctrl+Enter runs the tab, Ctrl+Shift+Enter runs the selection\n$users = User::count();\nconfig('app.name');\n" }]; T.active = "t1"; }
+  if (T.pending && T.pending.tab) {
+    const t = { id: Math.random().toString(36).slice(2, 9), name: T.pending.tab + " " + (T.tabs.length + 1), code: "" };
+    T.tabs.push(t);
+    T.active = t.id;
+  }
   const tab = tinkerTab();
   const pendingRun = !!(T.pending && T.pending.run);
   if (T.pending) { tab.code = T.pending.code; T.pending = null; tinkerSave(); }
@@ -2488,11 +2529,16 @@ openidea.onMessage((text) => {
       S.models = Array.isArray(msg.models) ? msg.models : [];
       if (msg.state && typeof msg.state.text === "string") S.text = msg.state.text;
       if (msg.state && (msg.state.mode === "eloquent" || msg.state.mode === "builder")) S.mode = msg.state.mode;
+      if (msg.state && typeof msg.state.php === "string") S.php = msg.state.php;
+      if (msg.state && (msg.state.direction === "sql" || msg.state.direction === "php")) S.direction = msg.state.direction;
       if (state.section === "sql") renderSql();
       break;
     }
     case "sqlresult":
       toast(msg.message);
+      break;
+    case "php2sql":
+      if (state.sql.onSql) state.sql.onSql(msg);
       break;
     case "tinkertabs":
       if (msg.tabs && Array.isArray(msg.tabs.tabs) && msg.tabs.tabs.length) { state.tinker.tabs = msg.tabs.tabs; state.tinker.active = msg.tabs.active || msg.tabs.tabs[0].id; }

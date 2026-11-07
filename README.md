@@ -49,7 +49,7 @@ https://github.com/user-attachments/assets/bc56e061-73f0-484d-8e1c-d9776cdc9692
 | 🧭 **Navigation** | Ctrl+click on a route name or URI opens the controller method; views, config keys, env keys and translations open where they are defined. Gutter icons link `route()` calls and views. |
 | 🧩 **A hub for your whole app** | 40+ sections: routes, controllers, requests, models, scopes, observers, events and listeners, jobs, schedule, translations, config, env, bindings and more. Every section has filters, and every row opens its file. |
 | 🐘 **Tinker in tabs** | Write PHP like in an editor, press Ctrl+Enter, get Tinker-style coloured output with dumps, SQL and timing. |
-| 🔄 **SQL to Laravel** | Type SQL in any dialect and watch it turn into Eloquent or query builder code as you type, then copy it or insert it at the cursor. |
+| 🔄 **SQL to Laravel and back** | Type SQL in any dialect and watch it turn into Eloquent or query builder code as you type, or swap sides to see the MySQL your Laravel code runs; run it in Tinker, copy it or insert it at the cursor. Right-click a query in the editor to copy it as MySQL. |
 | 🔍 **Live Audit** | Requests, SQL with the line that ran it, events with payloads and listeners, jobs, cache, mail, HTTP client calls, gates, logs, exceptions and dumps, with N+1 and slow query insights. |
 | 🤖 **AI agents that know your app** | An MCP server that answers with the hub's runtime data, connected in one click next to Laravel Boost. |
 | 🐳 **Docker-aware** | Artisan, Tinker and the recorder run with `php` or in a throwaway Docker Compose container, detected automatically. |
@@ -155,13 +155,21 @@ One tool window for everything your app has. It refreshes from your files and op
 
 As many tabs as you like, with PHP highlighting, snippets and remembered code. **Ctrl+Enter** runs the tab and **Ctrl+Shift+Enter** runs the selection. Each statement shows its value the way Tinker does, with echo output, `dump()` calls, SQL queries and timing. Models resolve by their short name.
 
+In a PHP file, select some code and pick **Laravel: Run Selection in Tinker** from the right-click menu: a terminal opens `artisan tinker` (with `php` or Docker Compose) with the file's `use` imports, dumps the value of each statement and stays open with the selection's variables defined.
+
 <img src="docs/media/hub-tinker.webp" alt="Tinker">
 
 ### SQL to Laravel
 
-Write a query in the dialect you have at hand (MySQL, PostgreSQL, SQL Server, SQLite, Oracle) and the Laravel code updates on the right as you type, highlighted like the editor. Switch between **Eloquent**, which uses the model of each table, and the **Query Builder**. Joins, nested `AND`/`OR`, `IN`, `BETWEEN`, `EXISTS` and subqueries, dates, aggregates, `GROUP BY`/`HAVING`, `LIMIT`/`TOP`/`FETCH`, locks, `UNION`, `INSERT` (with upserts and `INSERT IGNORE`), `UPDATE` (with `increment`), `DELETE` and `TRUNCATE` become the matching builder calls; anything without one falls back to `whereRaw` or `DB::raw`, and the notes under the code say where. The copy button puts the code on the clipboard and the insert button writes it at the cursor of the editor you were in, indented like the line (they need the optional `clipboard` and `editor.read`/`editor.write` permissions).
+Write a query in the dialect you have at hand (MySQL, PostgreSQL, SQL Server, SQLite, Oracle) and the Laravel code updates on the right as you type, highlighted like the editor. Switch between **Eloquent**, which uses the model of each table, and the **Query Builder**. Joins, nested `AND`/`OR`, `IN`, `BETWEEN`, `EXISTS` and subqueries, dates, aggregates, `GROUP BY`/`HAVING`, `LIMIT`/`TOP`/`FETCH`, locks, `UNION`, `INSERT` (with upserts and `INSERT IGNORE`), `UPDATE` (with `increment`), `DELETE` and `TRUNCATE` become the matching builder calls; anything without one falls back to `whereRaw` or `DB::raw`, and the notes under the code say where. The copy button puts the code on the clipboard and the insert button writes it at the cursor of the editor you were in, indented like the line (they need the optional `clipboard` and `editor.read`/`editor.write` permissions). The run button opens the code in a new Tinker tab and runs it; code that changes data asks first.
 
 <img src="docs/media/hub-sql.webp" alt="SQL to Laravel">
+
+The swap button turns it around: write Eloquent or query builder code and the MySQL it runs appears on the right as you type. The tables come from your models, soft-deleted rows are left out the way Eloquent does, local scopes (`scopeActive()` or `#[Scope]`) are applied from the model with their arguments, and variables become `?` placeholders listed in the notes, together with anything that isn't translated (eager loading, relation queries, the count query of `paginate()`).
+
+<img src="docs/media/hub-sql-reverse.webp" alt="Laravel to MySQL">
+
+In the editor, right-click a query and pick **Laravel: Copy Query as MySQL**: the statement under the cursor (or the selection) is copied as MySQL, translated the same way.
 
 ### Live Audit
 

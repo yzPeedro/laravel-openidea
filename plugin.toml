@@ -57,6 +57,28 @@ id = "artisan-serve"
 title = "Laravel: Artisan serve"
 category = "Laravel"
 
+[[contributes.commands]]
+id = "copy-query-sql"
+title = "Laravel: Copy Query as MySQL"
+category = "Laravel"
+when = "editorLangId == php"
+
+[[contributes.commands]]
+id = "run-in-tinker"
+title = "Laravel: Run Selection in Tinker"
+category = "Laravel"
+when = "editorLangId == php && editorHasSelection"
+
+[[contributes.menus]]
+menu = "editor.context"
+command = "copy-query-sql"
+when = "editorLangId == php"
+
+[[contributes.menus]]
+menu = "editor.context"
+command = "run-in-tinker"
+when = "editorLangId == php && editorHasSelection"
+
 [[contributes.runDetectors]]
 id = "artisan-serve"
 name = "artisan serve"

@@ -7,6 +7,9 @@ All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](h
 - Model members: after `$var->` the columns (with types) and relations of the variable's model, and after `$var->relation->` those of the related model. Models are inferred from typed parameters, `Model::create/find/first…`, `new Model`, `foreach` over relations, `@var` docblocks, `$this` in models and `auth()->user()`. Relations show their kind and target apart from columns; Ctrl+click on a relation opens the related model and on a column its migration.
 - Cast columns show what they become (`status · string → OrderStatus`), and Ctrl+click on them opens the enum, or the class or interface the cast's `get()` returns (the cast class when it returns a scalar), resolved through `use` statements and the composer PSR-4 map.
 - SQL to Laravel in the hub: SQL in any dialect (MySQL, PostgreSQL, SQL Server, SQLite, Oracle) becomes Eloquent or query builder code as you type, with copy and insert-at-cursor buttons (optional `clipboard`, `editor.read` and `editor.write` permissions).
+- SQL to Laravel works both ways: the swap button turns Eloquent or query builder code into MySQL as you type, with the models' tables, soft deletes and local scopes applied and a note for what isn't translated; the run button opens the Laravel code in a new Tinker tab and runs it, asking first when it changes data.
+- *Laravel: Copy Query as MySQL* in the editor's context menu copies the query under the cursor (or the selection) as MySQL.
+- *Laravel: Run Selection in Tinker* in the editor's context menu opens `artisan tinker` in a terminal (php or Docker Compose) with the file's imports, dumps each statement of the selection and stays open with its variables.
 - Model and relation indexes are only rebuilt when a model file changes, so completion stays within the editor's time budget while you type.
 
 ## 0.13.1
