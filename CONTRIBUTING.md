@@ -63,7 +63,7 @@ LARAVEL_PROJECT=~/projects/my-app cargo test --release --test real_project -- --
 LARAVEL_PROJECT=~/projects/my-app HUB_DUMP=/tmp/hub cargo test --release --test hub_dump -- --ignored
 ```
 
-`real_project` prints index sizes, timings and every hub section. `LARAVEL_MODELS` (for example `User,Post`) and `LARAVEL_MODEL_FILES` choose the models it probes. `hub_dump` writes the rendered hub and every section's data to `HUB_DUMP`, which is handy for working on `web/hub.html` in a browser.
+`real_project` prints index sizes, timings and every hub section. `LARAVEL_MODELS` (for example `User,Post`) and `LARAVEL_MODEL_FILES` choose the models it probes. `hub_dump` copies the hub page with its icons and writes every section's data to `HUB_DUMP`, which is handy for working on `web/hub.html` in a browser.
 
 Never commit output from a private project: test fixtures must be made up.
 
@@ -83,7 +83,7 @@ Never commit output from a private project: test fixtures must be made up.
 | `src/devtools.rs` | Tinker, Live Audit, debug tools, ecosystem and AI agents |
 | `src/runner.rs` | Running PHP directly or through Docker Compose |
 | `php/` | Scripts run inside the app: `tinker.php`, `Recorder.php`, `install.php`, `mcp.php`, `guidelines.md` |
-| `web/hub.html` | The hub's UI (one file: HTML, CSS and JavaScript) |
+| `web/hub.html` | The hub's UI (one file: HTML, CSS and JavaScript), served as a web view with its icons from `web/icons/` |
 | `tests/` | Ignored integration tests against a real application |
 
 ### How the hub talks to the plugin
