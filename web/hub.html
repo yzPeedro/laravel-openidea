@@ -310,7 +310,20 @@
   <div class="toast" id="toast" role="alert"></div>
 </main>
 <script>
-const ICONS = "__ICONS__";
+const ICON_FILES = {
+  laravel: "laravel.svg", console: "console.svg", routing: "routing.svg", database: "database.svg", migrations: "folder-migrations.svg",
+  views: "folder-views.svg", components: "folder-components.svg", settings: "settings.svg", tune: "tune.svg", i18n: "i18n.svg",
+  middleware: "folder-middleware.svg", policy: "folder-policy.svg", queue: "folder-queue.svg", job: "folder-job.svg", tasks: "folder-tasks.svg",
+  event: "folder-event.svg", email: "email.svg", test: "folder-test.svg", log: "log.svg", docker: "docker.svg", controller: "controller.svg",
+  command: "folder-command.svg", http: "http.svg", key: "key.svg", php: "php.svg", api: "folder-api.svg", resource: "folder-resource.svg",
+  class: "folder-class.svg", enum: "folder-enum.svg", rules: "folder-rules.svg", container: "folder-container.svg", filter: "folder-filter.svg",
+  seeders: "folder-seeders.svg", hook: "folder-hook.svg", mappings: "folder-mappings.svg", plugin: "folder-plugin.svg", functions: "folder-functions.svg",
+  connection: "folder-connection.svg", trigger: "folder-trigger.svg", dump: "folder-dump.svg", debug: "folder-debug.svg", packages: "folder-packages.svg",
+  terminal: "folder-console.svg", secure: "folder-secure.svg", robot: "robot.svg", vite: "vite.svg",
+};
+const ICONS = {};
+const loadIcons = () => Promise.all(Object.entries(ICON_FILES).map(([name, file]) =>
+  fetch("icons/" + file).then((r) => (r.ok ? r.text() : "")).catch(() => "").then((svg) => { ICONS[name] = svg.trim(); })));
 const SECTIONS = [
   { group: "Project", id: "overview", title: "Overview", icon: "laravel", desc: "Your application at a glance" },
   { group: "Project", id: "ecosystem", title: "Ecosystem", icon: "packages", desc: "Starter kit, Sanctum, Wayfinder, Horizon, Reverb, Octane, Pulse and every first-party and popular package" },
@@ -385,8 +398,6 @@ const icon = (name, size = "") => {
 };
 const state = { section: "overview", overview: null, data: {}, facetSel: {}, sort: {}, commands: [], globals: [], history: [], runner: "", current: null, values: {},
   logs: { files: [], path: null, size: -1, entries: [], levels: new Set(LEVELS), expanded: false, hiddenBefore: 0 }, lastCapture: null };
-
-document.querySelectorAll("[data-icon]").forEach((n) => { n.innerHTML = ICONS[n.dataset.icon] || ""; });
 
 function toast(text) {
   const t = $("toast");
@@ -2535,7 +2546,10 @@ openidea.onMessage((text) => {
   }
 });
 
-go("overview");
+loadIcons().then(() => {
+  document.querySelectorAll("[data-icon]").forEach((n) => { n.innerHTML = ICONS[n.dataset.icon] || ""; });
+  go("overview");
+});
 </script>
 </body>
 </html>

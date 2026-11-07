@@ -26,6 +26,7 @@ id = "laravel"
 title = "Laravel OpenIDEA"
 icon = "icons/laravel.svg"
 location = "bottom"
+web = "web/hub.html"
 
 [[contributes.commands]]
 id = "refresh-index"
