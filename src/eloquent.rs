@@ -339,6 +339,172 @@ pub fn origin(text: &str, cursor: usize, var: &str) -> Option<Origin> {
     found
 }
 
+const RELATED_QUERIES: [&str; 9] = [
+    "wherehas",
+    "orwherehas",
+    "wheredoesnthave",
+    "orwheredoesnthave",
+    "withwherehas",
+    "has",
+    "orhas",
+    "doesnthave",
+    "ordoesnthave",
+];
+const SAME_QUERIES: [&str; 7] = [
+    "where",
+    "orwhere",
+    "wherenot",
+    "orwherenot",
+    "when",
+    "unless",
+    "tap",
+];
+const ELEMENT_CALLS: [&str; 20] = [
+    "each",
+    "map",
+    "filter",
+    "reject",
+    "first",
+    "last",
+    "sortby",
+    "sortbydesc",
+    "every",
+    "contains",
+    "some",
+    "flatmap",
+    "groupby",
+    "keyby",
+    "partition",
+    "sum",
+    "mapwithkeys",
+    "search",
+    "unique",
+    "doesntcontain",
+];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClosureParam {
+    pub head: String,
+    pub steps: Vec<String>,
+    pub related: Option<String>,
+    pub builder: bool,
+    pub at: usize,
+}
+
+fn enclosing_open(tokens: &[Token], before: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for j in (0..before).rev() {
+        match tokens[j].kind {
+            Kind::Close(_) => depth += 1,
+            Kind::Open(_) if depth == 0 => return Some(j),
+            Kind::Open(_) => depth -= 1,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn still_open(tokens: &[Token], open: usize, from: usize) -> bool {
+    let mut depth = 0usize;
+    for (j, t) in tokens.iter().enumerate().skip(open + 1) {
+        match t.kind {
+            Kind::Open(_) => depth += 1,
+            Kind::Close(_) if depth == 0 => return false,
+            Kind::Close(_) => depth -= 1,
+            Kind::Comma if depth == 0 && j > from => return false,
+            _ => {}
+        }
+    }
+    true
+}
+
+fn param_index(tokens: &[Token], open: usize, var: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut index = 0;
+    for t in &tokens[open + 1..] {
+        match &t.kind {
+            Kind::Open(_) => depth += 1,
+            Kind::Close(_) if depth == 0 => return None,
+            Kind::Close(_) => depth -= 1,
+            Kind::Comma if depth == 0 => index += 1,
+            Kind::Var(v) if depth == 0 && v == var => return Some(index),
+            _ => {}
+        }
+    }
+    None
+}
+
+pub fn closure_param(text: &str, cursor: usize, var: &str) -> Option<ClosureParam> {
+    let cursor = cursor.min(text.len());
+    let tokens = tokenize(text, 0, cursor);
+    for k in (0..tokens.len()).rev() {
+        let keyword = ident(&tokens, k)
+            .is_some_and(|w| w.eq_ignore_ascii_case("fn") || w.eq_ignore_ascii_case("function"));
+        if !keyword || tokens.get(k + 1).map(|t| &t.kind) != Some(&Kind::Open('(')) {
+            continue;
+        }
+        let Some(param) = param_index(&tokens, k + 1, var) else {
+            continue;
+        };
+        let Some(mut open) = enclosing_open(&tokens, k) else {
+            continue;
+        };
+        let mut key = None;
+        if tokens[open].kind == Kind::Open('[') {
+            if !still_open(&tokens, open, k) {
+                continue;
+            }
+            if k >= 2
+                && tokens[k - 1].kind == Kind::DoubleArrow
+                && let Kind::Str { value, .. } = &tokens[k - 2].kind
+            {
+                key = Some(value.clone());
+            }
+            let Some(outer) = enclosing_open(&tokens, open) else {
+                continue;
+            };
+            open = outer;
+        }
+        if tokens[open].kind != Kind::Open('(') || !still_open(&tokens, open, k) {
+            continue;
+        }
+        let Some(name) = ident(&tokens, open.wrapping_sub(1)).map(str::to_ascii_lowercase) else {
+            continue;
+        };
+        let Some((head, steps)) = crate::php::chain(&tokens, open) else {
+            continue;
+        };
+        let at = tokens[k].start;
+        let (related, builder) = if let Some(key) = key {
+            (Some(key), true)
+        } else if RELATED_QUERIES.contains(&name.as_str()) {
+            match &tokens.get(open + 1).map(|t| &t.kind) {
+                Some(Kind::Str { value, .. }) if tokens[open + 2].start < tokens[k].start => {
+                    (Some(value.clone()), true)
+                }
+                _ => continue,
+            }
+        } else if SAME_QUERIES.contains(&name.as_str()) {
+            (None, true)
+        } else if ELEMENT_CALLS.contains(&name.as_str()) {
+            (None, false)
+        } else {
+            continue;
+        };
+        if param != 0 {
+            continue;
+        }
+        return Some(ClosureParam {
+            head,
+            steps,
+            related,
+            builder,
+            at,
+        });
+    }
+    None
+}
+
 pub fn is_many(kind: &str) -> bool {
     matches!(
         kind,

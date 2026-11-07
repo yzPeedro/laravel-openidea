@@ -5,7 +5,7 @@ use crate::php::{self, Kind, is_blade};
 use crate::project::{Lines, find, rel};
 use crate::refs::{self, Want};
 use openidea_plugin::providers::{CodeAction, Document};
-use openidea_plugin::{Error, Project, TextEdit};
+use openidea_plugin::{Error, Location, Project, TextEdit};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,6 +203,40 @@ const USAGE_GLOBS: &[&str] = &[
     "database/**/*.php",
     "config/**/*.php",
 ];
+
+pub(crate) fn usage_locations(
+    project: &Project,
+    root: &str,
+    doc: &Document,
+    kind: RefKind,
+    key: &str,
+) -> Vec<Location> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for glob in USAGE_GLOBS {
+        for path in find(project, root, glob, 5000) {
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            let text = if path == doc.path {
+                doc.text.clone()
+            } else {
+                match crate::project::read_listed(project, &path) {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                }
+            };
+            let lines = Lines::new(&text);
+            for (s, e, _) in usage_edits(&text, is_blade(&path), kind, key, key) {
+                out.push(Location {
+                    path: path.clone(),
+                    range: lines.range(&text, s, e),
+                });
+            }
+        }
+    }
+    out
+}
 
 fn kind_name(kind: RefKind) -> &'static str {
     match kind {

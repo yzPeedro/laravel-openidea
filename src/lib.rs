@@ -531,19 +531,27 @@ impl Laravel {
                 (scope.class.filter(|_| scope.model)?, false)
             }
             eloquent::Base::AuthUser => ("User".to_owned(), false),
-            eloquent::Base::Var(var) => match eloquent::origin(text, cursor, var)? {
-                eloquent::Origin::Class { name, many } => (name, many),
-                eloquent::Origin::Chain {
+            eloquent::Base::Var(var) => match eloquent::origin(text, cursor, var) {
+                Some(eloquent::Origin::Class { name, many }) => (name, many),
+                Some(eloquent::Origin::Chain {
                     base,
                     path,
                     element,
-                } => {
+                }) => {
                     let (model, many) =
                         self.model_of(project, root, (text, cursor), &base, &path, depth + 1)?;
                     if element && !many {
                         return None;
                     }
                     (model, many && !element)
+                }
+                None => {
+                    let param =
+                        eloquent::closure_param(text, cursor, var).filter(|p| !p.builder)?;
+                    (
+                        self.closure_model(project, root, text, &param, depth + 1)?,
+                        false,
+                    )
                 }
             },
         };
@@ -563,6 +571,105 @@ impl Laravel {
             current = relation_target(Some(detail))?;
         }
         Some((current, many))
+    }
+
+    fn head_model(
+        &mut self,
+        project: &Project,
+        root: &str,
+        (text, cursor): (&str, usize),
+        head: &str,
+        steps: &[String],
+        depth: u8,
+    ) -> Option<String> {
+        if depth > 4 {
+            return None;
+        }
+        let mut current = match head.strip_prefix('$') {
+            Some("this") => {
+                let scope = scope_of(text);
+                scope.class.filter(|_| scope.model)?
+            }
+            Some(var) => match self.model_of(
+                project,
+                root,
+                (text, cursor),
+                &eloquent::Base::Var(var.to_owned()),
+                &[],
+                depth + 1,
+            ) {
+                Some((model, _)) => model,
+                None => {
+                    let param = eloquent::closure_param(text, cursor, var)?;
+                    self.closure_model(project, root, text, &param, depth + 1)?
+                }
+            },
+            None => head.to_owned(),
+        };
+        let models = self.cache.get(RefKind::Model, project, root);
+        if !models.iter().any(|e| e.key == current) {
+            return None;
+        }
+        let relations = self.cache.get(RefKind::Relation, project, root);
+        for step in steps {
+            if let Some(entry) = relations
+                .iter()
+                .find(|e| e.key == format!("{current}.{step}"))
+                && let Some(target) = relation_target(entry.detail.as_deref())
+            {
+                current = target;
+            }
+        }
+        Some(current)
+    }
+
+    fn closure_model(
+        &mut self,
+        project: &Project,
+        root: &str,
+        text: &str,
+        param: &eloquent::ClosureParam,
+        depth: u8,
+    ) -> Option<String> {
+        let mut model = self.head_model(
+            project,
+            root,
+            (text, param.at),
+            &param.head,
+            &param.steps,
+            depth,
+        )?;
+        if let Some(related) = &param.related {
+            let relations = self.cache.get(RefKind::Relation, project, root);
+            for step in related.split('.') {
+                let entry = relations
+                    .iter()
+                    .find(|e| e.key == format!("{model}.{step}"))?;
+                model = relation_target(entry.detail.as_deref())?;
+            }
+        }
+        Some(model)
+    }
+
+    fn infer_head(&mut self, project: &Project, root: &str, text: &str, arg: &mut php::StringArg) {
+        let tokens = php::tokenize(text, 0, (arg.call_start + 1).min(text.len()));
+        let Some(open) = tokens
+            .iter()
+            .rposition(|t| t.start == arg.call_start && t.kind == php::Kind::Open('('))
+        else {
+            return;
+        };
+        let Some((head, steps)) = php::chain(&tokens, open) else {
+            return;
+        };
+        if !head.starts_with('$') && steps.is_empty() || head == "$this" {
+            return;
+        }
+        if let Some(model) =
+            self.head_model(project, root, (text, arg.call_start), &head, &steps, 0)
+        {
+            arg.head = Some(model);
+        }
     }
 
     fn model_text(&mut self, project: &Project, root: &str, model: &str) -> Option<String> {
@@ -1352,9 +1459,12 @@ impl Providers for Laravel {
                 return self.member_items(&project, &root, class, &doc.text, &ctx, at);
             }
         }
-        let Some(arg) = php::open_arg_at(&doc.text, blade, cursor) else {
+        let Some(mut arg) = php::open_arg_at(&doc.text, blade, cursor) else {
             return Vec::new();
         };
+        if !blade {
+            self.infer_head(&project, &root, &doc.text, &mut arg);
+        }
         let scope = scope_of(&doc.text);
         let within = cursor - arg.start;
         let Some(seg) = refs::segment(&arg, within, &scope) else {
@@ -1394,6 +1504,16 @@ impl Providers for Laravel {
                 .map(|e| e.location.clone())
                 .collect();
         }
+        if !is_blade(&doc.path)
+            && let Some(arg) = php::arg_at(&doc.text, false, cursor)
+            && arg.arg == 0
+            && arg.callee.kind == php::CallKind::Static
+            && arg.callee.class.as_deref() == Some("gate")
+            && arg.callee.name == "define"
+            && !arg.value.is_empty()
+        {
+            return renames::usage_locations(&project, &root, doc, RefKind::Ability, &arg.value);
+        }
         if project::rel(&root, &doc.path)
             .replace('\\', "/")
             .starts_with("routes/")
@@ -1413,9 +1533,12 @@ impl Providers for Laravel {
             if blade && let Some((kind, start, end)) = tag_at(&doc.text, cursor, &TAGS) {
                 (Want::Kind(kind), doc.text[start..end].to_owned())
             } else {
-                let Some(arg) = php::arg_at(&doc.text, blade, cursor) else {
+                let Some(mut arg) = php::arg_at(&doc.text, blade, cursor) else {
                     return Vec::new();
                 };
+                if !blade {
+                    self.infer_head(&project, &root, &doc.text, &mut arg);
+                }
                 let scope = scope_of(&doc.text);
                 let Some(seg) = refs::segment(&arg, cursor - arg.start, &scope) else {
                     return Vec::new();
@@ -2306,6 +2429,97 @@ mod tests {
         let model = doc("app/Models/User.php", USER);
         let fillable = plugin.completion(&model, at(USER, "''", 1), None);
         assert_eq!(labels(&fillable), ["name", "email", "id"]);
+    }
+
+    #[test]
+    fn untyped_closure_parameters_get_their_model() {
+        let _host = setup();
+        let mut plugin = Laravel::default();
+        let cases = [
+            (
+                "<?php\nGate::define('x', fn (User $user) => User::query()->notBlockedBy($user)\n    ->whereDoesntHave('posts', fn($query) => $query->where('|', true))\n    ->exists());\n",
+                vec!["title", "id"],
+            ),
+            (
+                "<?php\nUser::query()->where(fn($q) => $q->where('|'))->get();\n",
+                vec!["name", "email", "id"],
+            ),
+            (
+                "<?php\nUser::with(['posts' => fn ($q) => $q->orderBy('|')])->get();\n",
+                vec!["title", "id"],
+            ),
+            (
+                "<?php\nUser::whereHas('posts', function ($q) {\n    $q->whereHas('author', fn($a) => $a->where('|'));\n})->get();\n",
+                vec!["name", "email", "id"],
+            ),
+            (
+                "<?php\nfunction show(User $user) {\n    return $user->posts()->where('|')->get();\n}\n",
+                vec!["title", "id"],
+            ),
+            (
+                "<?php\nUser::whereHas('posts', fn($q) => $q->where('title', 1))->where('|')->get();\n",
+                vec!["name", "email", "id"],
+            ),
+            ("<?php\n$foo->where('|');\n", vec![]),
+        ];
+        for (raw, want) in cases {
+            let cursor = raw.find('|').unwrap();
+            let text = raw.replacen('|', "", 1);
+            let got = plugin.completion(&doc("app/X.php", &text), position(&text, cursor), None);
+            assert_eq!(labels(&got), want, "{raw}");
+        }
+        let text = "<?php\nUser::query()->get()->each(fn($u) => $u->);\n";
+        let got = plugin.completion(&doc("app/X.php", text), at(text, "$u->", 4), None);
+        assert!(labels(&got).contains(&"posts"), "{:?}", labels(&got));
+        let text = "<?php\nUser::whereHas('posts', fn($q) => $q->where('title', 1))->get();\n";
+        let targets = plugin.definition(&doc("app/X.php", text), at(text, "'title", 2));
+        assert!(
+            targets
+                .iter()
+                .any(|l| l.path.ends_with("create_tables.php")),
+            "{targets:?}"
+        );
+    }
+
+    #[test]
+    fn a_gate_definition_leads_to_its_usages() {
+        let host = setup();
+        let provider = "<?php\nclass AuthServiceProvider {\n    public function boot() {\n        Gate::define('see-profile', fn (User $user) => true);\n    }\n}\n";
+        host.add_file("app/Providers/AuthServiceProvider.php", provider);
+        host.add_file(
+            "app/Http/Controllers/ProfileController.php",
+            "<?php\nclass ProfileController {\n    public function show() {\n        $this->authorize('see-profile');\n        return Gate::allows('see-profile') ? 1 : Gate::denies('other');\n    }\n}\n",
+        );
+        host.add_file(
+            "resources/views/profile.blade.php",
+            "@can('see-profile')\nx\n@endcan\n",
+        );
+        host.add_file(
+            "routes/api.php",
+            "<?php\nRoute::get('/p', fn () => 1)->middleware('can:see-profile');\n",
+        );
+        let mut plugin = Laravel::default();
+        let d = doc("app/Providers/AuthServiceProvider.php", provider);
+        let mut found: Vec<(String, u32)> = plugin
+            .definition(&d, at(provider, "see-profile", 3))
+            .into_iter()
+            .map(|l| {
+                (
+                    l.path.trim_start_matches("/project/").to_owned(),
+                    l.range.start.line,
+                )
+            })
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                ("app/Http/Controllers/ProfileController.php".to_owned(), 3),
+                ("app/Http/Controllers/ProfileController.php".to_owned(), 4),
+                ("resources/views/profile.blade.php".to_owned(), 0),
+                ("routes/api.php".to_owned(), 1),
+            ]
+        );
     }
 
     #[test]

@@ -360,6 +360,42 @@ fn close_index(tokens: &[Token], close: usize) -> Option<usize> {
     None
 }
 
+pub fn chain(tokens: &[Token], open: usize) -> Option<(String, Vec<String>)> {
+    let mut j = open.checked_sub(1)?;
+    let mut steps = Vec::new();
+    loop {
+        let Kind::Ident(name) = &tokens.get(j)?.kind else {
+            return None;
+        };
+        if j + 1 != open {
+            steps.push(name.clone());
+        }
+        match tokens.get(j.checked_sub(1)?)?.kind {
+            Kind::DoubleColon => {
+                let head = match &tokens.get(j.checked_sub(2)?)?.kind {
+                    Kind::Ident(c) => c.rsplit('\\').next().unwrap_or(c).to_owned(),
+                    _ => return None,
+                };
+                steps.reverse();
+                return Some((head, steps));
+            }
+            Kind::ObjectOp => {
+                let before = j.checked_sub(2)?;
+                match &tokens.get(before)?.kind {
+                    Kind::Close(')') => j = close_index(tokens, before)?.checked_sub(1)?,
+                    Kind::Var(v) => {
+                        steps.reverse();
+                        return Some((format!("${v}"), steps));
+                    }
+                    Kind::Ident(_) => j = before,
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        }
+    }
+}
+
 pub fn chain_head(tokens: &[Token], open: usize) -> Option<String> {
     let mut j = open.checked_sub(1)?;
     loop {
