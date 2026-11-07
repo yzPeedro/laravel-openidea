@@ -103,7 +103,7 @@ dependencies = [
 
 [[package]]
 name = "openidea-plugin-laravel-openidea"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "openidea-plugin",
  "serde",
