@@ -9,14 +9,13 @@ use crate::project::{laravel_version, project_of, rel};
 use crate::resources;
 use crate::runner::{self, Mode};
 use crate::sections::{self, Facet, Row, Table, facet, split};
-use openidea_plugin::views::{Body, View, ViewEvent, Viewport, Views};
+use openidea_plugin::views::{View, ViewEvent, Viewport, Views};
 use openidea_plugin::{Error, Invocation, Location, Project, host};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-const HUB_PAGE: &str = include_str!("../web/hub.html");
 const HISTORY_KEY: &str = "artisan.history";
 const HISTORY_SIZE: usize = 20;
 const MAX_ROWS: usize = 5000;
@@ -32,73 +31,6 @@ const PROJECT_DIRS: [&str; 10] = [
     "tests/",
     "lang/",
     "public/",
-];
-
-const ICONS: &[(&str, &str)] = &[
-    ("laravel", include_str!("../web/icons/laravel.svg")),
-    ("console", include_str!("../web/icons/console.svg")),
-    ("routing", include_str!("../web/icons/routing.svg")),
-    ("database", include_str!("../web/icons/database.svg")),
-    (
-        "migrations",
-        include_str!("../web/icons/folder-migrations.svg"),
-    ),
-    ("views", include_str!("../web/icons/folder-views.svg")),
-    (
-        "components",
-        include_str!("../web/icons/folder-components.svg"),
-    ),
-    ("settings", include_str!("../web/icons/settings.svg")),
-    ("tune", include_str!("../web/icons/tune.svg")),
-    ("i18n", include_str!("../web/icons/i18n.svg")),
-    (
-        "middleware",
-        include_str!("../web/icons/folder-middleware.svg"),
-    ),
-    ("policy", include_str!("../web/icons/folder-policy.svg")),
-    ("queue", include_str!("../web/icons/folder-queue.svg")),
-    ("job", include_str!("../web/icons/folder-job.svg")),
-    ("tasks", include_str!("../web/icons/folder-tasks.svg")),
-    ("event", include_str!("../web/icons/folder-event.svg")),
-    ("email", include_str!("../web/icons/email.svg")),
-    ("test", include_str!("../web/icons/folder-test.svg")),
-    ("log", include_str!("../web/icons/log.svg")),
-    ("docker", include_str!("../web/icons/docker.svg")),
-    ("controller", include_str!("../web/icons/controller.svg")),
-    ("command", include_str!("../web/icons/folder-command.svg")),
-    ("http", include_str!("../web/icons/http.svg")),
-    ("key", include_str!("../web/icons/key.svg")),
-    ("php", include_str!("../web/icons/php.svg")),
-    ("api", include_str!("../web/icons/folder-api.svg")),
-    ("resource", include_str!("../web/icons/folder-resource.svg")),
-    ("class", include_str!("../web/icons/folder-class.svg")),
-    ("enum", include_str!("../web/icons/folder-enum.svg")),
-    ("rules", include_str!("../web/icons/folder-rules.svg")),
-    (
-        "container",
-        include_str!("../web/icons/folder-container.svg"),
-    ),
-    ("filter", include_str!("../web/icons/folder-filter.svg")),
-    ("seeders", include_str!("../web/icons/folder-seeders.svg")),
-    ("hook", include_str!("../web/icons/folder-hook.svg")),
-    ("mappings", include_str!("../web/icons/folder-mappings.svg")),
-    ("plugin", include_str!("../web/icons/folder-plugin.svg")),
-    (
-        "functions",
-        include_str!("../web/icons/folder-functions.svg"),
-    ),
-    (
-        "connection",
-        include_str!("../web/icons/folder-connection.svg"),
-    ),
-    ("trigger", include_str!("../web/icons/folder-trigger.svg")),
-    ("dump", include_str!("../web/icons/folder-dump.svg")),
-    ("debug", include_str!("../web/icons/folder-debug.svg")),
-    ("packages", include_str!("../web/icons/folder-packages.svg")),
-    ("terminal", include_str!("../web/icons/folder-console.svg")),
-    ("secure", include_str!("../web/icons/folder-secure.svg")),
-    ("robot", include_str!("../web/icons/robot.svg")),
-    ("vite", include_str!("../web/icons/vite.svg")),
 ];
 
 #[derive(Deserialize)]
@@ -431,17 +363,6 @@ fn section_actions(id: &str, project: &Project) -> Vec<Action> {
         ],
         _ => Vec::new(),
     }
-}
-
-fn page() -> String {
-    let icons: serde_json::Map<String, serde_json::Value> = ICONS
-        .iter()
-        .map(|(k, v)| ((*k).to_owned(), json!(v.trim())))
-        .collect();
-    HUB_PAGE.replace(
-        "\"__ICONS__\"",
-        &serde_json::Value::Object(icons).to_string(),
-    )
 }
 
 impl Laravel {
@@ -1296,7 +1217,7 @@ impl Views for Laravel {
         _ctx: &Invocation,
     ) -> Result<View, Error> {
         match view {
-            "laravel" => Ok(View::new(Body::Html(page()))),
+            "laravel" => Ok(View::message("The hub is shown by the plugin's page.")),
             other => Err(Error::NotFound(format!("view {other}"))),
         }
     }
@@ -1541,6 +1462,23 @@ mod tests {
             Some("app/Http/Controllers/UserController.php")
         );
         assert_eq!(r("/var/www/html/app/Missing.php"), None);
-        assert!(page().contains("\"laravel\":\"<svg"));
+    }
+
+    #[test]
+    fn hub_icons_ship_with_the_page() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web");
+        let hub = std::fs::read_to_string(dir.join("hub.html")).unwrap();
+        let start = hub.find("const ICON_FILES = {").unwrap();
+        let end = start + hub[start..].find("};").unwrap();
+        let files: Vec<&str> = hub[start..end]
+            .split('"')
+            .filter(|s| s.ends_with(".svg"))
+            .collect();
+        assert!(files.contains(&"laravel.svg"), "{files:?}");
+        for file in &files {
+            let svg = std::fs::read_to_string(dir.join("icons").join(file)).unwrap();
+            assert!(svg.trim_start().starts_with("<svg"), "{file}");
+        }
+        assert!(!hub.contains("__ICONS__"));
     }
 }

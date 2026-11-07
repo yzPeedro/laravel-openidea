@@ -1,6 +1,6 @@
 use openidea_plugin::Plugin;
 use openidea_plugin::mock::MockHost;
-use openidea_plugin::views::{Body, ViewEvent, Views};
+use openidea_plugin::views::{ViewEvent, Views};
 use openidea_plugin_laravel_openidea::Laravel;
 use serde_json::{Map, Value, json};
 use std::path::Path;
@@ -66,10 +66,6 @@ fn dumps_hub_responses() {
         .run_command("refresh-index", &host.invocation(), None)
         .unwrap();
     let ctx = host.invocation();
-    let view = plugin.render("laravel", None, &ctx).unwrap();
-    let Body::Html(html) = view.body else {
-        panic!("hub is not html");
-    };
     let send = |plugin: &mut Laravel, msg: Value| -> Vec<Value> {
         let _ = host.view_messages();
         plugin
@@ -155,11 +151,12 @@ fn dumps_hub_responses() {
         sections.insert(id.into(), msg);
     }
     dump.insert("sections".into(), Value::Object(sections));
-    std::fs::create_dir_all(&out).unwrap();
-    std::fs::write(Path::new(&out).join("hub.html"), html).unwrap();
-    std::fs::write(
-        Path::new(&out).join("dump.json"),
-        Value::Object(dump).to_string(),
-    )
-    .unwrap();
+    let web = Path::new(env!("CARGO_MANIFEST_DIR")).join("web");
+    let out = Path::new(&out);
+    std::fs::create_dir_all(out.join("icons")).unwrap();
+    std::fs::copy(web.join("hub.html"), out.join("hub.html")).unwrap();
+    for icon in std::fs::read_dir(web.join("icons")).unwrap().flatten() {
+        std::fs::copy(icon.path(), out.join("icons").join(icon.file_name())).unwrap();
+    }
+    std::fs::write(out.join("dump.json"), Value::Object(dump).to_string()).unwrap();
 }
