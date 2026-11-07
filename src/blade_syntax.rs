@@ -478,6 +478,25 @@ mod tests {
         assert_eq!(names, ["if", "endif"]);
     }
 
+    #[test]
+    fn multibyte_text_anywhere_keeps_ranges_on_char_boundaries() {
+        let template = "{{-- c --}}<!-- h -->\n@extends('layouts.app')\n@section('title', 'Home')\n@section('content')\n<div class=\"a {{ $b }}\" :c=\"$d->e('f')\" @click=\"g\">\n{{ $user->name }} {!! $html !!} @{{ raw }}\n<?php echo 'x\\'y'; ?>\n@php $y = \"z\"; @endphp\n@if ($a && $b)\n<x-alert type=\"info\" />\n@endif\n@verbatim {{ v }} @endverbatim\n<script>let s = '<p>';</script>\n</div>\n@endsection\n@push('scripts')\n@endpush\n";
+        for at in (0..=template.len()).filter(|&i| template.is_char_boundary(i)) {
+            for ch in ["…", "é", "🙂"] {
+                let text = format!("{}{ch}{}", &template[..at], &template[at..]);
+                let ok = |i: usize| text.is_char_boundary(i);
+                for t in highlights(&text) {
+                    assert!(ok(t.range.start) && ok(t.range.end));
+                }
+                for s in outline(&text) {
+                    assert!(ok(s.range.start) && ok(s.range.end));
+                    assert!(ok(s.name_range.start) && ok(s.name_range.end));
+                }
+                folding(&text);
+            }
+        }
+    }
+
     fn kinds(text: &str) -> Vec<(&str, &'static str)> {
         highlights(text)
             .into_iter()
