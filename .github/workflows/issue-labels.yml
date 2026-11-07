@@ -1,0 +1,38 @@
+name: Issue labels
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  issues: write
+
+jobs:
+  area:
+    name: Label the area
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const areas = {
+              "Completion and navigation": "area: completion",
+              "Blade": "area: blade",
+              "Eloquent": "area: eloquent",
+              "Routes": "area: routes",
+              "Hub": "area: hub",
+              "Tinker": "area: tinker",
+              "Live Audit": "area: live audit",
+              "Artisan": "area: artisan",
+              "AI agents": "area: ai agents",
+              "Packages": "area: packages",
+            };
+            const issue = context.payload.issue;
+            const match = (issue.body || "").match(/^### Area\s*\n+([^\n]+)/m);
+            const label = match && areas[match[1].trim()];
+            if (!label || issue.labels.some((l) => l.name === label)) return;
+            await github.rest.issues.addLabels({
+              ...context.repo,
+              issue_number: issue.number,
+              labels: [label],
+            });

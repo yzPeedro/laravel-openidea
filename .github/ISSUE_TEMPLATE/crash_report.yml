@@ -1,0 +1,58 @@
+name: Crash report
+description: OpenIDEA showed "Plugin Laravel OpenIDEA crashed", or the hub is stuck on Loading
+labels: [bug, crash, needs triage]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for the report. Please don't paste secrets, `.env` values or personal data from your project.
+  - type: textarea
+    id: message
+    attributes:
+      label: Crash message
+      description: 'The full text of the notification, including the file and line (for example `panicked at src/blade_syntax.rs:362:16: …`).'
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: when
+    attributes:
+      label: When it happens
+      description: What you were doing, and which kind of file was open (Blade view, model, route file, config…).
+      placeholder: Right after opening the project, with `resources/views/welcome.blade.php` open.
+    validations:
+      required: true
+  - type: textarea
+    id: sample
+    attributes:
+      label: Smallest file that triggers it
+      description: If it happens on a specific file, a few made-up lines that still crash help the most.
+      render: php
+  - type: input
+    id: plugin
+    attributes:
+      label: Plugin version
+      placeholder: "0.13.0"
+    validations:
+      required: true
+  - type: input
+    id: openidea
+    attributes:
+      label: OpenIDEA version or commit
+      placeholder: "0.1.38"
+    validations:
+      required: true
+  - type: input
+    id: laravel
+    attributes:
+      label: Laravel and PHP versions
+      placeholder: "Laravel 13.4, PHP 8.4"
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "macOS 27 (Apple silicon), Windows 11, Ubuntu 26.04"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: The IDE log around the crash, or a screenshot.

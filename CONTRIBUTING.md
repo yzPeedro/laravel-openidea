@@ -106,6 +106,23 @@ The hub page posts JSON messages (`{"type": "section", "id": "routes"}`) through
 - UI text is English, short, and in sentence case.
 - Formatting is `rustfmt`'s. PHP follows PSR-12. JavaScript in `hub.html` uses two-space indentation and double quotes.
 
+## Issues and labels
+
+New issues come from the forms in `.github/ISSUE_TEMPLATE`: bug report, crash report (the *Plugin crashed* notification or a hub stuck on *Loading*) and feature request. Questions go to [Discussions](https://github.com/yzPeedro/laravel-openidea/discussions) and vulnerabilities to [private reporting](https://github.com/yzPeedro/laravel-openidea/security/advisories/new).
+
+Every new issue starts with `needs triage`, and the *Area* field adds its `area: …` label. Triage then swaps `needs triage` for `confirmed` or `needs info`.
+
+| Group | Labels |
+| --- | --- |
+| Type | `bug`, `crash`, `enhancement`, `performance`, `compatibility`, `documentation` |
+| Status | `needs triage`, `needs info`, `confirmed` |
+| Area | `area: completion`, `area: blade`, `area: eloquent`, `area: routes`, `area: hub`, `area: tinker`, `area: live audit`, `area: artisan`, `area: ai agents`, `area: packages` |
+| Contributors | `good first issue`, `help wanted` |
+| Closing | `duplicate`, `wontfix` |
+| Automation | `dependencies` (Dependabot) |
+
+Pull requests use the type and area labels of the issue they close.
+
 ## Commits and pull requests
 
 - Write commit subjects in the imperative mood ("Add observer hooks to the hub"), under 72 characters, and explain the why in the body when it isn't obvious.

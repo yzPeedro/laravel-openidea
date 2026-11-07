@@ -1,10 +1,13 @@
 name: Bug report
 description: Something doesn't work as expected
-labels: [bug]
+labels: [bug, needs triage]
 body:
   - type: markdown
     attributes:
-      value: Thanks for the report. Please don't paste secrets, `.env` values or personal data from your project.
+      value: |
+        Thanks for the report. Please don't paste secrets, `.env` values or personal data from your project.
+
+        If OpenIDEA showed a **Plugin "Laravel OpenIDEA" crashed** notification, use the [crash report](https://github.com/yzPeedro/laravel-openidea/issues/new?template=crash_report.yml) instead.
   - type: textarea
     id: what
     attributes:
@@ -18,34 +21,48 @@ body:
       label: How to reproduce
       description: The smallest code or project layout that shows the problem.
       placeholder: |
-        1. Open a Laravel 12 project with …
+        1. Open a Laravel 13 project with …
         2. Type `route('` in …
         3. …
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: ["Completion and navigation", "Blade", "Eloquent", "Routes", "Hub", "Tinker", "Live Audit", "Artisan", "AI agents", "Packages", "Other"]
     validations:
       required: true
   - type: input
     id: plugin
     attributes:
       label: Plugin version
-      placeholder: "0.12.0"
+      placeholder: "0.13.0"
     validations:
       required: true
   - type: input
     id: openidea
     attributes:
       label: OpenIDEA version or commit
+      placeholder: "0.1.38"
     validations:
       required: true
   - type: input
     id: laravel
     attributes:
       label: Laravel and PHP versions
-      placeholder: "Laravel 12.3, PHP 8.4"
+      placeholder: "Laravel 13.4, PHP 8.4"
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "macOS 27 (Apple silicon), Windows 11, Ubuntu 26.04"
   - type: dropdown
     id: runner
     attributes:
       label: How Artisan runs
-      options: ["php", "docker compose run", "docker compose exec", "not relevant"]
+      description: The *Run Artisan with* setting, and how PHP is installed (Herd, FlyEnv, Homebrew, Docker…) if relevant.
+      options: ["auto (default)", "php", "docker-run", "docker", "not relevant"]
   - type: textarea
     id: logs
     attributes:
