@@ -94,7 +94,7 @@ fn directive_names(project: &Project, root: &str, directives: &[&str]) -> Vec<En
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for path in find(project, root, "resources/views/**/*.blade.php", 10_000) {
-        let Ok(text) = project.read_file(&path) else {
+        let Ok(text) = crate::project::read_listed(project, &path) else {
             continue;
         };
         if !directives.iter().any(|d| text.contains(&format!("@{d}("))) {
@@ -126,7 +126,7 @@ pub fn custom_directives(project: &Project, root: &str) -> Vec<Entry> {
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for path in find(project, root, "app/**/*.php", 20_000) {
-        let Ok(text) = project.read_file(&path) else {
+        let Ok(text) = crate::project::read_listed(project, &path) else {
             continue;
         };
         if !text.contains("Blade::") {

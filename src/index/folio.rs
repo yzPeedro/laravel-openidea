@@ -146,7 +146,7 @@ pub fn pages(project: &Project, root: &str) -> Vec<Page> {
             if inside.split('/').any(|s| s.starts_with('_')) {
                 continue;
             }
-            let text = project.read_file(&path).unwrap_or_default();
+            let text = crate::project::read_listed(project, &path).unwrap_or_default();
             let lines = Lines::new(&text);
             let named = page_name(&text);
             let range = match &named {

@@ -266,6 +266,8 @@ OpenIDEA ── WIT (openidea:plugin@1.0) ──► laravel-openidea.wasm (Rust)
   └─ processes (php / docker) ──► php/tinker.php · php/Recorder.php · php/install.php · php/mcp.php
 ```
 
+Failures go to the IDE log as warnings and errors, each distinct message once: a command, hub request or code action that fails, a php or Docker run that can't start or returns no result, a tool on save that fails or times out, a sync of `storage/openidea` that didn't take, a file the index couldn't read, a scan cut at its file limit and an index that took over two seconds. The plugin logs nothing else, so the log is an audit trail to attach to a bug report.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, tests and conventions.
 
 ## Contributing

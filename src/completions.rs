@@ -61,7 +61,7 @@ impl Laravel {
         let names = self.pest.entry(root.to_owned()).or_insert_with(|| {
             let mut names = pest::Names::default();
             for path in find(project, root, "tests/**/*.php", 3000) {
-                if let Ok(text) = project.read_file(&path) {
+                if let Ok(text) = crate::project::read_listed(project, &path) {
                     pest::collect(&text, &mut names);
                 }
             }

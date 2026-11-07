@@ -23,6 +23,7 @@ All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](h
 - MCP access levels (`mcpAccess`, read by default): read gives the inspection tools, now with `list_classes` (controllers, requests, enums, jobs, policies… by kind), `check_env_keys`, `list_tests`, `run_phpstan` and read-only Artisan commands; write adds `make:*`, `migrate`, `db:seed`, cache commands, `format_code`, `run_tests`, `query_to_sql` (the SQL of an Eloquent expression, captured with `DB::pretend()` without running it) and `audit_recorder`; full adds `run_tinker` and every Artisan command. Agents are told when a tool needs a higher level, connected clients get the new tool list when it changes, and no tool installs, changes or removes the plugin, its files or its settings. The AI Agents page shows the level and what each one unlocks.
 - MCP `list_models` and `list_classes` find every class in `app/`, not only the ones in Composer's classmap.
 - Model and relation indexes are only rebuilt when a model file changes, so completion stays within the editor's time budget while you type.
+- Failures are written to the IDE log as warnings and errors (failed commands, hub requests and code actions, php or Docker runs with no result, tools on save, `storage/openidea` syncs, unreadable files, scans cut at their file limit, slow index builds), each distinct message once. The routine info messages are gone.
 
 ## 0.13.1
 

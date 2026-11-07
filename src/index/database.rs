@@ -182,7 +182,11 @@ fn migrations(project: &Project, root: &str) -> Vec<(String, String)> {
     paths.sort();
     paths
         .into_iter()
-        .filter_map(|p| project.read_file(&p).ok().map(|t| (p, t)))
+        .filter_map(|p| {
+            crate::project::read_listed(project, &p)
+                .ok()
+                .map(|t| (p, t))
+        })
         .collect()
 }
 

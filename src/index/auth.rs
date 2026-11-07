@@ -10,7 +10,7 @@ const POLICY_SKIP: [&str; 3] = ["before", "after", "__construct"];
 fn calls(project: &Project, root: &str, glob: &str, class: &str, name: &str) -> Vec<Entry> {
     let mut out = Vec::new();
     for path in find(project, root, glob, 5000) {
-        let Ok(text) = project.read_file(&path) else {
+        let Ok(text) = crate::project::read_listed(project, &path) else {
             continue;
         };
         if !text
@@ -44,7 +44,7 @@ pub fn abilities(project: &Project, root: &str) -> Vec<Entry> {
     let mut out = calls(project, root, "app/**/*.php", "gate", "define");
     let mut seen: BTreeSet<String> = out.iter().map(|e| e.key.clone()).collect();
     for path in find(project, root, "app/**/Policies/**/*.php", 2000) {
-        let Ok(text) = project.read_file(&path) else {
+        let Ok(text) = crate::project::read_listed(project, &path) else {
             continue;
         };
         let Some(class) = parse_class(&text) else {

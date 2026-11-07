@@ -30,8 +30,9 @@ pub fn records(stdout: &str) -> (Vec<Value>, String) {
     for line in stdout.lines() {
         match line.find(MARKER) {
             Some(at) => {
-                if let Ok(v) = serde_json::from_str::<Value>(&line[at + MARKER.len()..]) {
-                    out.push(v);
+                match serde_json::from_str::<Value>(&line[at + MARKER.len()..]) {
+                    Ok(v) => out.push(v),
+                    Err(e) => crate::audit::warn("reading a helper script's output", e),
                 }
                 noise.push_str(&line[..at]);
             }
@@ -318,7 +319,7 @@ pub fn debug_calls(project: &Project, root: &str) -> Table {
     paths.dedup();
     let mut rows = Vec::new();
     for p in paths {
-        let Ok(text) = project.read_file(&p) else {
+        let Ok(text) = crate::project::read_listed(project, &p) else {
             continue;
         };
         if !DEBUG_FUNCTIONS
@@ -428,7 +429,7 @@ pub fn profiles(project: &Project, root: &str) -> Table {
     files.sort();
     files.reverse();
     for f in files.into_iter().take(300) {
-        let Ok(text) = project.read_file(&f) else {
+        let Ok(text) = crate::project::read_listed(project, &f) else {
             continue;
         };
         let Ok(v) = serde_json::from_str::<Value>(&text) else {
@@ -476,7 +477,7 @@ pub fn profiles(project: &Project, root: &str) -> Table {
     files.sort();
     files.reverse();
     for f in files.into_iter().take(300) {
-        let Ok(text) = project.read_file(&f) else {
+        let Ok(text) = crate::project::read_listed(project, &f) else {
             continue;
         };
         let Ok(v) = serde_json::from_str::<Value>(&text) else {

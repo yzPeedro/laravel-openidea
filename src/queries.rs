@@ -47,7 +47,8 @@ impl Laravel {
             .iter()
             .filter_map(|e| {
                 let table = e.detail.as_deref()?.strip_prefix("table ")?.to_owned();
-                let source = project.read_file(&e.location.path).unwrap_or_default();
+                let source =
+                    crate::project::read_listed(project, &e.location.path).unwrap_or_default();
                 Some((
                     e.key.clone(),
                     Model {
@@ -65,7 +66,7 @@ impl Laravel {
             .get(RefKind::Model, project, root)
             .iter()
             .filter_map(|e| {
-                let source = project.read_file(&e.location.path).ok()?;
+                let source = crate::project::read_listed(project, &e.location.path).ok()?;
                 let namespace = source
                     .lines()
                     .find_map(|l| l.trim().strip_prefix("namespace "))

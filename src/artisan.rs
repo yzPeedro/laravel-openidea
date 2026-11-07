@@ -340,7 +340,7 @@ pub fn discover(project: &Project, root: &str) -> Vec<Command> {
         }
     }
     for path in find(project, root, "app/**/*.php", 20_000) {
-        let Ok(text) = project.read_file(&path) else {
+        let Ok(text) = crate::project::read_listed(project, &path) else {
             continue;
         };
         let command_class = crate::index::parse_class(&text)

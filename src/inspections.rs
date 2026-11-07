@@ -1,4 +1,5 @@
 use crate::Laravel;
+use crate::audit::Logged;
 use crate::checks::{self, Columns, Enabled, Facts, Finding, ModelFacts, Parts};
 use crate::index::RefKind;
 use crate::project::{Lines, project_of};
@@ -56,7 +57,8 @@ impl Laravel {
                     name: e.key.clone(),
                     table,
                     path: e.location.path.clone(),
-                    source: project.read_file(&e.location.path).unwrap_or_default(),
+                    source: crate::project::read_listed(project, &e.location.path)
+                        .unwrap_or_default(),
                     relations: relations
                         .iter()
                         .filter(|(m, _)| *m == e.key)
@@ -80,9 +82,9 @@ impl Laravel {
             .get(RefKind::Config, project, root)
             .iter()
             .filter_map(|e| {
-                let source = sources
-                    .entry(e.location.path.clone())
-                    .or_insert_with(|| project.read_file(&e.location.path).unwrap_or_default());
+                let source = sources.entry(e.location.path.clone()).or_insert_with(|| {
+                    crate::project::read_listed(project, &e.location.path).unwrap_or_default()
+                });
                 let line = source.lines().nth(e.location.range.start.line as usize)?;
                 let value = line.split_once("=>").map_or(line, |(_, v)| v);
                 env_key(value).map(|k| (e.key.clone(), k))
@@ -161,14 +163,17 @@ impl Laravel {
             return true;
         };
         for p in [path.to_owned(), other] {
-            let items = match project.read_file(&p) {
+            let (items, exists) = match project.read_file(&p) {
                 Ok(text) => {
                     let found = self.findings(&project, &root, &p, &text);
-                    Self::finding_diagnostics(&text, &found)
+                    (Self::finding_diagnostics(&text, &found), true)
                 }
-                Err(_) => Vec::new(),
+                Err(_) => (Vec::new(), false),
             };
-            let _ = host::publish_diagnostics(&p, &items);
+            let published = host::publish_diagnostics(&p, &items);
+            if exists {
+                published.or_error(&format!("publishing diagnostics for {p}"));
+            }
         }
         true
     }

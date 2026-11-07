@@ -163,7 +163,7 @@ pub fn controller_methods(project: &Project, root: &str) -> Vec<Entry> {
     paths.sort();
     paths.dedup();
     for path in paths {
-        let Ok(text) = project.read_file(&path) else {
+        let Ok(text) = crate::project::read_listed(project, &path) else {
             continue;
         };
         let Some(class) = parse_class(&text) else {

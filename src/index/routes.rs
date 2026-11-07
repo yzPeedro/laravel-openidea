@@ -24,7 +24,7 @@ pub struct Route {
 pub fn index(project: &Project, root: &str) -> Vec<Entry> {
     let mut out = Vec::new();
     for path in find(project, root, "routes/**/*.php", 1000) {
-        let Ok(text) = project.read_file(&path) else {
+        let Ok(text) = crate::project::read_listed(project, &path) else {
             continue;
         };
         let lines = Lines::new(&text);
@@ -139,7 +139,7 @@ pub fn cached(text: &str) -> Vec<Cached> {
 pub fn actions(project: &Project, root: &str) -> Vec<Entry> {
     let mut out = Vec::new();
     for path in find(project, root, "routes/**/*.php", 1000) {
-        let Ok(text) = project.read_file(&path) else {
+        let Ok(text) = crate::project::read_listed(project, &path) else {
             continue;
         };
         let lines = Lines::new(&text);

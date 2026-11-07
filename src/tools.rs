@@ -1,4 +1,5 @@
 use crate::Laravel;
+use crate::audit;
 use crate::devtools;
 use crate::project::rel;
 use crate::runner::{self, Mode};
@@ -161,7 +162,8 @@ impl Laravel {
             return;
         }
         let names: Vec<&str> = jobs.iter().filter_map(|j| j["name"].as_str()).collect();
-        let _task = host::begin_task(&format!("Laravel: {}", names.join(" and ")), false);
+        let label = names.join(" and ");
+        let _task = host::begin_task(&format!("Laravel: {label}"), false);
         let mode = runner::detect(project);
         let tmp = matches!(mode, Mode::DockerRun(_)).then_some("storage/framework/cache/openidea");
         let input = json!({ "seconds": SAVE_SECONDS, "jobs": jobs, "tmp": tmp }).to_string();
@@ -169,6 +171,7 @@ impl Laravel {
         let out = match project.run_process(mode.program(), &args, Some(&input)) {
             Ok(out) => out,
             Err(e) => {
+                audit::failed(&format!("{label} on save"), &e);
                 self.warn_once(
                     "tools",
                     "Laravel OpenIDEA couldn't run the tools on save",
@@ -177,8 +180,19 @@ impl Laravel {
                 return;
             }
         };
-        for result in parse_results(&out.stdout) {
+        let results = parse_results(&out.stdout);
+        if results.is_empty() {
+            audit::error(
+                &format!("{label} on save"),
+                format!("no results for {rel_path}: {}", audit::output(&out)),
+            );
+        }
+        for result in results {
             if result.timeout {
+                audit::warn(
+                    &format!("{} on save", result.name),
+                    format!("timed out after 15 seconds on {rel_path}"),
+                );
                 self.warn_once(
                     &result.name,
                     &format!("{} took longer than 15 seconds", result.name),
@@ -187,6 +201,10 @@ impl Laravel {
                 continue;
             }
             if let Some(detail) = failure(&result) {
+                audit::warn(
+                    &format!("{} on save", result.name),
+                    format!("failed on {rel_path}: {detail}"),
+                );
                 self.warn_once(
                     &format!("{}-failed", result.name),
                     &format!("{} failed on save", result.name),

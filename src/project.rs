@@ -1,8 +1,9 @@
-use openidea_plugin::{Position, Project, Range, host};
+use crate::audit::{self, Logged};
+use openidea_plugin::{Error, Position, Project, Range, host};
 
 pub fn project_of(path: &str) -> Option<Project> {
     host::projects()
-        .ok()?
+        .or_warn("listing the open projects")?
         .into_iter()
         .filter(|p| p.root().is_ok_and(|r| path.starts_with(&r)))
         .max_by_key(|p| p.root().map(|r| r.len()).unwrap_or(0))
@@ -27,13 +28,31 @@ pub fn join(root: &str, relative: &str) -> String {
     format!("{}{sep}{relative}", root.trim_end_matches(['/', '\\']))
 }
 
-pub fn find(project: &Project, root: &str, glob: &str, limit: u32) -> Vec<String> {
+pub fn find_some(project: &Project, root: &str, glob: &str, limit: u32) -> Vec<String> {
     project
         .find_files(glob, limit)
+        .or_warn(&format!("finding {glob}"))
         .unwrap_or_default()
         .into_iter()
         .map(|p| abs(root, &p))
         .collect()
+}
+
+pub fn find(project: &Project, root: &str, glob: &str, limit: u32) -> Vec<String> {
+    let found = find_some(project, root, glob, limit);
+    if limit > 1 && found.len() >= limit as usize {
+        audit::warn(
+            "index",
+            format!("{glob} matched {limit} files or more, so only the first {limit} were read"),
+        );
+    }
+    found
+}
+
+pub fn read_listed(project: &Project, path: &str) -> Result<String, Error> {
+    project
+        .read_file(path)
+        .inspect_err(|e| audit::warn(&format!("reading {path}"), e))
 }
 
 pub fn is_laravel(project: &Project) -> bool {

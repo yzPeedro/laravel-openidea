@@ -17,12 +17,14 @@ mod views;
 
 use crate::project::rel;
 use openidea_plugin::providers::CompletionKind;
-use openidea_plugin::{Location, LogLevel, Project, Range, host};
+use openidea_plugin::{Location, Project, Range};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Instant;
 
 pub use classes::{Class, parse_class};
+
+const SLOW_INDEX_MS: u128 = 2000;
 pub use models::{is_model, plural, table_for};
 pub use routes::parse as parse_routes;
 
@@ -317,15 +319,17 @@ impl Cache {
             }
             None => build(kind, project, root, &self.locale),
         });
-        host::log(
-            LogLevel::Info,
-            &format!(
-                "indexed {} {} in {} ms",
-                entries.len(),
-                kind.label(),
-                started.elapsed().as_millis()
-            ),
-        );
+        let took = started.elapsed().as_millis();
+        if took > SLOW_INDEX_MS {
+            crate::audit::warn(
+                "index",
+                format!(
+                    "indexing {} took {took} ms ({} entries)",
+                    kind.label(),
+                    entries.len()
+                ),
+            );
+        }
         self.built.insert(key, entries.clone());
         entries
     }

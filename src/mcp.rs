@@ -1,7 +1,8 @@
 use crate::Laravel;
+use crate::audit;
 use crate::devtools;
 use crate::runner;
-use openidea_plugin::{LogLevel, Project, host};
+use openidea_plugin::{Project, host};
 use serde_json::{Value, json};
 
 pub const ACCESS_FILE: &str = "storage/openidea/mcp-access.json";
@@ -73,11 +74,19 @@ impl Laravel {
             "mcp-sync".into(),
         ]);
         let input = payload(&command, &args, level);
-        if let Err(e) = project.run_process(mode.program(), &run, Some(&input)) {
-            host::log(
-                LogLevel::Warn,
-                &format!("couldn't update the MCP server files: {e}"),
-            );
+        match project.run_process(mode.program(), &run, Some(&input)) {
+            Ok(out) if out.status != Some(0) => {
+                audit::error("MCP server sync", audit::output(&out));
+            }
+            Ok(_) => {
+                if up_to_date(&read, level) != Some(true) {
+                    audit::error(
+                        "MCP server sync",
+                        "the files in storage/openidea are still out of date after the sync",
+                    );
+                }
+            }
+            Err(e) => audit::failed("MCP server sync", &e),
         }
     }
 }

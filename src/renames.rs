@@ -1,4 +1,5 @@
 use crate::Laravel;
+use crate::audit::Logged;
 use crate::index::RefKind;
 use crate::php::{self, Kind, is_blade};
 use crate::project::{Lines, find, rel};
@@ -382,11 +383,9 @@ impl Laravel {
         doc: &Document,
         action: CodeAction,
     ) -> Result<CodeAction, Error> {
-        let Some(pending) = action
-            .data
-            .as_deref()
-            .and_then(|d| serde_json::from_str::<Pending>(d).ok())
-        else {
+        let Some(pending) = action.data.as_deref().and_then(|d| {
+            serde_json::from_str::<Pending>(d).or_error("reading a code action's data")
+        }) else {
             return Ok(action);
         };
         let (project, root) = self
@@ -437,7 +436,7 @@ impl Laravel {
                 let text = if path == doc.path {
                     doc.text.clone()
                 } else {
-                    match project.read_file(&path) {
+                    match crate::project::read_listed(&project, &path) {
                         Ok(t) => t,
                         Err(_) => continue,
                     }
@@ -460,7 +459,7 @@ impl Laravel {
                     if skip.as_deref() == Some(path.as_str()) || !seen.insert(path.clone()) {
                         continue;
                     }
-                    let Ok(text) = project.read_file(&path) else {
+                    let Ok(text) = crate::project::read_listed(&project, &path) else {
                         continue;
                     };
                     let rel_path = rel(&root, &path).replace('\\', "/");

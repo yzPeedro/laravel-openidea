@@ -1,4 +1,5 @@
 mod artisan;
+mod audit;
 mod blade_syntax;
 mod casts;
 mod checks;
@@ -31,12 +32,13 @@ mod sections;
 mod toolconfig;
 mod tools;
 
+use audit::Logged;
 use index::{Cache, Entry, RefKind, is_model, parse_class};
 use openidea_plugin::providers::{CodeAction, CompletionItem, Document, LineMarker, Providers};
 use openidea_plugin::text::{offset, position};
 use openidea_plugin::{
-    Context, Diagnostic, Error, Event, EventKind, Invocation, Location, LogLevel, Position,
-    Project, Range, Severity, StatusItem, TextEdit, host,
+    Context, Diagnostic, Error, Event, EventKind, Invocation, Location, Position, Project, Range,
+    Severity, StatusItem, TextEdit, host,
 };
 use php::{StringArg, is_blade};
 use project::{Lines, join, project_of};
@@ -300,7 +302,6 @@ impl Laravel {
                 let known = project::is_laravel(&project);
                 self.projects.insert(root.clone(), known);
                 if known {
-                    host::log(LogLevel::Info, &format!("Laravel project at {root}"));
                     show_status(&project);
                 }
                 known
@@ -573,7 +574,7 @@ impl Laravel {
             .location
             .path
             .clone();
-        project.read_file(&path).ok()
+        crate::project::read_listed(project, &path).ok()
     }
 
     fn eloquent_members(
@@ -979,14 +980,18 @@ impl Laravel {
         let Some(project) = project_of(path) else {
             return;
         };
-        let Ok(text) = project.read_file(path) else {
+        let Some(text) = project
+            .read_file(path)
+            .or_warn(&format!("reading {path} for diagnostics"))
+        else {
             return;
         };
         let mut items = self.inspect(path, &text);
         if let Some(found) = self.analysis.get(path) {
             items.extend(found.iter().cloned());
         }
-        let _ = host::publish_diagnostics(path, &items);
+        host::publish_diagnostics(path, &items)
+            .or_error(&format!("publishing diagnostics for {path}"));
     }
 
     fn artisan(&self, ctx: &Invocation, args: &[&str]) -> Result<Option<String>, Error> {
@@ -1480,7 +1485,9 @@ impl Providers for Laravel {
         doc: &Document,
         action: CodeAction,
     ) -> Result<CodeAction, Error> {
+        let title = action.title.clone();
         self.resolve_pending(doc, action)
+            .inspect_err(|e| audit::failed(&format!("code action \"{title}\""), e))
     }
 
     fn code_actions(&mut self, doc: &Document, selection: Range) -> Vec<CodeAction> {
@@ -1521,34 +1528,8 @@ impl Providers for Laravel {
     }
 }
 
-impl openidea_plugin::Plugin for Laravel {
-    fn activate(&mut self, _ctx: &Context) -> Result<(), Error> {
-        self.cache.locale = host::setting_string("locale")
-            .filter(|l| !l.is_empty())
-            .unwrap_or_else(|| "en".into());
-        let _ = host::subscribe(EventKind::FileOpened);
-        let _ = host::subscribe(EventKind::FileSaved);
-        let _ = host::subscribe(EventKind::VcsChanged);
-        let _ = host::subscribe(EventKind::EditorFocused);
-        for project in host::projects().unwrap_or_default() {
-            if let Ok(root) = project.root()
-                && let Some((project, root)) = self.laravel_project(&root)
-            {
-                self.cache.warm(&project, &root);
-                self.project_symbols(&project, &root);
-                self.sync_mcp(&project);
-                self.sync_helpers(&project);
-            }
-        }
-        Ok(())
-    }
-
-    fn run_command(
-        &mut self,
-        id: &str,
-        ctx: &Invocation,
-        _arg: Option<&str>,
-    ) -> Result<Option<String>, Error> {
+impl Laravel {
+    fn command(&mut self, id: &str, ctx: &Invocation) -> Result<Option<String>, Error> {
         match id {
             "refresh-index" => {
                 self.cache.clear();
@@ -1582,6 +1563,49 @@ impl openidea_plugin::Plugin for Laravel {
             }
             _ => Err(Error::NotFound(format!("command {id}"))),
         }
+    }
+}
+
+impl openidea_plugin::Plugin for Laravel {
+    fn activate(&mut self, _ctx: &Context) -> Result<(), Error> {
+        self.cache.locale = host::setting_string("locale")
+            .filter(|l| !l.is_empty())
+            .unwrap_or_else(|| "en".into());
+        for kind in [
+            EventKind::FileOpened,
+            EventKind::FileSaved,
+            EventKind::VcsChanged,
+            EventKind::EditorFocused,
+        ] {
+            host::subscribe(kind).or_error(&format!("subscribing to {kind:?}"));
+        }
+        for project in host::projects()
+            .or_error("listing the open projects")
+            .unwrap_or_default()
+        {
+            if let Ok(root) = project.root()
+                && let Some((project, root)) = self.laravel_project(&root)
+            {
+                self.cache.warm(&project, &root);
+                self.project_symbols(&project, &root);
+                self.sync_mcp(&project);
+                self.sync_helpers(&project);
+            }
+        }
+        Ok(())
+    }
+
+    fn run_command(
+        &mut self,
+        id: &str,
+        ctx: &Invocation,
+        _arg: Option<&str>,
+    ) -> Result<Option<String>, Error> {
+        let result = self.command(id, ctx);
+        if let Err(e) = &result {
+            audit::failed(&format!("command {id}"), e);
+        }
+        result
     }
 
     fn handle_events(&mut self, events: &[Event], _ctx: &Invocation) {
@@ -2600,5 +2624,73 @@ return Post::query()->create([
             ["resources/views/components/forms/text-input.blade.php"]
         );
         assert!(related_candidates("app/Models/User.php").is_empty());
+    }
+
+    #[test]
+    fn a_healthy_project_logs_nothing() {
+        let host = setup();
+        let mut plugin = Laravel::default();
+        plugin.handle_events(
+            &[
+                Event::FileOpened("/project/routes/web.php".into()),
+                Event::FileSaved("/project/app/Models/User.php".into()),
+            ],
+            &host.invocation(),
+        );
+        plugin
+            .run_command("refresh-index", &host.invocation(), None)
+            .unwrap();
+        assert_eq!(host.logs(), Vec::new());
+    }
+
+    #[test]
+    fn failures_are_logged_as_warnings_and_errors() {
+        let host = setup().with_capabilities(&["project.read", "process:php"]);
+        host.set_setting("phpstanOnSave", "true");
+        host.add_file(
+            "phpstan.neon",
+            "parameters:
+    level: 5
+",
+        );
+        host.add_file("vendor/bin/phpstan", "");
+        host.on_process("php", |_, _| {
+            Ok(openidea_plugin::ProcessOutput {
+                status: Some(255),
+                stdout: String::new(),
+                stderr: "PHP Fatal error: Allowed memory size
+"
+                .into(),
+            })
+        });
+        let mut plugin = Laravel::default();
+        plugin.handle_events(
+            &[Event::FileSaved("/project/app/Models/User.php".into())],
+            &host.invocation(),
+        );
+        let err = plugin
+            .run_command("nope", &host.invocation(), None)
+            .unwrap_err();
+        let logs = host.logs();
+        assert!(
+            logs.contains(&(
+                openidea_plugin::LogLevel::Error,
+                "phpstan on save: no results for app/Models/User.php: exit code 255
+PHP Fatal error: Allowed memory size"
+                    .into()
+            )),
+            "{logs:?}"
+        );
+        assert!(
+            logs.contains(&(
+                openidea_plugin::LogLevel::Warn,
+                format!("command nope: {err}")
+            )),
+            "{logs:?}"
+        );
+        assert!(logs.iter().all(|(level, _)| matches!(
+            level,
+            openidea_plugin::LogLevel::Warn | openidea_plugin::LogLevel::Error
+        )));
     }
 }

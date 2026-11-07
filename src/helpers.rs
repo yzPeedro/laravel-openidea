@@ -1,11 +1,12 @@
 use crate::Laravel;
+use crate::audit;
 use crate::devtools;
 use crate::index::Entry;
 use crate::php;
 use crate::project::{abs, find, rel};
 use crate::refs;
 use crate::runner;
-use openidea_plugin::{LogLevel, Project, Range, host};
+use openidea_plugin::{Project, Range, host};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const STUB_PATH: &str = "storage/openidea/ide-helpers.php";
@@ -92,7 +93,7 @@ pub fn list_files(project: &Project, root: &str, base: &str) -> Vec<String> {
     };
     let mut out = Vec::new();
     for glob in globs {
-        for path in find(project, root, &glob, 3000) {
+        for path in crate::project::find_some(project, root, &glob, 3000) {
             let relative = rel(root, &path).replace('\\', "/");
             out.push(format!("{relative}\u{0}{path}"));
         }
@@ -296,8 +297,19 @@ impl Laravel {
             devtools::script(devtools::INSTALL_PHP),
             "helpers".into(),
         ]);
-        if let Err(e) = project.run_process(mode.program(), &run, Some(&wanted)) {
-            host::log(LogLevel::Warn, &format!("couldn't write {STUB_PATH}: {e}"));
+        match project.run_process(mode.program(), &run, Some(&wanted)) {
+            Ok(out) if out.status != Some(0) => {
+                audit::error("IDE helper sync", audit::output(&out));
+            }
+            Ok(_) => {
+                if project.read_file(STUB_PATH).unwrap_or_default() != wanted {
+                    audit::error(
+                        "IDE helper sync",
+                        format!("{STUB_PATH} is still out of date after the sync"),
+                    );
+                }
+            }
+            Err(e) => audit::failed("IDE helper sync", &e),
         }
     }
 

@@ -173,7 +173,7 @@ fn classes(
     paths
         .into_iter()
         .filter_map(|p| {
-            let text = project.read_file(&p).ok()?;
+            let text = crate::project::read_listed(project, &p).ok()?;
             if !keep(&text) {
                 return None;
             }
@@ -257,7 +257,7 @@ pub fn tests(project: &Project, root: &str) -> Vec<Found> {
     paths
         .into_iter()
         .filter_map(|p| {
-            let text = project.read_file(&p).ok()?;
+            let text = crate::project::read_listed(project, &p).ok()?;
             let count = text.matches("public function test").count()
                 + text.matches("#[Test]").count()
                 + text.matches("\ntest(").count()
