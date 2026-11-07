@@ -76,6 +76,11 @@
       ],
       "default": "off"
     },
+    "ideHelpers": {
+      "type": "boolean",
+      "title": "Write IDE helper stubs to storage/openidea so Intelephense knows auth() returns the auth manager and your user model",
+      "default": true
+    },
     "mcpAccess": {
       "type": "string",
       "title": "What connected AI agents may do through the MCP server: read (inspect the app), write (also generators, migrate, seed, caches, Pint, tests) or full (also Tinker and every Artisan command)",

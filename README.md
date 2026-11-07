@@ -111,6 +111,7 @@ Completion and navigation come from cached indexes of your project files, built 
 - **Tool configs:** completion for presets, rules and options in `pint.json`, rule sets and rules in `.php-cs-fixer.php`, and parameters, levels and includes (Larastan's too) in `phpstan.neon`, with NEON highlighting.
 - **Pest:** dataset names in `->with('…')` and groups in `->group('…')`, `->groups('…')` and `#[Group('…')]`.
 - **File templates:** *New File* offers a Laravel model, controller, Form Request, policy, job, event, listener, middleware and Pest test.
+- **Helpers:** `auth()->` completes the guard methods and `auth()->user()` is your user model, without Intelephense's "Undefined method" (a stub the plugin keeps in `storage/openidea/ide-helpers.php`, ignored by git; turn it off with `ideHelpers`). Path helpers and `Storage` calls suggest the files and folders under their own folder or disk root; `logs()`, `app()`/`resolve()`, `url()`/`redirect()`, `old()`, `request()` and `$request->input()` complete channels, container ids, route URIs and validated fields.
 - **Folio:** pages under the Folio paths of `FolioServiceProvider` are routes: their `name()` completes in `route()`, Ctrl+click opens the page, and the hub's Routes section lists every page with its URI.
 - **Cached routes:** after `php artisan route:cache`, named routes from packages (Sanctum, Horizon, Filament…) are read from `bootstrap/cache/routes-v7.php`.
 - **Pivot attributes:** after `->pivot->`, or the name given with `->as()`, the keys, `withPivot()` columns and timestamps of many-to-many relations.
@@ -237,6 +238,7 @@ A tool above the level tells the agent to ask you, and connected clients get the
 | `nPlusOneInspection` | on | Report relations loaded once per item in a `foreach` |
 | `envKeysInspection` | on | Report keys missing between `.env` and `.env.example` |
 | `formatOnSave` | `off` | Format the saved PHP file with `pint` or `php-cs-fixer` from `vendor/bin` |
+| `ideHelpers` | on | Keep `storage/openidea/ide-helpers.php` so Intelephense types `auth()` and your user model |
 | `mcpAccess` | `read` | What AI agents may do through the MCP server: `read`, `write` or `full` (see [AI agents](#ai-agents)) |
 | `phpstanOnSave` | off | Analyse the saved PHP file with PHPStan (and Larastan) when the project has a `phpstan.neon` |
 

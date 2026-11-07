@@ -8,6 +8,7 @@ mod directives;
 mod dotenv;
 mod eloquent;
 mod formrequest;
+mod helpers;
 mod hierarchy;
 mod index;
 mod inspect;
@@ -59,6 +60,8 @@ pub struct Laravel {
     warned: BTreeSet<String>,
     pest: BTreeMap<String, pest::Names>,
     mcp_synced: BTreeMap<String, String>,
+    helpers_synced: BTreeMap<String, String>,
+    listed: BTreeMap<String, (u64, Vec<String>)>,
 }
 
 fn kebab(name: &str) -> String {
@@ -806,6 +809,21 @@ impl Laravel {
                 (RefKind::Column, schema_properties(doc, *call_start))
             }
             Want::PathParams(before) => (RefKind::Column, path_params(doc, *before)),
+            Want::Paths(base) => (RefKind::Asset, self.path_items(project, root, base)),
+            Want::DiskPaths(call_start) => {
+                let config = project
+                    .read_file("config/filesystems.php")
+                    .unwrap_or_default();
+                let disk = helpers::disk_before(&doc.text, *call_start);
+                let entries = helpers::disk_root(&config, disk.as_deref())
+                    .map(|base| self.path_items(project, root, &base))
+                    .unwrap_or_default();
+                (RefKind::Asset, entries)
+            }
+            Want::RequestFields => (
+                RefKind::Column,
+                self.request_fields(project, root, &doc.text, is_blade(&doc.path)),
+            ),
             Want::RoutePaths => {
                 let mut seen = BTreeSet::new();
                 let mut entries = Vec::new();
@@ -1519,6 +1537,7 @@ impl openidea_plugin::Plugin for Laravel {
                 self.cache.warm(&project, &root);
                 self.project_symbols(&project, &root);
                 self.sync_mcp(&project);
+                self.sync_helpers(&project);
             }
         }
         Ok(())
@@ -1573,6 +1592,10 @@ impl openidea_plugin::Plugin for Laravel {
                     if let Some(project) = project_of(path)
                         && let Ok(root) = project.root()
                     {
+                        if path.replace('\\', "/").ends_with("/config/auth.php") {
+                            self.helpers_synced.remove(&root);
+                            self.sync_helpers(&project);
+                        }
                         let before = self.snapshot_keys(&project, &root, path);
                         self.cache.invalidate(&root, path);
                         let after = self.snapshot_keys(&project, &root, path);
@@ -1609,6 +1632,7 @@ impl openidea_plugin::Plugin for Laravel {
                 Event::EditorFocused(Some(path)) => {
                     if let Some((project, _)) = self.laravel_project(path) {
                         self.sync_mcp(&project);
+                        self.sync_helpers(&project);
                     }
                 }
                 _ => {}

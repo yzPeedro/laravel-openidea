@@ -27,6 +27,37 @@ $own = static function (string $path) use ($base): void {
 
 $hooked = static fn (): bool => is_file($autoload) && str_contains((string) file_get_contents($autoload), $marker);
 
+$tidy = static function () use ($dir): void {
+    if (is_dir($dir) && array_diff(scandir($dir) ?: [], ['.', '..', '.gitignore']) === []) {
+        @unlink($dir . '/.gitignore');
+        @rmdir($dir);
+    }
+};
+
+if ($action === 'helpers') {
+    $content = (string) stream_get_contents(STDIN);
+    $path = $dir . '/ide-helpers.php';
+    if ($content === '') {
+        @unlink($path);
+        $tidy();
+        $emit(['ok' => true, 'written' => false]);
+        exit(0);
+    }
+    if (! is_dir($dir) && ! @mkdir($dir, 0775, true) && ! is_dir($dir)) {
+        $emit(['ok' => false, 'error' => "cannot create $dir"]);
+        exit(1);
+    }
+    $own($dir);
+    if (! is_file($dir . '/.gitignore')) {
+        file_put_contents($dir . '/.gitignore', "*\n");
+        $own($dir . '/.gitignore');
+    }
+    file_put_contents($path, $content);
+    $own($path);
+    $emit(['ok' => true, 'written' => true]);
+    exit(0);
+}
+
 if ($action === 'install') {
     if (! is_file($autoload)) {
         $emit(['ok' => false, 'error' => 'vendor/autoload.php is missing; run composer install']);
@@ -76,10 +107,7 @@ if ($action === 'uninstall') {
         file_put_contents($autoload, $unhook(file_get_contents($autoload)));
     }
     @unlink($file);
-    if (! is_file($dir . '/mcp.php')) {
-        @unlink($dir . '/.gitignore');
-        @rmdir($dir);
-    }
+    $tidy();
     $emit(['ok' => true, 'active' => false]);
     exit(0);
 }
@@ -243,10 +271,7 @@ if ($action === 'agents-off') {
     foreach (['mcp.php', 'install.php', 'recorder.source', 'mcp-access.json'] as $name) {
         @unlink($dir . '/' . $name);
     }
-    if (! is_file($file)) {
-        @unlink($dir . '/.gitignore');
-        @rmdir($dir);
-    }
+    $tidy();
     $emit(['ok' => true] + $agentStatus());
     exit(0);
 }
