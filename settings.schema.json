@@ -76,6 +76,16 @@
       ],
       "default": "off"
     },
+    "mcpAccess": {
+      "type": "string",
+      "title": "What connected AI agents may do through the MCP server: read (inspect the app), write (also generators, migrate, seed, caches, Pint, tests) or full (also Tinker and every Artisan command)",
+      "enum": [
+        "read",
+        "write",
+        "full"
+      ],
+      "default": "read"
+    },
     "phpstanOnSave": {
       "type": "boolean",
       "title": "Run PHPStan (and Larastan) on the saved file and show its errors",

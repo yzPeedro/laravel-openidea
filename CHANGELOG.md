@@ -16,6 +16,9 @@ All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](h
 - Completion in tool configs: presets, rules and their options in `pint.json`; rule sets and rules in `.php-cs-fixer.php` and `.php-cs-fixer.dist.php`; parameters (Larastan's included), levels and extension includes in `phpstan.neon` and other `.neon` files, which are now highlighted.
 - Pest: dataset names in `->with('…')` and group names in `->group('…')`, `->groups('…')` and `#[Group('…')]`, from the project's tests.
 - File templates for Laravel classes in *New File*: model, controller, Form Request, policy, job, event, listener, middleware and Pest test.
+- MCP server: every call boots the app again, so agents see routes, models, config and code as they are now, and the server picks up plugin updates without restarting the agent. The plugin keeps `storage/openidea` in step whenever you focus an editor.
+- MCP access levels (`mcpAccess`, read by default): read gives the inspection tools, now with `list_classes` (controllers, requests, enums, jobs, policies… by kind), `check_env_keys`, `list_tests`, `run_phpstan` and read-only Artisan commands; write adds `make:*`, `migrate`, `db:seed`, cache commands, `format_code`, `run_tests`, `query_to_sql` (the SQL of an Eloquent expression, captured with `DB::pretend()` without running it) and `audit_recorder`; full adds `run_tinker` and every Artisan command. Agents are told when a tool needs a higher level, connected clients get the new tool list when it changes, and no tool installs, changes or removes the plugin, its files or its settings. The AI Agents page shows the level and what each one unlocks.
+- MCP `list_models` and `list_classes` find every class in `app/`, not only the ones in Composer's classmap.
 - Model and relation indexes are only rebuilt when a model file changes, so completion stays within the editor's time budget while you type.
 
 ## 0.13.1

@@ -51,7 +51,7 @@ https://github.com/user-attachments/assets/bc56e061-73f0-484d-8e1c-d9776cdc9692
 | 🐘 **Tinker in tabs** | Write PHP like in an editor, press Ctrl+Enter, get Tinker-style coloured output with dumps, SQL and timing. |
 | 🔄 **SQL to Laravel and back** | Type SQL in any dialect and watch it turn into Eloquent or query builder code as you type, or swap sides to see the MySQL your Laravel code runs; run it in Tinker, copy it or insert it at the cursor. Right-click a query in the editor to copy it as MySQL. |
 | 🔍 **Live Audit** | Requests, SQL with the line that ran it, events with payloads and listeners, jobs, cache, mail, HTTP client calls, gates, logs, exceptions and dumps, with N+1 and slow query insights. |
-| 🤖 **AI agents that know your app** | An MCP server that answers with the hub's runtime data, connected in one click next to Laravel Boost. |
+| 🤖 **AI agents that know your app** | A live MCP server with the hub's runtime data, Artisan, PHPStan, Pint, tests and Tinker behind an access level you choose (read, write or full), connected in one click next to Laravel Boost. |
 | 🐳 **Docker-aware** | Artisan, Tinker and the recorder run with `php` or in a throwaway Docker Compose container, detected automatically. |
 
 ## Installation
@@ -201,9 +201,17 @@ The hub groups records by request, filters them by type, and flags **N+1 queries
 
 ### AI agents
 
-**Connect AI agents** installs the `laravel-openidea` MCP server and registers it in `.mcp.json` and, when their folders exist, in the Cursor, VS Code (Copilot), Junie and Gemini configs, with a short guide in `AGENTS.md`. Agents then call tools that answer from the running app:
+**Connect AI agents** installs the `laravel-openidea` MCP server and registers it in `.mcp.json` and, when their folders exist, in the Cursor, VS Code (Copilot), Junie and Gemini configs, with a short guide in `AGENTS.md`. Every call boots the app again, so answers follow your code as it changes, and the plugin keeps the server files in step with the plugin version.
 
-`app_overview` · `list_routes` · `list_events_and_listeners` · `list_models` · `list_container_bindings` · `list_schedule` · `list_queues` · `list_artisan_commands` · `get_config` · `database_schema` · `missing_translations` · `read_logs` · `audit_recent` · `run_tinker` · `hub_sections`
+What agents may do is up to you, with the `mcpAccess` setting:
+
+| Level | Tools |
+| --- | --- |
+| **read** (default) | `app_overview` · `access_level` · `list_routes` · `list_classes` · `list_events_and_listeners` · `list_models` · `list_container_bindings` · `list_schedule` · `list_queues` · `list_artisan_commands` · `get_config` (secrets masked) · `database_schema` · `missing_translations` · `check_env_keys` · `list_tests` · `run_phpstan` · `read_logs` · `audit_recent` · `hub_sections` · `run_artisan` for read-only commands (`route:list`, `about`, `migrate:status`, `model:show`…) |
+| **write** | adds `format_code` (Pint or PHP CS Fixer), `run_tests`, `query_to_sql` (the SQL of an Eloquent expression, captured with `DB::pretend()` without running it), `audit_recorder` and `run_artisan` for `make:*`, `migrate`, `db:seed`, cache and optimize commands |
+| **full** | adds `run_tinker` and `run_artisan` for every other command (`migrate:fresh`, `db:wipe`, `key:generate`…) |
+
+A tool above the level tells the agent to ask you, and connected clients get the new tool list when you change it. No tool installs, changes or removes the plugin, its settings, its grants or its files in `storage/openidea`.
 
 [Laravel Boost](https://github.com/laravel/boost) installs and updates from the same page; with Boost the guide goes to `.ai/guidelines` so `boost:update` merges it.
 
@@ -229,6 +237,7 @@ The hub groups records by request, filters them by type, and flags **N+1 queries
 | `nPlusOneInspection` | on | Report relations loaded once per item in a `foreach` |
 | `envKeysInspection` | on | Report keys missing between `.env` and `.env.example` |
 | `formatOnSave` | `off` | Format the saved PHP file with `pint` or `php-cs-fixer` from `vendor/bin` |
+| `mcpAccess` | `read` | What AI agents may do through the MCP server: `read`, `write` or `full` (see [AI agents](#ai-agents)) |
 | `phpstanOnSave` | off | Analyse the saved PHP file with PHPStan (and Larastan) when the project has a `phpstan.neon` |
 
 Live Audit reads two environment variables from your app: `OPENIDEA_AUDIT=false` turns the recorder off and `OPENIDEA_AUDIT_SHOW_PII=true` shows personal data.
@@ -239,7 +248,7 @@ Live Audit reads two environment variables from your app: `OPENIDEA_AUDIT=false`
 - The Live Audit recorder runs only in the `local`, `development` and `dev` environments. It lives in `storage/openidea`, which has its own `.gitignore`, and loads through a marked hook in `vendor/autoload.php`, so no tracked file changes. *Turn off* removes both.
 - Passwords, tokens, keys, cookies and signatures are always masked in recorded payloads. Personal data such as e-mail, CPF, phone, documents and addresses is masked by default.
 - Pint, PHP CS Fixer and PHPStan only run on save when you turn them on, and they're the project's own `vendor/bin` tools, run like Artisan.
-- The MCP server masks secrets in config values. Its `run_tinker` tool runs code in your local app, so only connect agents you trust.
+- The MCP server masks secrets in config values and only reads at the default `read` level. `write` lets agents generate files, migrate, seed and run tests; `full` runs any PHP through Tinker, which can't be fenced in, so give it only to agents you trust. The level decides what the server offers, not what an agent with its own file or shell tools could do anyway.
 - Nothing is sent anywhere: records stay in `storage/logs/openidea-audit.jsonl` on your machine.
 
 ## How it works

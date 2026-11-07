@@ -13,6 +13,7 @@ mod index;
 mod inspect;
 mod inspections;
 mod logs;
+mod mcp;
 mod members;
 mod modeldoc;
 mod panels;
@@ -57,6 +58,7 @@ pub struct Laravel {
     analysis: BTreeMap<String, Vec<Diagnostic>>,
     warned: BTreeSet<String>,
     pest: BTreeMap<String, pest::Names>,
+    mcp_synced: BTreeMap<String, String>,
 }
 
 fn kebab(name: &str) -> String {
@@ -1509,12 +1511,14 @@ impl openidea_plugin::Plugin for Laravel {
         let _ = host::subscribe(EventKind::FileOpened);
         let _ = host::subscribe(EventKind::FileSaved);
         let _ = host::subscribe(EventKind::VcsChanged);
+        let _ = host::subscribe(EventKind::EditorFocused);
         for project in host::projects().unwrap_or_default() {
             if let Ok(root) = project.root()
                 && let Some((project, root)) = self.laravel_project(&root)
             {
                 self.cache.warm(&project, &root);
                 self.project_symbols(&project, &root);
+                self.sync_mcp(&project);
             }
         }
         Ok(())
@@ -1601,6 +1605,11 @@ impl openidea_plugin::Plugin for Laravel {
                     self.cache.clear();
                     self.symbols.clear();
                     paths.insert(repo.clone());
+                }
+                Event::EditorFocused(Some(path)) => {
+                    if let Some((project, _)) = self.laravel_project(path) {
+                        self.sync_mcp(&project);
+                    }
                 }
                 _ => {}
             }

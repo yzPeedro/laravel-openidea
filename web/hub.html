@@ -2399,22 +2399,33 @@ setInterval(() => {
 
 /* ---------- ai agents ---------- */
 const MCP_TOOLS = [
-  ["app_overview", "Versions, environment, drivers, packages and counts"],
-  ["list_routes", "Routes with action, middleware and controller file"],
-  ["list_events_and_listeners", "Every event and the listeners that run"],
-  ["list_models", "Tables, fillable, casts, relations, scopes, observers"],
-  ["list_container_bindings", "Abstract → concrete, singleton or not"],
-  ["list_schedule", "Cron, command, next run, overlap flags"],
-  ["list_queues", "Connections, job classes, failed jobs"],
-  ["list_artisan_commands", "Commands with usage"],
-  ["get_config", "Config values, secrets masked"],
-  ["database_schema", "Tables, columns, indexes, foreign keys"],
-  ["missing_translations", "Keys missing per locale"],
-  ["read_logs", "Latest log entries by level"],
-  ["audit_recent", "Live Audit records plus N+1, slow query and failure insights"],
-  ["run_tinker", "Run PHP in the booted app"],
-  ["hub_sections", "Where things are in the hub"],
+  ["read", "app_overview", "Versions, environment, drivers, packages and counts"],
+  ["read", "access_level", "The level you allowed and what each one unlocks"],
+  ["read", "list_routes", "Routes with action, middleware and controller file"],
+  ["read", "list_classes", "Controllers, requests, enums, jobs, policies… by kind"],
+  ["read", "list_events_and_listeners", "Every event and the listeners that run"],
+  ["read", "list_models", "Tables, fillable, casts, relations, scopes, observers"],
+  ["read", "list_container_bindings", "Abstract → concrete, singleton or not"],
+  ["read", "list_schedule", "Cron, command, next run, overlap flags"],
+  ["read", "list_queues", "Connections, job classes, failed jobs"],
+  ["read", "list_artisan_commands", "Commands with usage"],
+  ["read", "run_artisan", "Read-only commands; more with write or full"],
+  ["read", "get_config", "Config values, secrets masked"],
+  ["read", "database_schema", "Tables, columns, indexes, foreign keys"],
+  ["read", "missing_translations", "Keys missing per locale"],
+  ["read", "check_env_keys", "Keys missing between .env and .env.example"],
+  ["read", "list_tests", "Pest and PHPUnit tests"],
+  ["read", "run_phpstan", "PHPStan and Larastan errors"],
+  ["read", "read_logs", "Latest log entries by level"],
+  ["read", "audit_recent", "Live Audit records plus N+1, slow query and failure insights"],
+  ["read", "hub_sections", "Where things are in the hub"],
+  ["write", "format_code", "Pint or PHP CS Fixer on files"],
+  ["write", "run_tests", "Pest or PHPUnit"],
+  ["write", "query_to_sql", "The SQL a query runs, captured without running it"],
+  ["write", "audit_recorder", "Turn Live Audit on or off"],
+  ["full", "run_tinker", "Run any PHP in the booted app"],
 ];
+const MCP_LEVELS = { read: "Read only", write: "Write", full: "Full access" };
 state.agents = { status: null, busy: false };
 
 function renderAgents() {
@@ -2430,7 +2441,12 @@ function renderAgents() {
   connect.addEventListener("click", () => { G.busy = true; send({ type: "agents", action: "agents" }); renderAgents(); });
   const off = el("button", { className: "btn ghost", textContent: "Disconnect", disabled: busy || !connected });
   off.addEventListener("click", () => { G.busy = true; send({ type: "agents", action: "agents-off" }); renderAgents(); });
-  const tools = el("div", { className: "tools" }, ...MCP_TOOLS.map(([n, d]) => el("div", {}, el("b", { textContent: n }), el("span", { textContent: d }))));
+  const access = st.access || "read";
+  const rank = { read: 0, write: 1, full: 2 };
+  const tools = el("div", { className: "tools" }, ...MCP_TOOLS.map(([lvl, n, d]) => el("div", { style: rank[lvl] > rank[access] ? "opacity:.45" : "" }, el("b", { textContent: n }), el("span", { textContent: (lvl === "read" ? "" : MCP_LEVELS[lvl] + " · ") + d }))));
+  const level = el("div", { className: "row" },
+    el("span", { className: "au-state " + (access === "read" ? "off" : "on"), textContent: "Access: " + MCP_LEVELS[access] }),
+    el("span", { style: "color:var(--openidea-fg-muted)", textContent: "Change it in Settings › Plugins › Laravel OpenIDEA › MCP access. Agents never get to install, change or remove the plugin, its settings or its grants." }));
   const mcp = el("div", { className: "card" },
     el("h3", {}, icon("robot", "lg"), "Laravel OpenIDEA MCP server"),
     el("p", { textContent: "A stdio MCP server that boots your app and answers with the hub's data at runtime. Connecting copies it to storage/openidea (ignored by git), registers it in .mcp.json (Claude Code, Codex via ACP) and, when their folders exist, .cursor/mcp.json, .vscode/mcp.json (Copilot), .junie/mcp/mcp.json and .gemini/settings.json, and adds a short guide to AGENTS.md and CLAUDE.md (or to .ai/guidelines when Laravel Boost is installed, so boost:update merges it)." }),
@@ -2439,7 +2455,8 @@ function renderAgents() {
     (st.configured || []).length ? el("div", { className: "chiplist" }, ...st.configured.map((f) => el("span", { textContent: f }))) : null,
     (st.guidelines || []).length ? el("p", { textContent: "Guidelines in " + st.guidelines.join(", ") }) : null,
     st.error ? el("div", { className: "insight bad" }, el("b", { textContent: "Error" }), el("span", { textContent: st.error })) : null,
-    el("div", { className: "block-title", textContent: "Tools the agents get" }), tools);
+    el("div", { className: "block-title", textContent: "Tools the agents get" }), level, tools,
+    el("p", { style: "color:var(--openidea-fg-muted)", textContent: "Every call boots the app again, so agents see routes, models and config as they are now. Full access runs any PHP like Tinker does, so it can't be fenced in; and an agent with its own file tools can edit the project anyway. The level decides what this server offers, not what the agent could do by other means." }));
   const boostInstalled = st.boost || !!st.boostVersion;
   const install = el("button", { className: "btn primary", textContent: "Install Boost" });
   install.addEventListener("click", () => send({ type: "composer", argv: ["require", "laravel/boost", "--dev"] }));

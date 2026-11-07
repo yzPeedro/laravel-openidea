@@ -1183,15 +1183,13 @@ impl Laravel {
             return Err(Error::Invalid(format!("unknown agents action {action}")));
         }
         let (project, root) = project(ctx)?;
+        if action == "agents-status" {
+            self.sync_mcp(&project);
+        }
         let mode = runner::detect(&project);
         let (command, args) = mode.mcp_server(&root, runner::compose_file(&project));
-        let payload = json!({
-            "mcp": devtools::MCP_PHP,
-            "command": command,
-            "args": args,
-            "guidelines": devtools::GUIDELINES,
-        })
-        .to_string();
+        let access = crate::mcp::access_setting();
+        let payload = crate::mcp::payload(&command, &args, access);
         let task = host::begin_task("AI agents", true);
         let run = mode.php_args(&[
             "-r".into(),
@@ -1218,10 +1216,11 @@ impl Laravel {
                 last["command"] = json!(format!("{command} {}", args.join(" ")));
                 last["boostVersion"] = json!(devtools::lock_version(&lock, "laravel/boost"));
                 last["runner"] = json!(mode.label());
+                last["access"] = json!(access);
                 last
             }
             Err(e) => {
-                json!({ "type": "agents", "action": action, "ok": false, "error": denied(e, &mode) })
+                json!({ "type": "agents", "action": action, "ok": false, "error": denied(e, &mode), "access": access })
             }
         };
         post(view, message);
