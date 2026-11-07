@@ -10,6 +10,7 @@ pub const RECORDER_PHP: &str = include_str!("../php/Recorder.php");
 pub const MCP_PHP: &str = include_str!("../php/mcp.php");
 pub const SELECTION_PHP: &str = include_str!("../php/selection.php");
 pub const CREATE_FILE_PHP: &str = include_str!("../php/create_file.php");
+pub const TOOLS_PHP: &str = include_str!("../php/tools.php");
 pub const GUIDELINES: &str = include_str!("../php/guidelines.md");
 pub const AUDIT_LOG: &str = "storage/logs/openidea-audit.jsonl";
 const MARKER: &str = "@@openidea@@";

@@ -107,6 +107,10 @@ Completion and navigation come from cached indexes of your project files, built 
 - **Types:** Laravel, package and project traits after `use`, interfaces after `implements` and base classes after `extends`, ranked by folder (models get `HasFactory` and `SoftDeletes` first, jobs get `ShouldQueue`, and so on).
 - **Inspections and quick fixes:** unknown views, routes, rules, middleware and OpenAPI refs; N+1 queries (a relation read on each item of a `foreach` over a query that doesn't eager load it, fixed by adding `with()`); columns that don't exist in the model's table in `where`, `orderBy`, `pluck` and similar calls, with the closest column as the fix; `env()` outside `config/`, replaced by the `config()` key that reads the same variable; `create()` keys that `$fillable` leaves out, added to the model's `$fillable`; keys missing between `.env` and `.env.example`, copied over (a new key goes to `.env.example` without its value); *Add translation*; *Generate @property PHPDoc* for models from migrations, casts and relations; *Laravel: Go to Related Class or View* for Livewire and Blade components.
 - **Refactorings (Alt+Enter):** change a route's name in its `->name('…')` or a translation key in a `lang/` file, and *Rename route* or *Rename translation* updates every usage across PHP and Blade, and for translations the same key in the other locales; it works before and after saving. A view that no longer exists (renamed or moved to another folder) offers the closest existing view, in that usage or in every usage. *Extract the validation into a Form Request* turns `$request->validate([…])`, `request()->validate(…)` or `$this->validate($request, …)` into `app/Http/Requests/<Method><Model>Request.php` with `rules()` (and `messages()`/`attributes()`), types the parameter with it, calls `validated()` and tidies the imports (needs `process:php` or `process:docker` to create the file).
+- **Tools on save (opt-in):** set `formatOnSave` to `pint` or `php-cs-fixer` and turn on `phpstanOnSave` to format and analyse each PHP file you save, using the project's own `vendor/bin` tools and config (Larastan works through `phpstan.neon`). PHPStan errors show as warnings on their lines. They run in the background with a progress item in the status bar and stop after 15 seconds; a tool that times out or fails is reported once.
+- **Tool configs:** completion for presets, rules and options in `pint.json`, rule sets and rules in `.php-cs-fixer.php`, and parameters, levels and includes (Larastan's too) in `phpstan.neon`, with NEON highlighting.
+- **Pest:** dataset names in `->with('…')` and groups in `->group('…')`, `->groups('…')` and `#[Group('…')]`.
+- **File templates:** *New File* offers a Laravel model, controller, Form Request, policy, job, event, listener, middleware and Pest test.
 - **Folio:** pages under the Folio paths of `FolioServiceProvider` are routes: their `name()` completes in `route()`, Ctrl+click opens the page, and the hub's Routes section lists every page with its URI.
 - **Cached routes:** after `php artisan route:cache`, named routes from packages (Sanctum, Horizon, Filament…) are read from `bootstrap/cache/routes-v7.php`.
 - **Pivot attributes:** after `->pivot->`, or the name given with `->as()`, the keys, `withPivot()` columns and timestamps of many-to-many relations.
@@ -224,6 +228,8 @@ The hub groups records by request, filters them by type, and flags **N+1 queries
 | `fillableInspection` | on | Report `create()` keys that `$fillable` leaves out |
 | `nPlusOneInspection` | on | Report relations loaded once per item in a `foreach` |
 | `envKeysInspection` | on | Report keys missing between `.env` and `.env.example` |
+| `formatOnSave` | `off` | Format the saved PHP file with `pint` or `php-cs-fixer` from `vendor/bin` |
+| `phpstanOnSave` | off | Analyse the saved PHP file with PHPStan (and Larastan) when the project has a `phpstan.neon` |
 
 Live Audit reads two environment variables from your app: `OPENIDEA_AUDIT=false` turns the recorder off and `OPENIDEA_AUDIT_SHOW_PII=true` shows personal data.
 
@@ -232,6 +238,7 @@ Live Audit reads two environment variables from your app: `OPENIDEA_AUDIT=false`
 - The plugin is a sandboxed WebAssembly component. It reads project files, and it runs processes only through the `process:php` and `process:docker` permissions you grant. It writes to the editor (`editor.read`, `editor.write`) and the clipboard (`clipboard`) only when you press the insert or copy button of SQL to Laravel, and only if you allowed it.
 - The Live Audit recorder runs only in the `local`, `development` and `dev` environments. It lives in `storage/openidea`, which has its own `.gitignore`, and loads through a marked hook in `vendor/autoload.php`, so no tracked file changes. *Turn off* removes both.
 - Passwords, tokens, keys, cookies and signatures are always masked in recorded payloads. Personal data such as e-mail, CPF, phone, documents and addresses is masked by default.
+- Pint, PHP CS Fixer and PHPStan only run on save when you turn them on, and they're the project's own `vendor/bin` tools, run like Artisan.
 - The MCP server masks secrets in config values. Its `run_tinker` tool runs code in your local app, so only connect agents you trust.
 - Nothing is sent anywhere: records stay in `storage/logs/openidea-audit.jsonl` on your machine.
 

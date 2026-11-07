@@ -2,6 +2,7 @@ mod artisan;
 mod blade_syntax;
 mod casts;
 mod checks;
+mod completions;
 mod devtools;
 mod directives;
 mod dotenv;
@@ -15,6 +16,7 @@ mod logs;
 mod members;
 mod modeldoc;
 mod panels;
+mod pest;
 mod php;
 mod project;
 mod queries;
@@ -24,6 +26,8 @@ mod renames;
 mod resources;
 mod runner;
 mod sections;
+mod toolconfig;
+mod tools;
 
 use index::{Cache, Entry, RefKind, is_model, parse_class};
 use openidea_plugin::providers::{CodeAction, CompletionItem, Document, LineMarker, Providers};
@@ -50,6 +54,9 @@ pub struct Laravel {
     symbols: BTreeMap<String, std::rc::Rc<Vec<hierarchy::ProjectSymbol>>>,
     saved: Vec<renames::Saved>,
     originals: BTreeMap<String, String>,
+    analysis: BTreeMap<String, Vec<Diagnostic>>,
+    warned: BTreeSet<String>,
+    pest: BTreeMap<String, pest::Names>,
 }
 
 fn kebab(name: &str) -> String {
@@ -955,7 +962,10 @@ impl Laravel {
         let Ok(text) = project.read_file(path) else {
             return;
         };
-        let items = self.inspect(path, &text);
+        let mut items = self.inspect(path, &text);
+        if let Some(found) = self.analysis.get(path) {
+            items.extend(found.iter().cloned());
+        }
         let _ = host::publish_diagnostics(path, &items);
     }
 
@@ -1229,6 +1239,9 @@ impl Providers for Laravel {
         };
         if is_env_file(&doc.path) {
             return self.env_completion(&project, &root, doc, cursor, at);
+        }
+        if let Some(items) = self.tool_completion(&project, &root, doc, cursor) {
+            return items;
         }
         if let Some((accessor, start)) = pivot_access(&doc.text, cursor) {
             let prefix = format!("{accessor}.");
@@ -1562,6 +1575,12 @@ impl openidea_plugin::Plugin for Laravel {
                         self.remember_renames(path, before, after);
                         if let Ok(text) = project.read_file(path) {
                             self.remember_original(&root, path, &text, true);
+                        }
+                        if path.replace('\\', "/").contains("/tests/") {
+                            self.pest.remove(&root);
+                        }
+                        if self.laravel_project(path).is_some() {
+                            self.tools_on_save(&project, &root, path);
                         }
                         if path.ends_with(".php") {
                             self.symbols.remove(&root);

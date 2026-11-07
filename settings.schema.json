@@ -66,6 +66,21 @@
       ],
       "default": "auto"
     },
+    "formatOnSave": {
+      "type": "string",
+      "title": "Format PHP files on save with",
+      "enum": [
+        "off",
+        "pint",
+        "php-cs-fixer"
+      ],
+      "default": "off"
+    },
+    "phpstanOnSave": {
+      "type": "boolean",
+      "title": "Run PHPStan (and Larastan) on the saved file and show its errors",
+      "default": false
+    },
     "dockerService": {
       "type": "string",
       "title": "Docker Compose service for Artisan (empty: detect)",
