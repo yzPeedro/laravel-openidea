@@ -60,7 +60,7 @@ if ($action === 'helpers') {
 
 if ($action === 'hub') {
     $index = (string) stream_get_contents(STDIN);
-    $sections = array_values(array_filter(array_map('trim', explode("\n", $index)), static fn ($s) => preg_match('/^[a-z0-9-]+$/', $s) === 1));
+    $sections = array_values(array_filter(array_map('trim', explode("\n", $index)), static fn ($s) => preg_match('/^[A-Za-z0-9_-]+$/', $s) === 1));
     $hub = $dir . '/hub';
     if (! is_dir($hub) && ! @mkdir($hub, 0775, true) && ! is_dir($hub)) {
         $emit(['ok' => false, 'error' => "cannot create $hub"]);

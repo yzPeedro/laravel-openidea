@@ -24,6 +24,7 @@ mod logs;
 mod mcp;
 mod members;
 mod modeldoc;
+mod modelmap;
 mod namespaces;
 mod objects;
 mod panels;
@@ -82,6 +83,7 @@ pub struct Laravel {
     hub_synced: BTreeSet<String>,
     hub_tables: Option<(String, HubTables)>,
     facts_cache: Option<(String, std::rc::Rc<checks::Parts>)>,
+    scan_cache: Option<(String, std::rc::Rc<resources::Scan>)>,
     live: BTreeMap<String, u64>,
 }
 
@@ -1020,6 +1022,36 @@ impl Laravel {
             .into_iter()
             .next()?;
         Some(format!("{namespace}\\{model}"))
+    }
+
+    fn model_marker(
+        &mut self,
+        doc: &Document,
+        project: &Project,
+        root: &str,
+    ) -> Option<LineMarker> {
+        let name = self
+            .cache
+            .get(RefKind::Model, project, root)
+            .iter()
+            .find(|e| e.location.path == doc.path)?
+            .key
+            .clone();
+        let file = hubtabs::model_file(&name);
+        project.read_file(&file).ok()?;
+        let at = modelmap::first_offset(&doc.text, &format!("class {name}"))?;
+        let line = Lines::new(&doc.text).position(&doc.text, at).line;
+        Some(LineMarker {
+            line,
+            icon: Some("implemented".into()),
+            tooltip: format!(
+                "Everything about {name}: migrations, relations, factory, resources, policies, controllers, tests…"
+            ),
+            target: Some(Location {
+                path: project::join(root, &file),
+                range: Range::default(),
+            }),
+        })
     }
 
     fn relation_snippets(
@@ -2268,6 +2300,7 @@ impl Providers for Laravel {
             });
         }
         out.extend(self.controller_markers(doc, &project, &root));
+        out.extend(self.model_marker(doc, &project, &root));
         out
     }
 
@@ -2428,6 +2461,7 @@ impl openidea_plugin::Plugin for Laravel {
                         }
                         self.hub_tables = None;
                         self.facts_cache = None;
+                        self.scan_cache = None;
                         self.live.remove(path);
                         let before = self.snapshot_keys(&project, &root, path);
                         self.cache.invalidate(&root, path);
@@ -2461,6 +2495,7 @@ impl openidea_plugin::Plugin for Laravel {
                 Event::VcsChanged(repo) => {
                     self.hub_tables = None;
                     self.facts_cache = None;
+                    self.scan_cache = None;
                     self.cache.clear();
                     self.symbols.clear();
                     paths.insert(repo.clone());
@@ -3866,6 +3901,70 @@ Blade::if('admin', fn () => true);
     }
 
     #[test]
+    fn the_model_gutter_opens_everything_about_the_model() {
+        use openidea_plugin::views::{ViewEvent, Views};
+        let host = setup();
+        host.add_file(
+            "app/Http/Controllers/ProfileController.php",
+            "<?php\nnamespace App\\Http\\Controllers;\n\nclass ProfileController\n{\n    public function show(User $user) { return $user; }\n}\n",
+        );
+        host.add_file(
+            "tests/Feature/UserTest.php",
+            "<?php\nit('works', fn () => User::factory()->create());\n",
+        );
+        let mut plugin = Laravel::default();
+        let model = doc("app/Models/User.php", USER);
+        assert!(
+            !plugin
+                .line_markers(&model)
+                .iter()
+                .any(|m| m.tooltip.starts_with("Everything about")),
+            "no marker before the hub files exist"
+        );
+        host.add_file(
+            "storage/openidea/hub/model-User.laravel-hub",
+            "{\"section\":\"model-User\"}\n",
+        );
+        let marker = plugin
+            .line_markers(&model)
+            .into_iter()
+            .find(|m| m.tooltip.starts_with("Everything about User"))
+            .unwrap();
+        assert_eq!(marker.line, 1);
+        assert_eq!(
+            marker.target.unwrap().path,
+            "/project/storage/openidea/hub/model-User.laravel-hub"
+        );
+        plugin
+            .handle(
+                "hub",
+                ViewEvent::Message(r#"{"type":"model","name":"User","instance":"t"}"#.into()),
+                &host.invocation(),
+            )
+            .unwrap();
+        let (_, message) = host.view_messages().pop().unwrap();
+        let message: serde_json::Value = serde_json::from_str(&message).unwrap();
+        assert_eq!(message["type"], "modelresources");
+        let titles: Vec<&str> = message["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|g| g["title"].as_str())
+            .collect();
+        assert_eq!(
+            titles,
+            [
+                "Model",
+                "Migrations",
+                "Relations",
+                "Controllers",
+                "Models",
+                "Tests"
+            ]
+        );
+    }
+
+    #[test]
     fn a_picked_value_replaces_the_whole_string() {
         let _host = setup();
         let mut plugin = Laravel::default();
@@ -3930,7 +4029,7 @@ Blade::if('admin', fn () => true);
         assert!(!again.contains("cacheKey"), "the filter is used once");
         host.add_file(
             "storage/openidea/hub/sections",
-            &(hubtabs::SECTIONS.join("\n") + "\nhub\n"),
+            &hubtabs::wanted(&["Post".to_owned(), "User".to_owned()]),
         );
         plugin
             .handle(

@@ -45,6 +45,9 @@ enum Request {
     Search {
         query: String,
     },
+    Model {
+        name: String,
+    },
     Section {
         id: String,
     },
@@ -1457,9 +1460,163 @@ impl Laravel {
             return Ok(());
         };
         let search = self.take_hub_filter(section);
+        let mut message = crate::hubtabs::navigate(section, &path, search.as_deref());
+        if let Some(model) = crate::hubtabs::model_of(&path) {
+            message["model"] = json!(model);
+        }
+        post(view, message);
+        Ok(())
+    }
+
+    pub(crate) fn cached_scan(&mut self, project: &Project, root: &str) -> Rc<resources::Scan> {
+        if let Some((cached, scan)) = &self.scan_cache
+            && cached == root
+        {
+            return scan.clone();
+        }
+        let scan = Rc::new(resources::scan(project, root));
+        self.scan_cache = Some((root.to_owned(), scan.clone()));
+        scan
+    }
+
+    fn model_overview(&mut self, view: &str, ctx: &Invocation, name: &str) -> Result<(), Error> {
+        use crate::modelmap::{self, Group, Row};
+        let (project, root) = project(ctx)?;
+        let _task = host::begin_task(&format!("Laravel: everything about {name}"), false);
+        let models = self.cache.get(RefKind::Model, &project, &root);
+        let Some(entry) = models.iter().find(|e| e.key == name).cloned() else {
+            post(
+                view,
+                json!({ "type": "error", "message": format!("{name} is not a model of this project") }),
+            );
+            return Ok(());
+        };
+        let table = entry
+            .detail
+            .as_deref()
+            .and_then(|d| d.strip_prefix("table "))
+            .unwrap_or_default()
+            .to_owned();
+        let model_path = rel(&root, &entry.location.path).to_owned();
+        let model_text = project.read_file(&model_path).unwrap_or_default();
+        let mut groups: Vec<Group> = vec![Group {
+            title: "Model".into(),
+            rows: vec![Row {
+                label: name.to_owned(),
+                detail: format!("table {table}"),
+                path: model_path.clone(),
+                line: entry.location.range.start.line + 1,
+            }],
+        }];
+        let migrations: Vec<(String, String)> =
+            crate::project::find(&project, &root, "database/migrations/**/*.php", 5000)
+                .into_iter()
+                .filter_map(|p| {
+                    let r = rel(&root, &p).to_owned();
+                    project.read_file(&r).ok().map(|t| (r, t))
+                })
+                .collect();
+        let found = modelmap::migrations(&migrations, &table);
+        if !found.is_empty() {
+            groups.push(Group {
+                title: "Migrations".into(),
+                rows: found,
+            });
+        }
+        let from_entries = |kind: RefKind, title: &str, this: &mut Self| -> Option<Group> {
+            let prefix = format!("{name}.");
+            let rows: Vec<Row> = this
+                .cache
+                .get(kind, &project, &root)
+                .iter()
+                .filter_map(|e| {
+                    let key = e.key.strip_prefix(&prefix)?;
+                    Some(Row {
+                        label: key.to_owned(),
+                        detail: e.detail.clone().unwrap_or_default(),
+                        path: rel(&root, &e.location.path).to_owned(),
+                        line: e.location.range.start.line + 1,
+                    })
+                })
+                .collect();
+            (!rows.is_empty()).then(|| Group {
+                title: title.into(),
+                rows,
+            })
+        };
+        groups.extend(from_entries(RefKind::Relation, "Relations", self));
+        groups.extend(from_entries(RefKind::Scope, "Scopes", self));
+        let composer = project.read_file("composer.json").unwrap_or_default();
+        let casts: Vec<Row> =
+            crate::enums::of_model(&project, &crate::casts::psr4(&composer), &model_text)
+                .into_iter()
+                .map(|e| Row {
+                    label: format!("{} → {}", e.column, e.name),
+                    detail: e
+                        .values
+                        .iter()
+                        .map(|(_, v)| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    path: model_path.clone(),
+                    line: modelmap::first_offset(&model_text, &e.name)
+                        .map_or(1, |at| modelmap::line_of(&model_text, at)),
+                })
+                .collect();
+        if !casts.is_empty() {
+            groups.push(Group {
+                title: "Casts".into(),
+                rows: casts,
+            });
+        }
+        let factory = crate::factories::file(&project, name, &model_text).map(|(path, text)| Row {
+            label: path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&path)
+                .trim_end_matches(".php")
+                .to_owned(),
+            detail: "factory".into(),
+            line: modelmap::line_of(&text, crate::factories::class_offset(&text)),
+            path,
+        });
+        let scan = self.cached_scan(&project, &root);
+        let mut used = modelmap::from_scan(&scan, name);
+        if let Some(row) = factory {
+            match used.iter_mut().find(|g| g.title == "Factories") {
+                Some(g) if !g.rows.iter().any(|r| r.path == row.path) => g.rows.insert(0, row),
+                Some(_) => {}
+                None => used.push(Group {
+                    title: "Factories".into(),
+                    rows: vec![row],
+                }),
+            }
+        }
+        groups.extend(used);
+        for (glob, title) in [("routes/**/*.php", "Routes"), ("tests/**/*.php", "Tests")] {
+            let mut rows = Vec::new();
+            for p in crate::project::find(&project, &root, glob, 5000) {
+                let r = rel(&root, &p).to_owned();
+                if let Ok(text) = project.read_file(&r) {
+                    rows.extend(modelmap::lines_mentioning(&r, &text, name));
+                }
+            }
+            rows.truncate(200);
+            if rows.is_empty() {
+                continue;
+            }
+            match groups.iter_mut().find(|g| g.title == title) {
+                Some(g) => g.rows.extend(rows),
+                None => groups.push(Group {
+                    title: title.into(),
+                    rows,
+                }),
+            }
+        }
+        modelmap::sort(&mut groups);
         post(
             view,
-            crate::hubtabs::navigate(section, &path, search.as_deref()),
+            json!({ "type": "modelresources", "name": name, "table": table, "groups": groups }),
         );
         Ok(())
     }
@@ -1488,6 +1645,7 @@ impl Laravel {
             Request::Overview => self.overview(view, ctx),
             Request::Hello => self.hub_hello(view, ctx),
             Request::Search { query } => self.hub_search(view, ctx, &query),
+            Request::Model { name } => self.model_overview(view, ctx, &name),
             Request::Openeditor { id } => self.open_hub_tab(view, ctx, &id),
             Request::Section { id } => self.section(view, ctx, &id),
             Request::Init => self.send_commands(view, ctx, false),

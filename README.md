@@ -137,6 +137,8 @@ Completion and navigation come from cached indexes of your project files, built 
 
 One tool window for everything your app has. It refreshes from your files and opens every row in the editor. Every table section, Logs and Live Audit show 100 rows per page (50 to 500) with a pager that stays at the bottom; searching, filtering or sorting goes back to the first page.
 
+**Everything about a model**: the gutter icon on a model's `class` line opens a hub tab with its table and migrations, relations, scopes, casts, factory and seeders, and every controller, Form Request, API Resource, policy, observer, job, event, listener, notification, mail, Livewire or Filament class, command, route and test that uses it.
+
 **Search the whole hub**: the box above the sections searches every table at once (routes, models, tables and columns, views, config, env, translations, classes, events, listeners, jobs and the rest), shows the first matches of each section with a link to its file, offers the sections whose name matches, and *Show all* opens a section searched for the same text.
 
 **In editor tabs**: *Open in editor* in the hub's header opens the current section (or, from the Overview, the whole hub) in an editor tab, and *Laravel: Open the Hub in an Editor Tab* does it from the command palette. Each tab keeps its own state, so you can drag tabs into a split to see two sections side by side. Ctrl+click on a cache key (`Cache::get('…')`, `cache('…')`, `cache()->remember('…')`…) opens the Cache section in a tab, searched for that key and expanded to show its value and when it expires. The tabs are small files in `storage/openidea/hub`, which the plugin writes with `process:php` (or `process:docker`).

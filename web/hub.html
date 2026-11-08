@@ -511,6 +511,48 @@ function renderSearch(groups) {
   $("content").replaceChildren(...parts);
 }
 
+function showModel(name) {
+  state.section = "model";
+  state.modelName = name;
+  $("section-icon").replaceChildren(icon("database", "lg"));
+  $("section-title").textContent = name;
+  $("section-desc").textContent = "Everything that defines or uses the " + name + " model";
+  $("search-box").hidden = true;
+  $("open-tab").hidden = true;
+  $("toolbar").replaceChildren();
+  $("filters").replaceChildren();
+  $("count").hidden = true;
+  renderNav();
+  $("content").replaceChildren(el("div", { className: "loading" }));
+  send({ type: "model", name });
+}
+
+function renderModel(msg) {
+  const parts = [];
+  const total = msg.groups.reduce((n, g) => n + g.rows.length, 0);
+  $("section-desc").textContent = (msg.table ? "Table " + msg.table + " · " : "") + total + " places define or use " + msg.name;
+  const jump = el("div", { className: "search-sections" });
+  for (const g of msg.groups) {
+    const b = el("button", { className: "btn ghost", textContent: g.title + " · " + g.rows.length });
+    b.addEventListener("click", () => document.getElementById("model-" + g.title)?.scrollIntoView({ block: "start" }));
+    jump.append(b);
+  }
+  parts.push(jump);
+  for (const g of msg.groups) {
+    const table = el("table");
+    const body = el("tbody");
+    for (const r of g.rows) {
+      const tr = el("tr", { className: "link" }, el("td", { className: "first mono", textContent: r.label }), el("td", { className: "mono wrap", textContent: r.detail }));
+      tr.title = r.path + ":" + r.line;
+      tr.addEventListener("click", () => send({ type: "open", path: r.path, line: r.line }));
+      body.append(tr);
+    }
+    table.append(body);
+    parts.push(el("div", { className: "search-group", id: "model-" + g.title }, el("h3", {}, el("span", { className: "grow", textContent: g.title + " · " + g.rows.length })), table));
+  }
+  $("content").replaceChildren(...parts);
+}
+
 let hubSearchTimer = null;
 $("hub-search").addEventListener("input", () => {
   clearTimeout(hubSearchTimer);
@@ -2783,12 +2825,16 @@ openidea.onMessage((text) => {
     case "cache":
       onCache(msg);
       break;
+    case "modelresources":
+      if (state.section === "model" && msg.name === state.modelName) renderModel(msg);
+      break;
     case "searchresults":
       if (state.section === "search" && msg.query === state.searchQuery) renderSearch(msg.groups || []);
       break;
     case "navigate": {
-      if (!SECTIONS.some((s) => s.id === msg.id)) break;
       if (msg.file && msg.instance) state.file = msg.file;
+      if (msg.model) { showModel(msg.model); break; }
+      if (!SECTIONS.some((s) => s.id === msg.id)) break;
       if (msg.cacheKey) state.cache.focusKey = msg.cacheKey;
       if (msg.facets) state.facetSel[msg.id] = { ...msg.facets };
       if (msg.sort) state.sort[msg.id] = msg.sort;
