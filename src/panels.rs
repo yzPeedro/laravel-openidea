@@ -1460,11 +1460,10 @@ impl Laravel {
             return Ok(());
         };
         let search = self.take_hub_filter(section);
-        let mut message = crate::hubtabs::navigate(section, &path, search.as_deref());
-        if let Some(model) = crate::hubtabs::model_of(&path) {
-            message["model"] = json!(model);
-        }
-        post(view, message);
+        post(
+            view,
+            crate::hubtabs::navigate(section, &path, search.as_deref()),
+        );
         Ok(())
     }
 
@@ -1581,7 +1580,12 @@ impl Laravel {
             path,
         });
         let scan = self.cached_scan(&project, &root);
-        let mut used = modelmap::from_scan(&scan, name);
+        let usages: std::collections::BTreeMap<String, u32> = self
+            .usages_of(&project, &root)
+            .files_using(name, &model_path)
+            .into_iter()
+            .collect();
+        let mut used = modelmap::from_scan(&scan, name, &usages);
         if let Some(row) = factory {
             match used.iter_mut().find(|g| g.title == "Factories") {
                 Some(g) if !g.rows.iter().any(|r| r.path == row.path) => g.rows.insert(0, row),
@@ -1593,12 +1597,11 @@ impl Laravel {
             }
         }
         groups.extend(used);
-        for (glob, title) in [("routes/**/*.php", "Routes"), ("tests/**/*.php", "Tests")] {
+        for (dir, title) in [("routes/", "Routes"), ("tests/", "Tests")] {
             let mut rows = Vec::new();
-            for p in crate::project::find(&project, &root, glob, 5000) {
-                let r = rel(&root, &p).to_owned();
-                if let Ok(text) = project.read_file(&r) {
-                    rows.extend(modelmap::lines_mentioning(&r, &text, name));
+            for r in usages.keys().filter(|p| p.starts_with(dir)) {
+                if let Ok(text) = project.read_file(r) {
+                    rows.extend(modelmap::lines_mentioning(r, &text, name));
                 }
             }
             rows.truncate(200);

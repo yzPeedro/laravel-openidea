@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/yzPeedro/laravel-openidea/actions/workflows/ci.yml"><img src="https://github.com/yzPeedro/laravel-openidea/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/yzPeedro/laravel-openidea/releases/latest"><img src="https://img.shields.io/github/v/release/yzPeedro/laravel-openidea?color=ff2d20&label=release" alt="Latest release"></a>
-  <img src="https://img.shields.io/badge/OpenIDEA-0.1.38%2B-4f46e5" alt="OpenIDEA 0.1.38 and newer">
+  <img src="https://img.shields.io/badge/OpenIDEA-0.1.39%2B-4f46e5" alt="OpenIDEA 0.1.39 and newer">
   <img src="https://img.shields.io/badge/Laravel-6%2B-ff2d20?logo=laravel&logoColor=white" alt="Laravel 6 and newer">
   <img src="https://img.shields.io/badge/built%20with-Rust%20%2B%20WebAssembly-orange?logo=rust" alt="Rust and WebAssembly">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
@@ -60,7 +60,7 @@ https://github.com/user-attachments/assets/a653530b-f3d4-44e3-921e-bef9119cd659
 
 ## Installation
 
-**Requirements:** [OpenIDEA](https://github.com/l0ng-ai/openidea/releases/latest) 0.1.38 or newer and a Laravel project. Completion and inspections follow the Laravel version installed in `vendor/` (tested from Laravel 6 to 13); the runtime features are tested on Laravel 10 and newer. PHP or Docker Compose is needed for the runtime features (Artisan, Tinker, Live Audit).
+**Requirements:** [OpenIDEA](https://github.com/l0ng-ai/openidea/releases/latest) 0.1.39 or newer and a Laravel project. Completion and inspections follow the Laravel version installed in `vendor/` (tested from Laravel 6 to 13); the runtime features are tested on Laravel 10 and newer. PHP or Docker Compose is needed for the runtime features (Artisan, Tinker, Live Audit).
 
 1. **Download** `laravel-openidea-<version>.zip` from the [latest release](https://github.com/yzPeedro/laravel-openidea/releases/latest).
 2. In OpenIDEA open **Settings › Plugins › ⚙ › Install Plugin from Package File…** and pick the zip.
@@ -77,7 +77,7 @@ https://github.com/user-attachments/assets/a653530b-f3d4-44e3-921e-bef9119cd659
 <summary><b>Build from source</b></summary>
 
 ```sh
-git clone https://github.com/l0ng-ai/openidea --branch v0.1.38
+git clone https://github.com/l0ng-ai/openidea --branch v0.1.39
 git clone https://github.com/yzPeedro/laravel-openidea
 cd laravel-openidea
 rustup target add wasm32-wasip2
@@ -137,7 +137,9 @@ Completion and navigation come from cached indexes of your project files, built 
 
 One tool window for everything your app has. It refreshes from your files and opens every row in the editor. Every table section, Logs and Live Audit show 100 rows per page (50 to 500) with a pager that stays at the bottom; searching, filtering or sorting goes back to the first page.
 
-**Everything about a model**: the gutter icon on a model's `class` line opens a hub tab with its table and migrations, relations, scopes, casts, factory and seeders, and every controller, Form Request, API Resource, policy, observer, job, event, listener, notification, mail, Livewire or Filament class, command, route and test that uses it.
+**Everything about a model**: click a model in the hub's Models section to see its table and migrations, relations, scopes, casts, factory and seeders, and every controller, Form Request, API Resource, policy, observer, job, event, listener, notification, mail, Livewire or Filament class, command, route and test that uses it. Mentions in comments and `use` imports are left out; *Open ›* on the row still opens the model's file.
+
+**Usages in the gutter**: a Laravel icon next to every class in `app/` and `database/` (models, API Resources, Form Requests, jobs, events, enums and the rest) and next to every model scope lists in its tooltip the files that use it, comments and imports left out, and goes to the first one. Ctrl+click on the class name lists every usage to choose from.
 
 **Search the whole hub**: the box above the sections searches every table at once (routes, models, tables and columns, views, config, env, translations, classes, events, listeners, jobs and the rest), shows the first matches of each section with a link to its file, offers the sections whose name matches, and *Show all* opens a section searched for the same text.
 

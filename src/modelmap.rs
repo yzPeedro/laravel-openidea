@@ -1,5 +1,6 @@
 use crate::resources::{Scan, Symbol, short};
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Row {
@@ -103,17 +104,7 @@ fn kind_of(symbol: &Symbol) -> &'static str {
         .map_or("Other classes", |(_, kind)| kind)
 }
 
-fn uses(symbol: &Symbol, model: &str) -> bool {
-    symbol
-        .methods
-        .iter()
-        .any(|m| mentions(&m.params, model) || mentions(&m.body, model))
-        || symbol.attributes.iter().any(|a| mentions(&a.args, model))
-        || symbol.attributes.iter().any(|a| short(&a.name) == model)
-        || symbol.extends.iter().any(|e| short(e) == model)
-}
-
-pub fn from_scan(scan: &Scan, model: &str) -> Vec<Group> {
+pub fn from_scan(scan: &Scan, model: &str, used: &BTreeMap<String, u32>) -> Vec<Group> {
     let mut groups: Vec<Group> = Vec::new();
     let mut add = |title: &str, row: Row| match groups.iter_mut().find(|g| g.title == title) {
         Some(g) => {
@@ -131,7 +122,10 @@ pub fn from_scan(scan: &Scan, model: &str) -> Vec<Group> {
         }),
     };
     for symbol in &scan.symbols {
-        if symbol.name == model || !uses(symbol, model) {
+        let Some(line) = used.get(&symbol.path.replace('\\', "/")) else {
+            continue;
+        };
+        if symbol.name == model {
             continue;
         }
         let detail = if symbol.namespace.is_empty() {
@@ -145,13 +139,14 @@ pub fn from_scan(scan: &Scan, model: &str) -> Vec<Group> {
                 label: symbol.name.clone(),
                 detail,
                 path: symbol.path.clone(),
-                line: symbol.line,
+                line: *line,
             },
         );
     }
     for call in &scan.calls {
         let path = call.path.replace('\\', "/");
-        if short(&call.class) != model || !path.starts_with("routes/") {
+        if short(&call.class) != model || !path.starts_with("routes/") || !used.contains_key(&path)
+        {
             continue;
         }
         add(
@@ -205,10 +200,12 @@ pub fn migrations(files: &[(String, String)], table: &str) -> Vec<Row> {
 }
 
 pub fn lines_mentioning(path: &str, text: &str, model: &str) -> Vec<Row> {
+    let cleaned = crate::usages::clean(text, path.ends_with(".blade.php"));
     text.lines()
+        .zip(cleaned.lines())
         .enumerate()
-        .filter(|(_, line)| mentions(line, model) && !line.trim_start().starts_with("use "))
-        .map(|(i, line)| {
+        .filter(|(_, (_, code))| mentions(code, model))
+        .map(|(i, (line, _))| {
             let shown: String = line.trim().chars().take(120).collect();
             Row {
                 label: shown,
@@ -260,22 +257,42 @@ mod tests {
             "app/Jobs/SendInvoice.php",
             "<?php\nclass SendInvoice\n{\n    public function handle(OrderStatus $status) {}\n}\n",
         );
-        for part in [resource, routes, other] {
+        let commented = scan_text(
+            "app/Jobs/Archive.php",
+            "<?php\nclass Archive\n{\n    // Order::query()->delete();\n    public function handle() {}\n}\n",
+        );
+        for part in [resource, routes, other, commented] {
             scan.symbols.extend(part.symbols);
             scan.calls.extend(part.calls);
         }
-        let mut groups = from_scan(&scan, "Order");
+        let mut index = crate::usages::Index::default();
+        index.set(
+            "app/Http/Controllers/OrderController.php",
+            "<?php\nnamespace App\\Http\\Controllers;\n\nclass OrderController\n{\n    public function show(Order $order) { return $order; }\n}\n",
+        );
+        index.set(
+            "app/Http/Resources/OrderResource.php",
+            "<?php\nnamespace App\\Http\\Resources;\n\n/** @mixin \\App\\Models\\Order */\nclass OrderResource extends JsonResource\n{\n    public function toArray($request): array { return ['total' => Order::count()]; }\n}\n",
+        );
+        index.set(
+            "app/Jobs/Archive.php",
+            "<?php\nclass Archive\n{\n    // Order::query()->delete();\n    public function handle() {}\n}\n",
+        );
+        let used: BTreeMap<String, u32> = index.files_using("Order", "").into_iter().collect();
+        let mut groups = from_scan(&scan, "Order", &used);
         sort(&mut groups);
         let titles: Vec<&str> = groups.iter().map(|g| g.title.as_str()).collect();
         assert_eq!(titles, ["Controllers", "API Resources"]);
         assert_eq!(groups[0].rows[0].label, "OrderController");
+        assert_eq!(groups[0].rows[0].line, 6);
+        assert_eq!(groups[1].rows[0].line, 7);
         let lines = lines_mentioning(
             "routes/web.php",
-            "<?php\nuse App\\Models\\Order;\nRoute::get('/orders', fn () => Order::all());\n",
+            "<?php\nuse App\\Models\\Order;\n// Order::all()\nRoute::get('/orders', fn () => Order::all());\n",
             "Order",
         );
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].line, 3);
+        assert_eq!(lines[0].line, 4);
     }
 
     #[test]

@@ -792,10 +792,27 @@ fn imported(text: &str, fqn: &str) -> bool {
     })
 }
 
+#[derive(Default)]
 pub struct ProjectSymbol {
     pub fqn: String,
     pub keyword: String,
     pub is_abstract: bool,
+    pub statically: bool,
+    pub cast: bool,
+}
+
+const CAST_CONTRACTS: [&str; 3] = ["CastsAttributes", "CastsInboundAttributes", "Castable"];
+
+fn used_statically(s: &crate::resources::Symbol) -> bool {
+    let public: Vec<_> = s.methods.iter().filter(|m| m.public).collect();
+    s.keyword == "enum"
+        || s.extends
+            .iter()
+            .any(|e| crate::resources::short(e) == "Facade")
+        || (s.keyword == "class"
+            && !public.is_empty()
+            && public.iter().all(|m| m.is_static)
+            && !s.methods.iter().any(|m| m.name == "__construct"))
 }
 
 pub fn project_symbols(scan: &Scan) -> Vec<ProjectSymbol> {
@@ -806,6 +823,11 @@ pub fn project_symbols(scan: &Scan) -> Vec<ProjectSymbol> {
             fqn: format!("{}\\{}", s.namespace, s.name),
             keyword: s.keyword.clone(),
             is_abstract: s.is_abstract,
+            statically: used_statically(s),
+            cast: s.keyword == "enum"
+                || s.implements
+                    .iter()
+                    .any(|i| CAST_CONTRACTS.contains(&crate::resources::short(i))),
         })
         .collect()
 }
@@ -988,7 +1010,7 @@ mod tests {
         let project = vec![ProjectSymbol {
             fqn: "App\\Concerns\\HasAvatar".into(),
             keyword: "trait".into(),
-            is_abstract: false,
+            ..ProjectSymbol::default()
         }];
         let items = items(
             Slot::Trait,

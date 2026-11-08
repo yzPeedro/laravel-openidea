@@ -47,6 +47,7 @@ pub struct Framework {
     pub casts_method: bool,
     pub middleware: Vec<Entry>,
     pub container: Vec<(String, String)>,
+    pub facades: Vec<(String, String)>,
     pub collection: Vec<Method>,
     pub query: Vec<Method>,
     pub relations: BTreeMap<String, Vec<Method>>,
@@ -124,6 +125,7 @@ pub fn load(read: &dyn Fn(&str) -> Option<String>, root: &str) -> Framework {
         casts_method,
         middleware: middleware(&mut loader, root),
         container: container(&mut loader),
+        facades: facades(&mut loader),
         collection: loader.methods("Illuminate\\Database\\Eloquent\\Collection"),
         query,
         relations,
@@ -519,6 +521,21 @@ fn middleware(loader: &mut Loader, root: &str) -> Vec<Entry> {
     out
 }
 
+fn facades(loader: &mut Loader) -> Vec<(String, String)> {
+    let Some(source) = loader.source("Illuminate\\Support\\Facades\\Facade") else {
+        return Vec::new();
+    };
+    let tokens = tokenize(&source.text, 0, source.text.len());
+    let Some((open, close)) = method_body(&tokens, "defaultAliases") else {
+        return Vec::new();
+    };
+    let head = header(&source.text);
+    keyed(&tokens, open, close)
+        .into_iter()
+        .filter_map(|(alias, _, class)| Some((alias, crate::casts::resolve_name(head, &class?))))
+        .collect()
+}
+
 fn container(loader: &mut Loader) -> Vec<(String, String)> {
     let Some(source) = loader.source("Illuminate\\Foundation\\Application") else {
         return Vec::new();
@@ -825,7 +842,8 @@ mod tests {
             let directives: Vec<&str> = fw.directives.iter().map(|e| e.key.as_str()).collect();
             let middleware: Vec<&str> = fw.middleware.iter().map(|e| e.key.as_str()).collect();
             println!(
-                "== {name}\nrules {}: {rules:?}\ndirectives {}: {directives:?}\ncasts {:?} method={}\nmiddleware {middleware:?}\ncontainer {}\ncollection {} query {} hasMany {} belongsToMany {}",
+                "== {name}\nfacades {:?}\nrules {}: {rules:?}\ndirectives {}: {directives:?}\ncasts {:?} method={}\nmiddleware {middleware:?}\ncontainer {}\ncollection {} query {} hasMany {} belongsToMany {}",
+                fw.facades,
                 rules.len(),
                 directives.len(),
                 fw.casts,

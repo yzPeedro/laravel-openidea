@@ -119,25 +119,7 @@ pub fn file_path(section: &str) -> String {
     format!("{DIR}/{}", file_name(section))
 }
 
-pub const MODEL_PREFIX: &str = "model-";
-
-pub fn model_file(model: &str) -> String {
-    file_path(&format!("{MODEL_PREFIX}{model}"))
-}
-
-pub fn model_of(path: &str) -> Option<&str> {
-    let name = path.rsplit(['/', '\\']).next()?;
-    let model = name
-        .strip_suffix(".laravel-hub")?
-        .strip_prefix(MODEL_PREFIX)?;
-    (!model.is_empty() && model.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-        .then_some(model)
-}
-
 pub fn section_of(path: &str) -> Option<&str> {
-    if model_of(path).is_some() {
-        return Some("model");
-    }
     let name = path.rsplit(['/', '\\']).next()?;
     let section = name.strip_suffix(".laravel-hub")?;
     if section == WHOLE {
@@ -146,15 +128,9 @@ pub fn section_of(path: &str) -> Option<&str> {
     SECTIONS.contains(&section).then_some(section)
 }
 
-pub(crate) fn wanted(models: &[String]) -> String {
-    let mut all: Vec<String> = SECTIONS.iter().map(|s| (*s).to_owned()).collect();
-    all.push(WHOLE.to_owned());
-    all.extend(
-        models
-            .iter()
-            .filter(|m| m.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-            .map(|m| format!("{MODEL_PREFIX}{m}")),
-    );
+pub(crate) fn wanted() -> String {
+    let mut all: Vec<&str> = SECTIONS.to_vec();
+    all.push(WHOLE);
     all.join("\n") + "\n"
 }
 
@@ -187,13 +163,7 @@ pub fn navigate(section: &str, file: &str, search: Option<&str>) -> Value {
 impl Laravel {
     pub(crate) fn sync_hub_files(&mut self, project: &Project, force: bool) -> Result<(), String> {
         let root = project.root().map_err(|e| e.to_string())?;
-        let models: Vec<String> = self
-            .cache
-            .get(crate::index::RefKind::Model, project, &root)
-            .iter()
-            .map(|e| e.key.clone())
-            .collect();
-        let wanted = wanted(&models);
+        let wanted = wanted();
         if project
             .read_file(INDEX)
             .is_ok_and(|current| current == wanted)
@@ -290,18 +260,11 @@ mod tests {
         );
         assert_eq!(section_of("/p/storage/openidea/hub/nope.laravel-hub"), None);
         assert_eq!(section_of("/p/app/Models/User.php"), None);
-        assert!(wanted(&[]).contains("\ncache\n") && wanted(&[]).ends_with("hub\n"));
-        let with_models = wanted(&["User".to_owned(), "Bad Name".to_owned()]);
-        assert!(with_models.ends_with("hub\nmodel-User\n"));
+        assert!(wanted().contains("\ncache\n") && wanted().ends_with("hub\n"));
         assert_eq!(
             section_of("/p/storage/openidea/hub/model-User.laravel-hub"),
-            Some("model")
+            None
         );
-        assert_eq!(
-            model_of("/p/storage/openidea/hub/model-User.laravel-hub"),
-            Some("User")
-        );
-        assert_eq!(model_of("/p/storage/openidea/hub/cache.laravel-hub"), None);
     }
 
     #[test]

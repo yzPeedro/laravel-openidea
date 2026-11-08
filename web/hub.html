@@ -519,7 +519,9 @@ function showModel(name) {
   $("section-desc").textContent = "Everything that defines or uses the " + name + " model";
   $("search-box").hidden = true;
   $("open-tab").hidden = true;
-  $("toolbar").replaceChildren();
+  const back = el("button", { className: "btn ghost", textContent: "‹ Models" });
+  back.addEventListener("click", () => go("models"));
+  $("toolbar").replaceChildren(back);
   $("filters").replaceChildren();
   $("count").hidden = true;
   renderNav();
@@ -791,8 +793,17 @@ function renderSection(id) {
       }
       tr.append(td);
     });
-    tr.append(el("td", {}, r.open ? el("span", { className: "go", textContent: "Open ›" }) : null));
-    if (r.open) {
+    const go = r.open ? el("span", { className: "go", textContent: "Open ›" }) : null;
+    tr.append(el("td", {}, go));
+    if (id === "models") {
+      tr.className = "link";
+      tr.title = "Everything about " + r.cells[0];
+      tr.addEventListener("click", () => showModel(r.cells[0]));
+      if (go) {
+        go.title = r.open.path + ":" + r.open.line;
+        go.addEventListener("click", (e) => { e.stopPropagation(); send({ type: "open", path: r.open.path, line: r.open.line }); });
+      }
+    } else if (r.open) {
       tr.title = r.open.path + ":" + r.open.line;
       tr.addEventListener("click", () => send({ type: "open", path: r.open.path, line: r.open.line }));
     }
@@ -2833,7 +2844,6 @@ openidea.onMessage((text) => {
       break;
     case "navigate": {
       if (msg.file && msg.instance) state.file = msg.file;
-      if (msg.model) { showModel(msg.model); break; }
       if (!SECTIONS.some((s) => s.id === msg.id)) break;
       if (msg.cacheKey) state.cache.focusKey = msg.cacheKey;
       if (msg.facets) state.facetSel[msg.id] = { ...msg.facets };

@@ -14,6 +14,7 @@ pub struct Method {
     pub name: String,
     pub line: u32,
     pub public: bool,
+    pub is_static: bool,
     pub params: String,
     pub body: String,
     pub attributes: Vec<Attribute>,
@@ -383,12 +384,14 @@ pub fn scan_text(path: &str, text: &str) -> Scan {
                     {
                         let params_end = matching(&tokens, k + 2);
                         let mut public = true;
+                        let mut is_static = false;
                         let mut b = k;
                         while b > 0 {
                             b -= 1;
                             match ident(&tokens, b).map(str::to_ascii_lowercase).as_deref() {
                                 Some("private" | "protected") => public = false,
-                                Some("public" | "static" | "final" | "abstract") => {}
+                                Some("static") => is_static = true,
+                                Some("public" | "final" | "abstract") => {}
                                 _ => break,
                             }
                         }
@@ -410,6 +413,7 @@ pub fn scan_text(path: &str, text: &str) -> Scan {
                             name: name.to_owned(),
                             line: line(tokens[k + 1].start),
                             public,
+                            is_static,
                             params: text[tokens[k + 2].end..tokens[params_end].start]
                                 .trim()
                                 .to_owned(),

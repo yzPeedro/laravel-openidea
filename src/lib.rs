@@ -42,8 +42,10 @@ mod resources;
 mod runner;
 mod sections;
 mod snippets;
+mod statics;
 mod toolconfig;
 mod tools;
+mod usages;
 
 use audit::Logged;
 use index::{Cache, Entry, RefKind, is_model, parse_class};
@@ -60,6 +62,49 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_COMPLETIONS: usize = 500;
 const STATUS_ID: &str = "laravel";
+const USAGE_FILES: usize = 300;
+const USAGE_TOOLTIP_LINES: usize = 12;
+const LARAVEL_MARKER: &str = "icons/laravel.svg";
+
+fn scope_name(method: &resources::Method) -> Option<String> {
+    if let Some(rest) = method.name.strip_prefix("scope")
+        && rest.chars().next().is_some_and(char::is_uppercase)
+    {
+        let mut chars = rest.chars();
+        let first = chars.next()?;
+        return Some(first.to_lowercase().chain(chars).collect());
+    }
+    method
+        .attributes
+        .iter()
+        .any(|a| resources::short(&a.name) == "Scope")
+        .then(|| method.name.clone())
+}
+
+fn usage_marker(root: &str, line: u32, name: &str, used: &[(String, u32)]) -> Option<LineMarker> {
+    let (path, first) = used.first()?;
+    let files = if used.len() == 1 { "file" } else { "files" };
+    let mut tooltip = format!("{name} is used in {} {files}", used.len());
+    for (path, line) in used.iter().take(USAGE_TOOLTIP_LINES) {
+        tooltip.push_str(&format!("\n{path}:{line}"));
+    }
+    if used.len() > USAGE_TOOLTIP_LINES {
+        tooltip.push_str("\n…");
+    }
+    if used.len() > 1 {
+        tooltip.push_str("\nCtrl+click the name to choose one");
+    }
+    let at = Position::new(first.saturating_sub(1), 0);
+    Some(LineMarker {
+        line,
+        icon: Some(LARAVEL_MARKER.into()),
+        tooltip,
+        target: Some(Location {
+            path: join(root, path),
+            range: Range { start: at, end: at },
+        }),
+    })
+}
 
 type References = Vec<(Segment, StringArg)>;
 
@@ -85,6 +130,7 @@ pub struct Laravel {
     facts_cache: Option<(String, std::rc::Rc<checks::Parts>)>,
     scan_cache: Option<(String, std::rc::Rc<resources::Scan>)>,
     live: BTreeMap<String, u64>,
+    usage_index: BTreeMap<String, usages::Index>,
 }
 
 fn kebab(name: &str) -> String {
@@ -378,11 +424,36 @@ impl Laravel {
 
     fn index_in_background(&mut self, path: &str) {
         if let Some((project, root)) = self.laravel_project(path)
-            && (!self.cache.has_framework(&root) || !self.facts_ready(&root))
+            && (!self.cache.has_framework(&root)
+                || !self.facts_ready(&root)
+                || !self.usage_index.contains_key(&root)
+                || !self.symbols.contains_key(&root))
         {
             let _task = host::begin_task("Indexing the Laravel project", false);
             self.cache.warm(&project, &root);
             self.cached_facts(&project, &root);
+            self.usages_of(&project, &root);
+            self.project_symbols(&project, &root);
+        }
+    }
+
+    pub(crate) fn usages_of(&mut self, project: &Project, root: &str) -> &usages::Index {
+        self.usage_index
+            .entry(root.to_owned())
+            .or_insert_with(|| usages::build(project, root))
+    }
+
+    fn reindex_usages(&mut self, project: &Project, root: &str, path: &str) {
+        let r = project::rel(root, path).replace('\\', "/");
+        let Some(index) = self.usage_index.get_mut(root) else {
+            return;
+        };
+        if !usages::indexed(&r) {
+            return;
+        }
+        match project.read_file(path) {
+            Ok(text) => index.set(&r, &text),
+            Err(_) => index.remove(&r),
         }
     }
 
@@ -1024,42 +1095,162 @@ impl Laravel {
         Some(format!("{namespace}\\{model}"))
     }
 
-    fn model_marker(
-        &mut self,
-        doc: &Document,
-        project: &Project,
-        root: &str,
-    ) -> Option<LineMarker> {
-        let same = |a: &str, b: &str| {
-            a.replace('\\', "/")
-                .eq_ignore_ascii_case(&b.replace('\\', "/"))
-        };
-        let name = self
-            .cache
+    fn static_candidates(&mut self, project: &Project, root: &str) -> Vec<statics::Candidate> {
+        let framework = self.cache.framework(root);
+        let mut facades = framework.facades.clone();
+        if facades.is_empty() {
+            facades =
+                statics::config_aliases(&project.read_file("config/app.php").unwrap_or_default());
+        }
+        let symbols = self.symbols.get(root).cloned().unwrap_or_default();
+        let mut out: Vec<statics::Candidate> = symbols
+            .iter()
+            .filter(|s| s.statically || s.cast)
+            .map(|s| statics::Candidate {
+                fqn: s.fqn.clone(),
+                detail: match s.keyword.as_str() {
+                    "enum" => "enum".to_owned(),
+                    _ if s.statically => "static class".to_owned(),
+                    _ => "cast".to_owned(),
+                },
+                cast: s.cast,
+                statically: s.statically,
+            })
+            .collect();
+        out.extend(facades.into_iter().map(|(alias, fqn)| statics::Candidate {
+            detail: if fqn.contains("\\Facades\\") {
+                "Laravel facade".to_owned()
+            } else {
+                format!("Laravel {alias}")
+            },
+            fqn,
+            cast: false,
+            statically: true,
+        }));
+        out
+    }
+
+    fn model_of_file(&mut self, project: &Project, root: &str, path: &str) -> Option<String> {
+        let path = path.replace('\\', "/");
+        self.cache
             .get(RefKind::Model, project, root)
             .iter()
-            .find(|e| same(&e.location.path, &doc.path))?
-            .key
-            .clone();
-        let file = hubtabs::model_file(&name);
-        if project.read_file(&file).is_err() {
-            let _task = host::begin_task("Laravel: preparing the hub tabs", false);
-            self.sync_hub_files(project, false).ok()?;
-            project.read_file(&file).ok()?;
+            .find(|e| {
+                e.location
+                    .path
+                    .replace('\\', "/")
+                    .eq_ignore_ascii_case(&path)
+            })
+            .map(|e| e.key.clone())
+    }
+
+    fn scope_usages(
+        &mut self,
+        project: &Project,
+        root: &str,
+        doc: &Document,
+        model: &str,
+        scope: &str,
+    ) -> Vec<(String, u32)> {
+        let own = project::rel(root, &doc.path).replace('\\', "/");
+        let candidates = self.usages_of(project, root).files_using(scope, "");
+        let mut out = Vec::new();
+        for (path, _) in candidates.into_iter().take(USAGE_FILES) {
+            let text = if path == own {
+                doc.text.clone()
+            } else {
+                match project.read_file(&project::join(root, &path)) {
+                    Ok(text) => text,
+                    Err(_) => continue,
+                }
+            };
+            let cleaned = usages::clean(&text, path.ends_with(".blade.php"));
+            if let Some((start, _)) = eloquent::scope_calls(&cleaned, model, scope).first() {
+                out.push((path, usages::line_at(&cleaned, *start) + 1));
+            }
         }
-        let at = modelmap::first_offset(&doc.text, &format!("class {name}"))?;
-        let line = Lines::new(&doc.text).position(&doc.text, at).line;
-        Some(LineMarker {
-            line,
-            icon: Some("implemented".into()),
-            tooltip: format!(
-                "Everything about {name}: migrations, relations, factory, resources, policies, controllers, tests…"
-            ),
-            target: Some(Location {
-                path: project::join(root, &file),
-                range: Range::default(),
-            }),
-        })
+        out
+    }
+
+    fn usage_markers(&mut self, doc: &Document, project: &Project, root: &str) -> Vec<LineMarker> {
+        let own = project::rel(root, &doc.path).replace('\\', "/");
+        if !(own.starts_with("app/") || own.starts_with("database/"))
+            || is_blade(&doc.path)
+            || !self.usage_index.contains_key(root)
+        {
+            return Vec::new();
+        }
+        let scan = resources::scan_text(&own, &doc.text);
+        let model = self.model_of_file(project, root, &doc.path);
+        let mut out = Vec::new();
+        for symbol in &scan.symbols {
+            let used = self
+                .usages_of(project, root)
+                .files_using(&symbol.name, &own);
+            out.extend(usage_marker(
+                root,
+                symbol.line.saturating_sub(1),
+                &symbol.name,
+                &used,
+            ));
+            if model.as_deref() != Some(symbol.name.as_str()) {
+                continue;
+            }
+            for method in &symbol.methods {
+                let Some(scope) = scope_name(method) else {
+                    continue;
+                };
+                let used = self.scope_usages(project, root, doc, &symbol.name, &scope);
+                out.extend(usage_marker(
+                    root,
+                    method.line.saturating_sub(1),
+                    &format!("scope {scope}()"),
+                    &used,
+                ));
+            }
+        }
+        out
+    }
+
+    fn declaration_usages(
+        &mut self,
+        project: &Project,
+        root: &str,
+        doc: &Document,
+        cursor: usize,
+    ) -> Option<Vec<Location>> {
+        let own = project::rel(root, &doc.path).replace('\\', "/");
+        if !(own.starts_with("app/") || own.starts_with("database/")) || is_blade(&doc.path) {
+            return None;
+        }
+        let text = &doc.text;
+        let (start, end) = eloquent::word_span(text, cursor)?;
+        let before = text[..start].trim_end();
+        let keyword = before
+            .rsplit(|c: char| !c.is_ascii_alphabetic())
+            .next()
+            .unwrap_or_default();
+        if !matches!(keyword, "class" | "enum" | "interface" | "trait") {
+            return None;
+        }
+        let name = &text[start..end];
+        let files = self.usages_of(project, root).files_using(name, &own);
+        let mut out = Vec::new();
+        for (path, _) in files.into_iter().take(USAGE_FILES) {
+            let full = project::join(root, &path);
+            let Ok(source) = project.read_file(&full) else {
+                continue;
+            };
+            let cleaned = usages::clean(&source, path.ends_with(".blade.php"));
+            let lines = Lines::new(&source);
+            for at in usages::occurrences(&cleaned, name) {
+                out.push(Location {
+                    path: full.clone(),
+                    range: lines.range(&source, at, at + name.len()),
+                });
+            }
+        }
+        (!out.is_empty()).then_some(out)
     }
 
     fn relation_snippets(
@@ -2081,6 +2272,24 @@ impl Providers for Laravel {
         {
             return found;
         }
+        let mut static_items = Vec::new();
+        if !blade
+            && doc.path.ends_with(".php")
+            && let Some((slot, start)) = statics::slot_at(&doc.text, cursor)
+        {
+            let candidates = self.static_candidates(&project, &root);
+            let found = statics::items(
+                slot,
+                &doc.text,
+                &doc.text[start..cursor],
+                Range::new(position(&doc.text, start), at),
+                &candidates,
+            );
+            if slot == statics::Slot::CastValue {
+                return found;
+            }
+            static_items = found;
+        }
         if php::open_arg_at(&doc.text, blade, cursor).is_none()
             && let Some(found) = self.eloquent_members(&project, &root, doc, cursor, at)
             && !found.is_empty()
@@ -2149,6 +2358,7 @@ impl Providers for Laravel {
                 let mut out = self.member_items(&project, &root, class, &doc.text, &ctx, at);
                 out.extend(php_snippets(&doc.text, cursor, at));
                 out.extend(self.relation_snippets(&project, &root, class, &doc.text, cursor, at));
+                out.extend(static_items);
                 return out;
             }
         }
@@ -2156,7 +2366,9 @@ impl Providers for Laravel {
             return if blade {
                 Vec::new()
             } else {
-                php_snippets(&doc.text, cursor, at)
+                let mut out = php_snippets(&doc.text, cursor, at);
+                out.extend(static_items);
+                out
             };
         };
         if !blade {
@@ -2240,9 +2452,12 @@ impl Providers for Laravel {
             && let Some(name) = eloquent::scope_at(&doc.text, cursor)
             && let Some(model) = scope_of(&doc.text).class
         {
-            return renames::locations_matching(&project, &root, doc, |text, _| {
-                eloquent::scope_calls(text, &model, &name)
+            return renames::locations_matching(&project, &root, doc, |text, blade| {
+                eloquent::scope_calls(&usages::clean(text, blade), &model, &name)
             });
+        }
+        if let Some(found) = self.declaration_usages(&project, &root, doc, cursor) {
+            return found;
         }
         if !is_blade(&doc.path)
             && let Some(found) = self.factory_definition(&project, &root, doc, cursor)
@@ -2341,7 +2556,7 @@ impl Providers for Laravel {
             });
         }
         out.extend(self.controller_markers(doc, &project, &root));
-        out.extend(self.model_marker(doc, &project, &root));
+        out.extend(self.usage_markers(doc, &project, &root));
         out
     }
 
@@ -2423,6 +2638,8 @@ impl Laravel {
                 show_status(&project);
                 let _task = host::begin_task("Indexing the Laravel project", false);
                 self.cache.load_framework(&project, &root);
+                self.usage_index.remove(&root);
+                self.usages_of(&project, &root);
                 let counts: Vec<String> = RefKind::ALL
                     .iter()
                     .map(|k| (self.cache.get(*k, &project, &root).len(), k.label()))
@@ -2467,6 +2684,7 @@ impl openidea_plugin::Plugin for Laravel {
                 let _task = host::begin_task("Indexing the Laravel project", false);
                 self.cache.warm(&project, &root);
                 self.cached_facts(&project, &root);
+                self.usages_of(&project, &root);
                 self.project_symbols(&project, &root);
                 self.sync_mcp(&project);
                 self.sync_helpers(&project);
@@ -2504,6 +2722,7 @@ impl openidea_plugin::Plugin for Laravel {
                         self.facts_cache = None;
                         self.scan_cache = None;
                         self.live.remove(path);
+                        self.reindex_usages(&project, &root, path);
                         let before = self.snapshot_keys(&project, &root, path);
                         self.cache.invalidate(&root, path);
                         let after = self.snapshot_keys(&project, &root, path);
@@ -2519,6 +2738,9 @@ impl openidea_plugin::Plugin for Laravel {
                         }
                         if path.ends_with(".php") {
                             self.symbols.remove(&root);
+                            if self.laravel_project(path).is_some() {
+                                self.project_symbols(&project, &root);
+                            }
                         }
                     }
                     paths.insert(path.clone());
@@ -2537,6 +2759,7 @@ impl openidea_plugin::Plugin for Laravel {
                     self.hub_tables = None;
                     self.facts_cache = None;
                     self.scan_cache = None;
+                    self.usage_index.clear();
                     self.cache.clear();
                     self.symbols.clear();
                     paths.insert(repo.clone());
@@ -3950,39 +4173,80 @@ Blade::if('admin', fn () => true);
     }
 
     #[test]
-    fn the_model_gutter_opens_everything_about_the_model() {
+    fn the_gutter_leads_to_the_usages_of_classes_and_scopes() {
         use openidea_plugin::views::{ViewEvent, Views};
         let host = setup();
         host.add_file(
             "app/Http/Controllers/ProfileController.php",
-            "<?php\nnamespace App\\Http\\Controllers;\n\nclass ProfileController\n{\n    public function show(User $user) { return $user; }\n}\n",
+            "<?php\nnamespace App\\Http\\Controllers;\n\nuse App\\Models\\User;\n\nclass ProfileController\n{\n    public function show(User $user) { return UserResource::make(User::active()->first()); }\n}\n",
+        );
+        host.add_file(
+            "app/Jobs/Prune.php",
+            "<?php\nnamespace App\\Jobs;\n\nuse App\\Models\\User;\n\nclass Prune\n{\n    // User::active()->delete();\n    public function handle() {}\n}\n",
+        );
+        host.add_file(
+            "app/Http/Resources/UserResource.php",
+            "<?php\nnamespace App\\Http\\Resources;\n\nclass UserResource extends JsonResource\n{\n}\n",
         );
         host.add_file(
             "tests/Feature/UserTest.php",
             "<?php\nit('works', fn () => User::factory()->create());\n",
         );
+        let model_text = "<?php\nclass User extends Authenticatable\n{\n    protected $fillable = ['name', ''];\n\n    public function scopeActive($query) { return $query; }\n\n    public function posts(): HasMany\n    {\n        return $this->hasMany(Post::class);\n    }\n}\n";
+        host.add_file("app/Models/User.php", model_text);
         let mut plugin = Laravel::default();
-        let model = doc("app/Models/User.php", USER);
+        let model = doc("app/Models/User.php", model_text);
         assert!(
-            !plugin
-                .line_markers(&model)
-                .iter()
-                .any(|m| m.tooltip.starts_with("Everything about")),
-            "no marker before the hub files exist"
+            plugin.line_markers(&model).is_empty(),
+            "no usage markers before the project is indexed"
         );
-        host.add_file(
-            "storage/openidea/hub/model-User.laravel-hub",
-            "{\"section\":\"model-User\"}\n",
+        plugin.handle_events(
+            &[Event::FileOpened("/project/app/Models/User.php".into())],
+            &host.invocation(),
         );
-        let marker = plugin
-            .line_markers(&model)
-            .into_iter()
-            .find(|m| m.tooltip.starts_with("Everything about User"))
-            .unwrap();
-        assert_eq!(marker.line, 1);
+        let markers = plugin.line_markers(&model);
+        let class = markers.iter().find(|m| m.line == 1).unwrap();
+        assert!(
+            class.tooltip.starts_with("User is used in 3 files"),
+            "{}",
+            class.tooltip
+        );
+        assert!(
+            class
+                .tooltip
+                .contains("app/Http/Controllers/ProfileController.php:8")
+        );
+        assert!(!class.tooltip.contains("Prune"), "{}", class.tooltip);
         assert_eq!(
-            marker.target.unwrap().path,
-            "/project/storage/openidea/hub/model-User.laravel-hub"
+            class.target.as_ref().unwrap().path,
+            "/project/app/Http/Controllers/ProfileController.php"
+        );
+        assert_eq!(class.target.as_ref().unwrap().range.start.line, 7);
+        let scope = markers.iter().find(|m| m.line == 5).unwrap();
+        assert_eq!(
+            scope.tooltip.lines().next(),
+            Some("scope active() is used in 1 file")
+        );
+        let resource_text = "<?php\nnamespace App\\Http\\Resources;\n\nclass UserResource extends JsonResource\n{\n}\n";
+        let resource = doc("app/Http/Resources/UserResource.php", resource_text);
+        let markers = plugin.line_markers(&resource);
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].line, 3);
+        let found = plugin.definition(&model, at(model_text, "User extends", 1));
+        assert!(
+            found.iter().all(|l| !l.path.ends_with("Prune.php")),
+            "{found:?}"
+        );
+        assert!(
+            found
+                .iter()
+                .any(|l| l.path.ends_with("ProfileController.php") && l.range.start.line == 7)
+        );
+        assert!(
+            !found
+                .iter()
+                .any(|l| l.path.ends_with("ProfileController.php") && l.range.start.line == 3),
+            "imports are not usages"
         );
         plugin
             .handle(
@@ -4006,11 +4270,61 @@ Blade::if('admin', fn () => true);
                 "Model",
                 "Migrations",
                 "Relations",
+                "Scopes",
                 "Controllers",
                 "Models",
                 "Tests"
             ]
         );
+    }
+
+    #[test]
+    fn enums_and_static_classes_complete_with_their_double_colon() {
+        let host = setup();
+        host.add_file(
+            "app/Enums/OrderStatus.php",
+            "<?php\nnamespace App\\Enums;\n\nenum OrderStatus: string\n{\n    case Paid = 'paid';\n}\n",
+        );
+        host.add_file(
+            "app/Support/Money.php",
+            "<?php\nnamespace App\\Support;\n\nclass Money\n{\n    public static function format(int $cents): string { return ''; }\n}\n",
+        );
+        host.add_file(
+            "app/Services/Billing.php",
+            "<?php\nnamespace App\\Services;\n\nclass Billing\n{\n    public function charge() {}\n}\n",
+        );
+        let mut plugin = Laravel::default();
+        plugin.handle_events(
+            &[Event::FileOpened(
+                "/project/app/Enums/OrderStatus.php".into(),
+            )],
+            &host.invocation(),
+        );
+        let text = "<?php\nnamespace App\\Http\\Controllers;\n\nclass OrdersController\n{\n    public function index()\n    {\n        $status = Ord\n        $total = Mon\n        $b = Bil\n    }\n}\n";
+        let d = doc("app/Http/Controllers/OrdersController.php", text);
+        let items = plugin.completion(&d, at(text, "Ord\n", 3), None);
+        let item = items.iter().find(|i| i.label == "OrderStatus::").unwrap();
+        assert_eq!(item.insert_text, "OrderStatus::");
+        assert_eq!(
+            item.additional_edits[0].text,
+            "\n\nuse App\\Enums\\OrderStatus;"
+        );
+        let items = plugin.completion(&d, at(text, "Mon\n", 3), None);
+        assert!(labels(&items).contains(&"Money::"), "{:?}", labels(&items));
+        let items = plugin.completion(&d, at(text, "Bil\n", 3), None);
+        assert!(
+            !labels(&items).contains(&"Billing::"),
+            "{:?}",
+            labels(&items)
+        );
+        let model = "<?php\nnamespace App\\Models;\n\nclass Order extends Model\n{\n    protected $casts = [\n        'status' => Ord\n    ];\n}\n";
+        let items = plugin.completion(
+            &doc("app/Models/Order.php", model),
+            at(model, "Ord\n", 3),
+            None,
+        );
+        assert_eq!(labels(&items), ["OrderStatus::class"]);
+        assert_eq!(items[0].insert_text, "OrderStatus::class");
     }
 
     #[test]
@@ -4076,10 +4390,7 @@ Blade::if('admin', fn () => true);
             .unwrap();
         let (_, again) = host.view_messages().pop().unwrap();
         assert!(!again.contains("cacheKey"), "the filter is used once");
-        host.add_file(
-            "storage/openidea/hub/sections",
-            &hubtabs::wanted(&["Post".to_owned(), "User".to_owned()]),
-        );
+        host.add_file("storage/openidea/hub/sections", &hubtabs::wanted());
         plugin
             .handle(
                 "laravel",
