@@ -477,32 +477,6 @@ fn scan_calls(path: &str, owner: &str, text: &str, tokens: &[Token], lines: &Lin
     out
 }
 
-pub fn scan(project: &Project, root: &str) -> Scan {
-    let mut paths: Vec<String> = Vec::new();
-    for glob in [
-        "app/**/*.php",
-        "database/factories/**/*.php",
-        "database/seeders/**/*.php",
-        "routes/**/*.php",
-        "bootstrap/app.php",
-        "bootstrap/providers.php",
-    ] {
-        paths.extend(find(project, root, glob, 20_000));
-    }
-    paths.sort();
-    paths.dedup();
-    let mut out = Scan::default();
-    for p in paths {
-        let Ok(text) = crate::project::read_listed(project, &p) else {
-            continue;
-        };
-        let part = scan_text(rel(root, &p), &text);
-        out.symbols.extend(part.symbols);
-        out.calls.extend(part.calls);
-    }
-    out
-}
-
 pub fn role(s: &Symbol) -> &'static str {
     let path = s.path.as_str();
     let extends = |names: &[&str]| s.extends.iter().any(|e| names.contains(&e.as_str()));

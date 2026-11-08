@@ -649,7 +649,7 @@ impl Laravel {
             "openapi": count(RefKind::OpenApi),
         });
         let mut counts = counts;
-        let scan = resources::scan(&project, &root);
+        let scan = self.cached_scan(&project, &root);
         if let Some(map) = counts.as_object_mut() {
             for (k, v) in sections::counts(&scan, &project, &root) {
                 map.insert(k.to_owned(), json!(v));
@@ -1134,7 +1134,7 @@ impl Laravel {
         project: &Project,
         root: &str,
         id: &str,
-        scan: &mut Option<resources::Scan>,
+        scan: &mut Option<Rc<resources::Scan>>,
     ) -> Option<Table> {
         let (project, root) = (project, root.to_owned());
         if DEV_SECTIONS.contains(&id) {
@@ -1162,8 +1162,11 @@ impl Laravel {
                 _ => devtools::profiles(project, &root),
             })
         } else if CODE_SECTIONS.contains(&id) {
-            let scan = scan.get_or_insert_with(|| resources::scan(project, &root));
-            sections::build(id, scan, project, &root, &mut self.cache)
+            if scan.is_none() {
+                *scan = Some(self.cached_scan(project, &root));
+            }
+            let scan = scan.clone().unwrap_or_default();
+            sections::build(id, &scan, project, &root, &mut self.cache)
         } else {
             self.index_section(project, &root, id)
         }
@@ -1468,14 +1471,8 @@ impl Laravel {
     }
 
     pub(crate) fn cached_scan(&mut self, project: &Project, root: &str) -> Rc<resources::Scan> {
-        if let Some((cached, scan)) = &self.scan_cache
-            && cached == root
-        {
-            return scan.clone();
-        }
-        let scan = Rc::new(resources::scan(project, root));
-        self.scan_cache = Some((root.to_owned(), scan.clone()));
-        scan
+        self.read_project(project, root, crate::VIEW_SLICE);
+        self.store(root).scan()
     }
 
     fn model_overview(&mut self, view: &str, ctx: &Invocation, name: &str) -> Result<(), Error> {
@@ -1581,7 +1578,7 @@ impl Laravel {
         });
         let scan = self.cached_scan(&project, &root);
         let usages: std::collections::BTreeMap<String, u32> = self
-            .usages_of(&project, &root)
+            .store(&root)
             .files_using(name, &model_path)
             .into_iter()
             .collect();

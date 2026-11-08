@@ -1,5 +1,4 @@
-use crate::project::{Lines, find, rel};
-use openidea_plugin::Project;
+use crate::project::Lines;
 use std::collections::BTreeMap;
 
 pub const GLOBS: [&str; 8] = [
@@ -12,8 +11,6 @@ pub const GLOBS: [&str; 8] = [
     "bootstrap/app.php",
     "bootstrap/providers.php",
 ];
-
-const LIMIT: u32 = 20_000;
 
 fn is_word(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80
@@ -28,13 +25,14 @@ fn blank(out: &mut [u8], from: usize, to: usize) {
 }
 
 fn starts_statement(code: &[u8], at: usize) -> bool {
-    let before = String::from_utf8_lossy(&code[..at]);
-    let before = before.trim_end();
+    let mut end = at;
+    while end > 0 && code[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    let before = &code[..end];
     before.is_empty()
-        || before.ends_with(';')
-        || before.ends_with('{')
-        || before.ends_with('}')
-        || before.ends_with("<?php")
+        || matches!(before.last(), Some(b';' | b'{' | b'}'))
+        || before.ends_with(b"<?php")
 }
 
 fn clean_blade(text: &str) -> String {
@@ -166,8 +164,8 @@ fn words(cleaned: &str) -> BTreeMap<String, u32> {
         }
         let word = &cleaned[start..i];
         let called = cleaned[..start].ends_with("->") || cleaned[..start].ends_with("::");
-        if b.is_ascii_uppercase() || called {
-            out.entry(word.to_owned()).or_insert(line);
+        if (b.is_ascii_uppercase() || called) && !out.contains_key(word) {
+            out.insert(word.to_owned(), line);
         }
     }
     out
@@ -216,22 +214,6 @@ impl Index {
             .filter_map(|(path, words)| words.get(word).map(|line| (path.clone(), *line)))
             .collect()
     }
-}
-
-pub fn build(project: &Project, root: &str) -> Index {
-    let mut index = Index::default();
-    for glob in GLOBS {
-        for path in find(project, root, glob, LIMIT) {
-            let r = rel(root, &path).replace('\\', "/");
-            if r.starts_with("bootstrap/cache/") {
-                continue;
-            }
-            if let Ok(text) = crate::project::read_listed(project, &path) {
-                index.set(&r, &text);
-            }
-        }
-    }
-    index
 }
 
 pub fn line_at(text: &str, at: usize) -> u32 {

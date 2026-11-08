@@ -31,6 +31,7 @@ mod panels;
 mod pest;
 mod php;
 mod project;
+mod projectfiles;
 mod queries;
 mod querysql;
 mod refs;
@@ -115,7 +116,6 @@ pub struct Laravel {
     cache: Cache,
     projects: BTreeMap<String, bool>,
     commands: BTreeMap<String, std::rc::Rc<Vec<artisan::Command>>>,
-    symbols: BTreeMap<String, std::rc::Rc<Vec<hierarchy::ProjectSymbol>>>,
     saved: Vec<renames::Saved>,
     originals: BTreeMap<String, String>,
     analysis: BTreeMap<String, Vec<Diagnostic>>,
@@ -128,10 +128,13 @@ pub struct Laravel {
     hub_synced: BTreeSet<String>,
     hub_tables: Option<(String, HubTables)>,
     facts_cache: Option<(String, std::rc::Rc<checks::Parts>)>,
-    scan_cache: Option<(String, std::rc::Rc<resources::Scan>)>,
     live: BTreeMap<String, u64>,
-    usage_index: BTreeMap<String, usages::Index>,
+    files: BTreeMap<String, projectfiles::Store>,
 }
+
+const EVENT_SLICE: std::time::Duration = std::time::Duration::from_millis(250);
+const PROVIDER_SLICE: std::time::Duration = std::time::Duration::from_millis(60);
+pub(crate) const VIEW_SLICE: std::time::Duration = std::time::Duration::from_millis(2500);
 
 fn kebab(name: &str) -> String {
     let mut out = String::new();
@@ -392,17 +395,26 @@ const TAGS: [(&str, RefKind); 2] = [
 ];
 
 impl Laravel {
-    fn project_symbols(
+    fn project_symbols(&mut self, root: &str) -> std::rc::Rc<Vec<hierarchy::ProjectSymbol>> {
+        self.store(root).symbols()
+    }
+
+    pub(crate) fn store(&mut self, root: &str) -> &mut projectfiles::Store {
+        self.files.entry(root.to_owned()).or_default()
+    }
+
+    pub(crate) fn read_project(
         &mut self,
         project: &Project,
         root: &str,
-    ) -> std::rc::Rc<Vec<hierarchy::ProjectSymbol>> {
-        self.symbols
-            .entry(root.to_owned())
-            .or_insert_with(|| {
-                std::rc::Rc::new(hierarchy::project_symbols(&resources::scan(project, root)))
-            })
-            .clone()
+        budget: std::time::Duration,
+    ) -> bool {
+        let store = self.store(root);
+        store.ready() || store.advance(project, root, budget)
+    }
+
+    fn usages_ready(&self, root: &str) -> bool {
+        self.files.get(root).is_some_and(projectfiles::Store::ready)
     }
 
     fn laravel_project(&mut self, path: &str) -> Option<(Project, String)> {
@@ -426,34 +438,20 @@ impl Laravel {
         if let Some((project, root)) = self.laravel_project(path)
             && (!self.cache.has_framework(&root)
                 || !self.facts_ready(&root)
-                || !self.usage_index.contains_key(&root)
-                || !self.symbols.contains_key(&root))
+                || !self.usages_ready(&root))
         {
             let _task = host::begin_task("Indexing the Laravel project", false);
-            self.cache.warm(&project, &root);
-            self.cached_facts(&project, &root);
-            self.usages_of(&project, &root);
-            self.project_symbols(&project, &root);
+            if !self.cache.has_framework(&root) || !self.facts_ready(&root) {
+                self.cache.warm(&project, &root);
+                self.cached_facts(&project, &root);
+            }
+            self.read_project(&project, &root, EVENT_SLICE);
         }
-    }
-
-    pub(crate) fn usages_of(&mut self, project: &Project, root: &str) -> &usages::Index {
-        self.usage_index
-            .entry(root.to_owned())
-            .or_insert_with(|| usages::build(project, root))
     }
 
     fn reindex_usages(&mut self, project: &Project, root: &str, path: &str) {
-        let r = project::rel(root, path).replace('\\', "/");
-        let Some(index) = self.usage_index.get_mut(root) else {
-            return;
-        };
-        if !usages::indexed(&r) {
-            return;
-        }
-        match project.read_file(path) {
-            Ok(text) => index.set(&r, &text),
-            Err(_) => index.remove(&r),
+        if let Some(store) = self.files.get_mut(root) {
+            store.update(project, root, path);
         }
     }
 
@@ -1102,7 +1100,7 @@ impl Laravel {
             facades =
                 statics::config_aliases(&project.read_file("config/app.php").unwrap_or_default());
         }
-        let symbols = self.symbols.get(root).cloned().unwrap_or_default();
+        let symbols = self.project_symbols(root);
         let mut out: Vec<statics::Candidate> = symbols
             .iter()
             .filter(|s| s.statically || s.cast)
@@ -1153,7 +1151,7 @@ impl Laravel {
         scope: &str,
     ) -> Vec<(String, u32)> {
         let own = project::rel(root, &doc.path).replace('\\', "/");
-        let candidates = self.usages_of(project, root).files_using(scope, "");
+        let candidates = self.store(root).files_using(scope, "");
         let mut out = Vec::new();
         for (path, _) in candidates.into_iter().take(USAGE_FILES) {
             let text = if path == own {
@@ -1176,7 +1174,7 @@ impl Laravel {
         let own = project::rel(root, &doc.path).replace('\\', "/");
         if !(own.starts_with("app/") || own.starts_with("database/"))
             || is_blade(&doc.path)
-            || !self.usage_index.contains_key(root)
+            || !self.read_project(project, root, PROVIDER_SLICE)
         {
             return Vec::new();
         }
@@ -1184,9 +1182,7 @@ impl Laravel {
         let model = self.model_of_file(project, root, &doc.path);
         let mut out = Vec::new();
         for symbol in &scan.symbols {
-            let used = self
-                .usages_of(project, root)
-                .files_using(&symbol.name, &own);
+            let used = self.store(root).files_using(&symbol.name, &own);
             out.extend(usage_marker(
                 root,
                 symbol.line.saturating_sub(1),
@@ -1234,7 +1230,10 @@ impl Laravel {
             return None;
         }
         let name = &text[start..end];
-        let files = self.usages_of(project, root).files_using(name, &own);
+        if !self.usages_ready(root) {
+            return None;
+        }
+        let files = self.store(root).files_using(name, &own);
         let mut out = Vec::new();
         for (path, _) in files.into_iter().take(USAGE_FILES) {
             let full = project::join(root, &path);
@@ -2333,7 +2332,7 @@ impl Providers for Laravel {
             );
         }
         if !blade && let Some((slot, start)) = hierarchy::slot_at(&doc.text, cursor) {
-            let symbols = self.project_symbols(&project, &root);
+            let symbols = self.project_symbols(&root);
             let composer = project.read_file("composer.json").unwrap_or_default();
             let framework = self.cache.framework(&root);
             return hierarchy::items(
@@ -2638,8 +2637,8 @@ impl Laravel {
                 show_status(&project);
                 let _task = host::begin_task("Indexing the Laravel project", false);
                 self.cache.load_framework(&project, &root);
-                self.usage_index.remove(&root);
-                self.usages_of(&project, &root);
+                self.files.remove(&root);
+                self.read_project(&project, &root, VIEW_SLICE);
                 let counts: Vec<String> = RefKind::ALL
                     .iter()
                     .map(|k| (self.cache.get(*k, &project, &root).len(), k.label()))
@@ -2684,8 +2683,6 @@ impl openidea_plugin::Plugin for Laravel {
                 let _task = host::begin_task("Indexing the Laravel project", false);
                 self.cache.warm(&project, &root);
                 self.cached_facts(&project, &root);
-                self.usages_of(&project, &root);
-                self.project_symbols(&project, &root);
                 self.sync_mcp(&project);
                 self.sync_helpers(&project);
             }
@@ -2720,7 +2717,6 @@ impl openidea_plugin::Plugin for Laravel {
                         }
                         self.hub_tables = None;
                         self.facts_cache = None;
-                        self.scan_cache = None;
                         self.live.remove(path);
                         self.reindex_usages(&project, &root, path);
                         let before = self.snapshot_keys(&project, &root, path);
@@ -2735,12 +2731,6 @@ impl openidea_plugin::Plugin for Laravel {
                         }
                         if self.laravel_project(path).is_some() {
                             self.tools_on_save(&project, &root, path);
-                        }
-                        if path.ends_with(".php") {
-                            self.symbols.remove(&root);
-                            if self.laravel_project(path).is_some() {
-                                self.project_symbols(&project, &root);
-                            }
                         }
                     }
                     paths.insert(path.clone());
@@ -2758,10 +2748,8 @@ impl openidea_plugin::Plugin for Laravel {
                 Event::VcsChanged(repo) => {
                     self.hub_tables = None;
                     self.facts_cache = None;
-                    self.scan_cache = None;
-                    self.usage_index.clear();
+                    self.files.clear();
                     self.cache.clear();
-                    self.symbols.clear();
                     paths.insert(repo.clone());
                 }
                 Event::EditorFocused(Some(path)) => {
@@ -3785,6 +3773,7 @@ mod tests {
                 (5, "Go to view resources/views/users/index.blade.php"),
                 (3, "Route: GET /users · admin.users.index"),
                 (8, "Route: POST /users"),
+                (1, "UsersController is used in 1 file\nroutes/web.php:4"),
             ]
         );
     }
@@ -4196,10 +4185,6 @@ Blade::if('admin', fn () => true);
         host.add_file("app/Models/User.php", model_text);
         let mut plugin = Laravel::default();
         let model = doc("app/Models/User.php", model_text);
-        assert!(
-            plugin.line_markers(&model).is_empty(),
-            "no usage markers before the project is indexed"
-        );
         plugin.handle_events(
             &[Event::FileOpened("/project/app/Models/User.php".into())],
             &host.invocation(),

@@ -792,7 +792,7 @@ fn imported(text: &str, fqn: &str) -> bool {
     })
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ProjectSymbol {
     pub fqn: String,
     pub keyword: String,
