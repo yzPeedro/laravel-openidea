@@ -60,11 +60,16 @@ jobs:
         working-directory: laravel-openidea
         run: ./scripts/package.sh
 
+      - name: Marketplace package
+        working-directory: laravel-openidea
+        run: ./scripts/oiplugin.sh
+
       - uses: actions/upload-artifact@v7
         with:
           name: laravel-openidea-package
           path: |
             laravel-openidea/build/*.zip
+            laravel-openidea/build/*.oiplugin
             laravel-openidea/build/*.sha256
           if-no-files-found: error
 
