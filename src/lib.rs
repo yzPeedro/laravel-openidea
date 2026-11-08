@@ -378,7 +378,7 @@ impl Laravel {
 
     fn index_in_background(&mut self, path: &str) {
         if let Some((project, root)) = self.laravel_project(path)
-            && !self.cache.has_framework(&root)
+            && (!self.cache.has_framework(&root) || !self.facts_ready(&root))
         {
             let _task = host::begin_task("Indexing the Laravel project", false);
             self.cache.warm(&project, &root);
@@ -1030,15 +1030,23 @@ impl Laravel {
         project: &Project,
         root: &str,
     ) -> Option<LineMarker> {
+        let same = |a: &str, b: &str| {
+            a.replace('\\', "/")
+                .eq_ignore_ascii_case(&b.replace('\\', "/"))
+        };
         let name = self
             .cache
             .get(RefKind::Model, project, root)
             .iter()
-            .find(|e| e.location.path == doc.path)?
+            .find(|e| same(&e.location.path, &doc.path))?
             .key
             .clone();
         let file = hubtabs::model_file(&name);
-        project.read_file(&file).ok()?;
+        if project.read_file(&file).is_err() {
+            let _task = host::begin_task("Laravel: preparing the hub tabs", false);
+            self.sync_hub_files(project, false).ok()?;
+            project.read_file(&file).ok()?;
+        }
         let at = modelmap::first_offset(&doc.text, &format!("class {name}"))?;
         let line = Lines::new(&doc.text).position(&doc.text, at).line;
         Some(LineMarker {
@@ -1214,6 +1222,9 @@ impl Laravel {
     ) -> Option<Vec<Location>> {
         let text = &doc.text;
         let (start, end) = eloquent::word_span(text, cursor)?;
+        if &text[start..end] == "HasFactory" {
+            return self.has_factory_definition(project, root, text);
+        }
         if &text[start..end] != "factory" || !text[end..].trim_start().starts_with('(') {
             return None;
         }
@@ -1239,6 +1250,36 @@ impl Laravel {
         }
         let framework = self.cache.framework(root);
         Some(framework.factory_method.clone().into_iter().collect())
+    }
+
+    fn has_factory_definition(
+        &mut self,
+        project: &Project,
+        root: &str,
+        text: &str,
+    ) -> Option<Vec<Location>> {
+        let model = scope_of(text).class?;
+        let model_text = self.model_text(project, root, &model)?;
+        if let Some((path, factory)) = factories::file(project, &model, &model_text) {
+            let at = factories::class_offset(&factory);
+            return Some(vec![Location {
+                path: project::join(root, &path),
+                range: Lines::new(&factory).range(&factory, at, at),
+            }]);
+        }
+        let method = self.cache.framework(root).factory_method.clone()?;
+        let trait_file = project
+            .read_file(project::rel(root, &method.path))
+            .ok()
+            .and_then(|source| {
+                let at = modelmap::first_offset(&source, "trait HasFactory")?;
+                let at = at + "trait ".len();
+                Some(Location {
+                    path: method.path.clone(),
+                    range: Lines::new(&source).range(&source, at, at + "HasFactory".len()),
+                })
+            });
+        Some(vec![trait_file.unwrap_or(method)])
     }
 
     fn scope_call_definition(
@@ -2515,6 +2556,7 @@ impl openidea_plugin::Plugin for Laravel {
         for path in paths {
             if let Some((project, root)) = self.laravel_project(&path) {
                 self.cache.warm(&project, &root);
+                self.cached_facts(&project, &root);
             }
             self.publish(&path);
         }
@@ -3815,6 +3857,13 @@ Blade::if('admin', fn () => true);
         let statics = plugin.completion(&d, at(text, "User::fac;", 9), None);
         assert!(labels(&statics).contains(&"factory"));
         let found = plugin.definition(&d, at(text, "factory()->;", 2));
+        assert_eq!(found[0].path, "/project/database/factories/UserFactory.php");
+        assert_eq!(found[0].range.start.line, 3);
+        let model = "<?php\nnamespace App\\Models;\n\nclass User extends Authenticatable\n{\n    use HasFactory;\n}\n";
+        let found = plugin.definition(
+            &doc("app/Models/User.php", model),
+            at(model, "HasFactory;", 3),
+        );
         assert_eq!(found[0].path, "/project/database/factories/UserFactory.php");
         assert_eq!(found[0].range.start.line, 3);
     }

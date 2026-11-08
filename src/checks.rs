@@ -538,16 +538,20 @@ fn fillable_of(source: &str) -> Option<(Vec<String>, usize, usize)> {
     if let Some(i) = source.find("$fillable") {
         return string_list(source, i);
     }
-    source
-        .find("#[Fillable(")
-        .and_then(|i| string_list(source, i))
+    attribute_list(source, "#[Fillable(")
+}
+
+fn attribute_list(source: &str, attribute: &str) -> Option<(Vec<String>, usize, usize)> {
+    let from = source.find(attribute)? + attribute.len();
+    string_list(source, from)
 }
 
 fn guarded_of(source: &str) -> Option<Vec<String>> {
-    let i = source
-        .find("$guarded")
-        .or_else(|| source.find("#[Guarded("))?;
-    string_list(source, i).map(|(names, _, _)| names)
+    match source.find("$guarded") {
+        Some(i) => string_list(source, i),
+        None => attribute_list(source, "#[Guarded("),
+    }
+    .map(|(names, _, _)| names)
 }
 
 fn insert_into_list(source: &str, open: usize, close: usize, item: &str) -> (usize, String) {
@@ -1174,6 +1178,22 @@ mod tests {
             "{}",
             apply(POST, edit)
         );
+    }
+
+    #[test]
+    fn fillable_attribute_lists_get_the_key_inside_the_array() {
+        let model = "<?php\n#[Fillable(['user_id', 'status'])]\nclass Order extends Model\n{\n}\n";
+        let (names, open, close) = fillable_of(model).unwrap();
+        assert_eq!(names, ["user_id", "status"]);
+        let (at, text) = insert_into_list(model, open, close, "total");
+        let mut out = model.to_owned();
+        out.insert_str(at, &text);
+        assert!(
+            out.contains("#[Fillable(['user_id', 'status', 'total'])]"),
+            "{out}"
+        );
+        let guarded = "<?php\n#[Guarded(['id'])]\nclass Order extends Model {}\n";
+        assert_eq!(guarded_of(guarded).unwrap(), ["id"]);
     }
 
     #[test]

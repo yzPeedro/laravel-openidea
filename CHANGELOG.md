@@ -19,6 +19,10 @@ All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](h
 - Inspections run while you type, so the enum value warning and the others appear and go away without saving or reopening the file.
 - The file cache store finds a key by its name when you search for the whole key, so Ctrl+click on a cache key shows its value and expiry there too.
 - Typing after an accented character no longer crashes the plugin.
+- *Add to $fillable* writes the key inside the array of a `#[Fillable([...])]` attribute instead of after it, and `#[Guarded([...])]` is read the same way.
+- Live inspections keep running after a file is saved; before, a save left them waiting until the project was indexed again.
+- The model gutter icon appears even when the hub tab files were never written in that project: the icon writes them itself, and a denied PHP permission is logged.
+- Ctrl+click on `HasFactory` in a model opens the model's factory, or the `HasFactory` trait when the model has none.
 - A search box for the whole hub: it searches every table section at once, lists the first matches of each with a link to the file, the sections whose name matches, and *Show all* to open a section with the same search.
 - Hub sections, and the whole hub, open in editor tabs (*Open in editor* in the hub's header, or *Laravel: Open the Hub in an Editor Tab*), each with its own state, so two sections can sit side by side in an editor split. Ctrl+click on a cache key opens the Cache section in a tab, searched for the key and expanded to show its value and expiry.
 - About 200 PHP and Laravel snippets (class members, control flow, models and relations, queries, controllers, Form Requests, jobs, middleware, policies, migrations, routes, helpers, PHPUnit and Pest), offered only where they fit and adding the imports they need, plus Blade block directives with their closing tag. They are listed in `docs/snippets.md`, generated from the same table.

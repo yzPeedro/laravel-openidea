@@ -221,9 +221,11 @@ impl Laravel {
                 audit::error("hub tabs", &why);
                 Err(why)
             }
-            Err(Error::Denied(cap)) => Err(format!(
-                "allow {cap} for Laravel OpenIDEA in Settings › Plugins"
-            )),
+            Err(Error::Denied(cap)) => {
+                let why = format!("allow {cap} for Laravel OpenIDEA in Settings › Plugins");
+                audit::warn("hub tabs", why.clone());
+                Err(why)
+            }
             Err(e) => {
                 audit::failed("hub tabs", &e);
                 Err(e.to_string())
