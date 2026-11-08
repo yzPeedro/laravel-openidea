@@ -42,6 +42,7 @@ pub enum Base {
     Var(String),
     This,
     AuthUser,
+    Static(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,7 +103,14 @@ pub fn access_at(text: &str, cursor: usize, whole_word: bool) -> Option<Access> 
     if whole_word && start == end {
         return None;
     }
-    let mut at = arrow_before(text, start)?;
+    let Some(mut at) = arrow_before(text, start) else {
+        return Some(Access {
+            base: Base::Static(static_class(text, start)?),
+            path: Vec::new(),
+            start,
+            end,
+        });
+    };
     let mut path = Vec::new();
     loop {
         let line_start = text[..at].rfind('\n').map_or(0, |i| i + 1);
@@ -124,11 +132,16 @@ pub fn access_at(text: &str, cursor: usize, whole_word: bool) -> Option<Access> 
                 });
             }
         }
-        let s = word_before(text, at);
+        let mut s = word_before(text, at);
+        let mut word = text[s..at].to_owned();
         if s == at {
-            return None;
+            let open = open_paren(text, at)?;
+            s = word_before(text, open);
+            if s == open || text[..s].ends_with('$') {
+                return None;
+            }
+            word = format!("{}()", &text[s..open]);
         }
-        let word = &text[s..at];
         if s > 0 && text[..s].ends_with('$') {
             path.reverse();
             let base = if word == "this" {
@@ -143,9 +156,67 @@ pub fn access_at(text: &str, cursor: usize, whole_word: bool) -> Option<Access> 
                 end,
             });
         }
-        path.push(word.to_owned());
-        at = arrow_before(text, s)?;
+        let call = word.ends_with("()");
+        path.push(word);
+        if let Some(next) = arrow_before(text, s) {
+            at = next;
+            continue;
+        }
+        if !call {
+            return None;
+        }
+        path.reverse();
+        return Some(Access {
+            base: Base::Static(static_class(text, s)?),
+            path,
+            start,
+            end,
+        });
     }
+}
+
+fn static_class(text: &str, at: usize) -> Option<String> {
+    let before = text[..at].strip_suffix("::")?;
+    let start = before
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !is_word(*c) && *c != '\\')
+        .map_or(0, |(i, c)| i + c.len_utf8());
+    let class = before[start..].rsplit('\\').next()?;
+    (!class.is_empty() && !class.starts_with(|c: char| c.is_ascii_digit()))
+        .then(|| class.to_owned())
+}
+
+fn open_paren(text: &str, close_end: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    if close_end == 0 || bytes[close_end - 1] != b')' {
+        return None;
+    }
+    let floor = close_end.saturating_sub(4000);
+    let mut depth = 0usize;
+    let mut i = close_end;
+    while i > floor {
+        i -= 1;
+        match bytes[i] {
+            b')' => depth += 1,
+            b'(' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            q @ (b'\'' | b'"') => {
+                while i > floor {
+                    i -= 1;
+                    if bytes[i] == q && (i == 0 || bytes[i - 1] != b'\\') {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn scope_start(text: &str, cursor: usize) -> usize {
@@ -517,6 +588,78 @@ pub fn is_many(kind: &str) -> bool {
     )
 }
 
+pub fn word_span(text: &str, cursor: usize) -> Option<(usize, usize)> {
+    let cursor = cursor.min(text.len());
+    if !text.is_char_boundary(cursor) {
+        return None;
+    }
+    let start = word_before(text, cursor);
+    let end = text[cursor..]
+        .char_indices()
+        .find(|(_, c)| !is_word(*c))
+        .map_or(text.len(), |(i, _)| cursor + i);
+    (start < end).then_some((start, end))
+}
+
+pub fn scope_at(text: &str, cursor: usize) -> Option<String> {
+    let cursor = cursor.min(text.len());
+    if !text.is_char_boundary(cursor) {
+        return None;
+    }
+    let start = word_before(text, cursor);
+    let end = text[cursor..]
+        .char_indices()
+        .find(|(_, c)| !is_word(*c))
+        .map_or(text.len(), |(i, _)| cursor + i);
+    let word = &text[start..end];
+    let before = text[..start].trim_end();
+    if !before.ends_with("function")
+        || before[..before.len() - 8]
+            .chars()
+            .next_back()
+            .is_some_and(is_word)
+    {
+        return None;
+    }
+    if let Some(rest) = word.strip_prefix("scope")
+        && rest.chars().next().is_some_and(char::is_uppercase)
+    {
+        let mut chars = rest.chars();
+        let first = chars.next()?;
+        return Some(first.to_lowercase().chain(chars).collect());
+    }
+    let header = &before[before.rfind(['{', '}', ';']).map_or(0, |i| i + 1)..];
+    (header.contains("#[Scope]") || header.contains("#[Scope(")).then(|| word.to_owned())
+}
+
+pub fn scope_calls(text: &str, model: &str, name: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(found) = text[from..].find(name) {
+        let start = from + found;
+        let end = start + name.len();
+        from = end;
+        let bounded = !text[..start].chars().next_back().is_some_and(is_word)
+            && !text[end..].chars().next().is_some_and(is_word);
+        if !bounded || !text[end..].trim_start().starts_with('(') {
+            continue;
+        }
+        let before = text[..start].trim_end();
+        let called = if before.ends_with("->") {
+            true
+        } else if let Some(class_end) = before.strip_suffix("::") {
+            let class = &class_end[word_before(class_end, class_end.len())..];
+            class == model || class == "static" || class == "self"
+        } else {
+            false
+        };
+        if called {
+            out.push((start, end));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,8 +689,40 @@ mod tests {
             access("auth()->user()->team->|"),
             Some((Base::AuthUser, vec!["team".into()], String::new()))
         );
-        assert_eq!(access("$order->items()->|"), None);
-        assert_eq!(access("Order::|"), None);
+        assert_eq!(
+            access("$order->items()->first()->|"),
+            Some((
+                Base::Var("order".into()),
+                vec!["items()".into(), "first()".into()],
+                String::new()
+            ))
+        );
+        assert_eq!(
+            access("$order->items()->where('a)', fn ($q) => $q->x())->|"),
+            Some((
+                Base::Var("order".into()),
+                vec!["items()".into(), "where()".into()],
+                String::new()
+            ))
+        );
+        assert_eq!(
+            access("Product::where('x', 1)->latest()->|"),
+            Some((
+                Base::Static("Product".into()),
+                vec!["where()".into(), "latest()".into()],
+                String::new()
+            ))
+        );
+        assert_eq!(
+            access("\\App\\Models\\Product::pub|"),
+            Some((Base::Static("Product".into()), vec![], "pub".into()))
+        );
+        assert_eq!(access("Product::CONST->|"), None);
+        assert_eq!(access("$items()->|"), None);
+        assert_eq!(
+            access("Order::|"),
+            Some((Base::Static("Order".into()), vec![], String::new()))
+        );
     }
 
     #[test]

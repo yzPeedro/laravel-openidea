@@ -117,8 +117,14 @@ impl Laravel {
             env: setting("envCallInspection"),
             fillable: setting("fillableInspection"),
             n_plus_one: setting("nPlusOneInspection"),
+            duplicate_keys: setting("duplicateKeyInspection"),
         };
-        if !(enabled.columns || enabled.env || enabled.fillable || enabled.n_plus_one) {
+        if !(enabled.columns
+            || enabled.env
+            || enabled.fillable
+            || enabled.n_plus_one
+            || enabled.duplicate_keys)
+        {
             return Vec::new();
         }
         let (models, columns, config_env) = self.check_facts(project, root);

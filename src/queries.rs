@@ -159,7 +159,7 @@ impl Laravel {
             &["tinker".into(), "storage/openidea/selection.php".into()],
             true,
         );
-        match host::open_terminal("Tinker: selection", mode.program(), &args) {
+        match host::open_terminal("artisan tinker (selection)", mode.program(), &args) {
             Ok(()) => Ok(None),
             Err(Error::Denied(cap)) => Err(Error::Failed(format!(
                 "Allow \"{cap}\" for Laravel OpenIDEA in Settings › Plugins to run Tinker."

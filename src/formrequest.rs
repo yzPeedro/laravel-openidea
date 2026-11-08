@@ -90,6 +90,42 @@ fn ucfirst(s: &str) -> String {
         .unwrap_or_default()
 }
 
+pub fn class_name(input: &str) -> Result<String, String> {
+    let mut name = input.trim().replace('/', "\\");
+    if let Some(stripped) = name.strip_suffix(".php") {
+        name = stripped.to_owned();
+    }
+    for prefix in [
+        "app\\Http\\Requests\\",
+        "App\\Http\\Requests\\",
+        "\\App\\Http\\Requests\\",
+    ] {
+        if let Some(stripped) = name.strip_prefix(prefix) {
+            name = stripped.to_owned();
+        }
+    }
+    let name = name.trim_matches('\\');
+    if name.is_empty() {
+        return Err("Type a class name, such as StoreOrderRequest.".into());
+    }
+    let valid = |part: &str| {
+        let mut c = part.chars();
+        c.next()
+            .is_some_and(|f| f.is_ascii_alphabetic() || f == '_')
+            && c.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    };
+    match name.split('\\').find(|part| !valid(part)) {
+        Some(part) => Err(format!(
+            "'{part}' isn't a valid PHP class name: use letters, digits and _, starting with a letter."
+        )),
+        None => Ok(name.to_owned()),
+    }
+}
+
+pub fn file_of(name: &str) -> String {
+    format!("app/Http/Requests/{}.php", name.replace('\\', "/"))
+}
+
 struct Imports {
     entries: Vec<(String, String)>,
     statements: Vec<(Option<String>, usize, usize)>,
@@ -164,7 +200,12 @@ fn uses_word(text: &str, word: &str) -> bool {
     })
 }
 
-pub fn extract(text: &str, cursor: usize, taken: &dyn Fn(&str) -> bool) -> Option<Extraction> {
+pub fn extract(
+    text: &str,
+    cursor: usize,
+    chosen: Option<&str>,
+    taken: &dyn Fn(&str) -> bool,
+) -> Option<Extraction> {
     let toks = tokenize(text);
     let class_at = (0..toks.len()).find(|&i| {
         ident(toks.get(i), "class") && toks.get(i + 1).is_some_and(|t| t.kind == Kind::Ident)
@@ -244,12 +285,22 @@ pub fn extract(text: &str, cursor: usize, taken: &dyn Fn(&str) -> bool) -> Optio
     } else {
         format!("{}{base}Request", ucfirst(&method))
     };
-    let mut name = stem.trim_end_matches("Request").to_owned() + "Request";
-    let mut n = 2;
-    while taken(&format!("app/Http/Requests/{name}.php")) {
-        name = format!("{}{n}Request", stem.trim_end_matches("Request"));
-        n += 1;
-    }
+    let full = match chosen {
+        Some(c) => c.to_owned(),
+        None => {
+            let mut name = stem.trim_end_matches("Request").to_owned() + "Request";
+            let mut n = 2;
+            while taken(&file_of(&name)) {
+                name = format!("{}{n}Request", stem.trim_end_matches("Request"));
+                n += 1;
+            }
+            name
+        }
+    };
+    let (namespace, name) = match full.rsplit_once('\\') {
+        Some((sub, short)) => (format!("App\\Http\\Requests\\{sub}"), short.to_owned()),
+        None => ("App\\Http\\Requests".to_owned(), full.clone()),
+    };
 
     let mut edits = Vec::new();
     let typed = (p_open + 1..p_close).find(|&i| {
@@ -304,7 +355,7 @@ pub fn extract(text: &str, cursor: usize, taken: &dyn Fn(&str) -> bool) -> Optio
     }
 
     let imported = imports(text, &toks, class_at);
-    let fqcn = format!("App\\Http\\Requests\\{name}");
+    let fqcn = format!("{namespace}\\{name}");
     match (imported.first_start, imported.last_end) {
         (Some(first), Some(last)) => {
             let mut applied = text.to_owned();
@@ -359,7 +410,7 @@ pub fn extract(text: &str, cursor: usize, taken: &dyn Fn(&str) -> bool) -> Optio
     uses.sort();
     uses.dedup();
     let mut content = format!(
-        "<?php\n\nnamespace App\\Http\\Requests;\n\n{}\n\nclass {name} extends FormRequest\n{{\n    public function authorize(): bool\n    {{\n        return true;\n    }}\n\n    public function rules(): array\n    {{\n        return {};\n    }}\n",
+        "<?php\n\nnamespace {namespace};\n\n{}\n\nclass {name} extends FormRequest\n{{\n    public function authorize(): bool\n    {{\n        return true;\n    }}\n\n    public function rules(): array\n    {{\n        return {};\n    }}\n",
         uses.join("\n"),
         reindent(&rules, "        ")
     );
@@ -373,11 +424,8 @@ pub fn extract(text: &str, cursor: usize, taken: &dyn Fn(&str) -> bool) -> Optio
     }
     content.push_str("}\n");
     Some(Extraction {
-        class: name,
-        file: format!(
-            "app/Http/Requests/{}.php",
-            fqcn.rsplit('\\').next().unwrap_or_default()
-        ),
+        file: file_of(&full),
+        class: full,
         content,
         edits,
     })
@@ -400,7 +448,7 @@ mod tests {
     #[test]
     fn extracts_rules_messages_and_imports_into_a_form_request() {
         let at = CONTROLLER.find("validate").unwrap();
-        let x = extract(CONTROLLER, at, &|_| false).unwrap();
+        let x = extract(CONTROLLER, at, None, &|_| false).unwrap();
         assert_eq!(x.class, "StoreOrderRequest");
         assert_eq!(x.file, "app/Http/Requests/StoreOrderRequest.php");
         assert_eq!(
@@ -424,7 +472,7 @@ mod tests {
     #[test]
     fn a_bare_validate_call_is_removed_and_the_helper_gets_a_parameter() {
         let text = "<?php\nnamespace App\\Http\\Controllers;\n\nclass PostController\n{\n    public function update(Post $post)\n    {\n        request()->validate(['title' => 'required']);\n        $post->update(request()->all());\n    }\n}\n";
-        let x = extract(text, text.find("validate").unwrap(), &|f| {
+        let x = extract(text, text.find("validate").unwrap(), None, &|f| {
             f.ends_with("UpdatePostRequest.php")
         })
         .unwrap();
@@ -452,10 +500,59 @@ mod tests {
     #[test]
     fn this_validate_with_the_request_argument() {
         let text = "<?php\nclass UserController\n{\n    public function __invoke(\\Illuminate\\Http\\Request $req)\n    {\n        $this->validate($req, ['email' => 'email']);\n    }\n}\n";
-        let x = extract(text, text.find("validate").unwrap(), &|_| false).unwrap();
+        let x = extract(text, text.find("validate").unwrap(), None, &|_| false).unwrap();
         assert_eq!(x.class, "UserRequest");
         let after = apply(text, &x.edits);
         assert!(after.contains("__invoke(UserRequest $req)"), "{after}");
-        assert!(extract(text, 0, &|_| false).is_none());
+        assert!(extract(text, 0, None, &|_| false).is_none());
+    }
+
+    #[test]
+    fn a_chosen_name_sets_the_class_the_folder_and_the_namespace() {
+        let at = CONTROLLER.find("validate").unwrap();
+        let x = extract(CONTROLLER, at, Some(r"Admin\CreateOrder"), &|_| true).unwrap();
+        assert_eq!(x.class, r"Admin\CreateOrder");
+        assert_eq!(x.file, "app/Http/Requests/Admin/CreateOrder.php");
+        assert!(
+            x.content.contains(r"namespace App\Http\Requests\Admin;"),
+            "{}",
+            x.content
+        );
+        assert!(
+            x.content.contains("class CreateOrder extends FormRequest"),
+            "{}",
+            x.content
+        );
+        let after = apply(CONTROLLER, &x.edits);
+        assert!(
+            after.contains(r"use App\Http\Requests\Admin\CreateOrder;"),
+            "{after}"
+        );
+        assert!(
+            after.contains("public function store(CreateOrder $request)"),
+            "{after}"
+        );
+    }
+
+    #[test]
+    fn typed_names_are_normalised_or_refused() {
+        assert_eq!(
+            class_name("  StoreOrderRequest ").unwrap(),
+            "StoreOrderRequest"
+        );
+        assert_eq!(
+            class_name("Admin/StoreOrderRequest.php").unwrap(),
+            r"Admin\StoreOrderRequest"
+        );
+        assert_eq!(
+            class_name("app/Http/Requests/Admin/Store.php").unwrap(),
+            r"Admin\Store"
+        );
+        assert_eq!(class_name(r"App\Http\Requests\Store").unwrap(), "Store");
+        assert!(class_name("").is_err());
+        assert!(class_name("1Store").is_err());
+        assert!(class_name("Store-Order").is_err());
+        assert!(class_name("Admin//Store").is_err());
+        assert_eq!(file_of(r"Admin\Store"), "app/Http/Requests/Admin/Store.php");
     }
 }

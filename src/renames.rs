@@ -5,8 +5,48 @@ use crate::php::{self, Kind, is_blade};
 use crate::project::{Lines, find, rel};
 use crate::refs::{self, Want};
 use openidea_plugin::providers::{CodeAction, Document};
-use openidea_plugin::{Error, Location, Project, TextEdit};
+use openidea_plugin::text::offset;
+use openidea_plugin::{Error, Invocation, Location, Project, TextEdit, host};
 use serde::{Deserialize, Serialize};
+
+fn text_edits(text: &str, edits: Vec<(usize, usize, String)>) -> Vec<TextEdit> {
+    let lines = Lines::new(text);
+    edits
+        .into_iter()
+        .map(|(s, e, t)| TextEdit {
+            range: lines.range(text, s, e),
+            text: t,
+        })
+        .collect()
+}
+
+fn create_form_request(project: &Project, x: &crate::formrequest::Extraction) -> Result<(), Error> {
+    let mode = crate::runner::detect(project);
+    let args = mode.php_args(&[
+        "-r".into(),
+        crate::devtools::script(crate::devtools::CREATE_FILE_PHP),
+        "--".into(),
+        x.file.clone(),
+    ]);
+    let out = match project.run_process(mode.program(), &args, Some(&x.content)) {
+        Ok(out) => out,
+        Err(Error::Denied(cap)) => {
+            return Err(Error::Failed(format!(
+                "Allow \"{cap}\" for Laravel OpenIDEA in Settings › Plugins to create the Form Request."
+            )));
+        }
+        Err(e) => return Err(e),
+    };
+    if out.status != Some(0) {
+        let why = if out.stderr.trim().is_empty() {
+            out.stdout.trim()
+        } else {
+            out.stderr.trim()
+        };
+        return Err(Error::Failed(format!("Couldn't create {}: {why}", x.file)));
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case")]
@@ -211,6 +251,20 @@ pub(crate) fn usage_locations(
     kind: RefKind,
     key: &str,
 ) -> Vec<Location> {
+    locations_matching(project, root, doc, |text, blade| {
+        usage_edits(text, blade, kind, key, key)
+            .into_iter()
+            .map(|(s, e, _)| (s, e))
+            .collect()
+    })
+}
+
+pub(crate) fn locations_matching(
+    project: &Project,
+    root: &str,
+    doc: &Document,
+    spans: impl Fn(&str, bool) -> Vec<(usize, usize)>,
+) -> Vec<Location> {
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
     for glob in USAGE_GLOBS {
@@ -227,7 +281,7 @@ pub(crate) fn usage_locations(
                 }
             };
             let lines = Lines::new(&text);
-            for (s, e, _) in usage_edits(&text, is_blade(&path), kind, key, key) {
+            for (s, e) in spans(&text, is_blade(&path)) {
                 out.push(Location {
                     path: path.clone(),
                     range: lines.range(&text, s, e),
@@ -526,7 +580,7 @@ impl Laravel {
             return Vec::new();
         }
         let taken = |rel_path: &str| project.read_file(rel_path).is_ok();
-        match crate::formrequest::extract(&doc.text, cursor, &taken) {
+        match crate::formrequest::extract(&doc.text, cursor, None, &taken) {
             Some(x) => vec![action(
                 format!("Extract the validation into a Form Request ({})", x.class),
                 &Pending::FormRequest { at: cursor },
@@ -543,46 +597,86 @@ impl Laravel {
         action: CodeAction,
     ) -> Result<CodeAction, Error> {
         let taken = |rel_path: &str| project.read_file(rel_path).is_ok();
-        let x = crate::formrequest::extract(&doc.text, at, &taken)
+        let x = crate::formrequest::extract(&doc.text, at, None, &taken)
             .ok_or_else(|| Error::Invalid("the validate() call isn't there anymore".into()))?;
-        let mode = crate::runner::detect(project);
-        let args = mode.php_args(&[
-            "-r".into(),
-            crate::devtools::script(crate::devtools::CREATE_FILE_PHP),
-            "--".into(),
-            x.file.clone(),
-        ]);
-        let out = match project.run_process(mode.program(), &args, Some(&x.content)) {
-            Ok(out) => out,
-            Err(Error::Denied(cap)) => {
-                return Err(Error::Failed(format!(
-                    "Allow \"{cap}\" for Laravel OpenIDEA in Settings › Plugins to create the Form Request."
-                )));
-            }
-            Err(e) => return Err(e),
-        };
-        if out.status != Some(0) {
-            let why = if out.stderr.trim().is_empty() {
-                out.stdout.trim()
-            } else {
-                out.stderr.trim()
-            };
-            return Err(Error::Failed(format!("Couldn't create {}: {why}", x.file)));
-        }
-        let lines = Lines::new(&doc.text);
-        let edits = x
-            .edits
-            .into_iter()
-            .map(|(s, e, t)| TextEdit {
-                range: lines.range(&doc.text, s, e),
-                text: t,
-            })
-            .collect();
+        create_form_request(project, &x)?;
         Ok(CodeAction {
-            edits: vec![(doc.path.clone(), edits)],
+            edits: vec![(doc.path.clone(), text_edits(&doc.text, x.edits))],
             data: None,
             ..action
         })
+    }
+
+    pub(crate) fn extract_form_request(
+        &mut self,
+        ctx: &Invocation,
+    ) -> Result<Option<String>, Error> {
+        let editor = ctx
+            .editor()
+            .ok_or_else(|| Error::Invalid("Open the controller in the editor first.".into()))?;
+        let path = editor.path();
+        let (project, _) = self
+            .laravel_project(&path)
+            .ok_or("this file is not in a Laravel project")?;
+        let doc = editor.document()?;
+        let sel = editor.selections()?.into_iter().next().ok_or_else(|| {
+            Error::Invalid("Place the cursor in the validate() call first.".into())
+        })?;
+        let start = offset(&doc.text, sel.start).unwrap_or(0);
+        let end = offset(&doc.text, sel.end).unwrap_or(start).max(start);
+        let mut candidates = vec![start];
+        if let Some(i) = doc.text[start..end].find("validate(") {
+            candidates.push(start + i + "validate(".len());
+        }
+        if let Some(i) = doc.text[end..].find("validate(").filter(|i| *i < 80) {
+            candidates.push(end + i + "validate(".len());
+        }
+        candidates.push(end);
+        let taken = |rel_path: &str| project.read_file(rel_path).is_ok();
+        let (at, suggested) = candidates
+            .into_iter()
+            .find_map(|at| {
+                crate::formrequest::extract(&doc.text, at, None, &taken).map(|x| (at, x))
+            })
+            .ok_or_else(|| {
+                Error::Invalid(
+                    "Place the cursor in or select a $request->validate([...]) call to extract it into a Form Request."
+                        .into(),
+                )
+            })?;
+        let mut prompt = "Form Request class (in app/Http/Requests)".to_owned();
+        let mut value = suggested.class;
+        let name = loop {
+            let Some(typed) = host::input(&prompt, Some(&value))? else {
+                return Ok(None);
+            };
+            match crate::formrequest::class_name(&typed) {
+                Ok(name) if taken(&crate::formrequest::file_of(&name)) => {
+                    prompt = format!(
+                        "{} already exists: choose another name",
+                        crate::formrequest::file_of(&name)
+                    );
+                    value = typed;
+                }
+                Ok(name) => break name,
+                Err(why) => {
+                    prompt = why;
+                    value = typed;
+                }
+            }
+        };
+        let current = editor.document()?;
+        if current.version != doc.version {
+            return Err(Error::Invalid(
+                "The file changed while the dialog was open: run Extract Form Request again."
+                    .into(),
+            ));
+        }
+        let x = crate::formrequest::extract(&doc.text, at, Some(&name), &taken)
+            .ok_or_else(|| Error::Invalid("the validate() call isn't there anymore".into()))?;
+        create_form_request(&project, &x)?;
+        editor.apply_edits(doc.version, &text_edits(&doc.text, x.edits))?;
+        Ok(Some(format!("Created {}", x.file)))
     }
 
     pub(crate) fn remember_original(&mut self, root: &str, path: &str, text: &str, replace: bool) {

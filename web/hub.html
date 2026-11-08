@@ -279,6 +279,16 @@
   .tools { display: grid; gap: 10px; } .tools div { display: flex; flex-direction: column; gap: 1px; font-size: .92em; } .tools b { font-family: var(--mono); color: var(--openidea-fg-strong); font-weight: 500; } .tools span { color: var(--openidea-fg-muted); }
   .chiplist span { font: .85em var(--mono); padding: 1px 8px; border-radius: 999px; border: 1px solid var(--openidea-border); }
 
+  .pager { position: sticky; bottom: 0; z-index: 2; background: var(--openidea-bg); display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--gap-2); padding: var(--gap-3) var(--gap-5); border-top: 1px solid var(--openidea-border); }
+  .pager .pages { color: var(--openidea-fg-muted); font-size: .9em; margin: 0 var(--gap-2); }
+  .pager .btn { padding: 4px 10px; }
+  .pager select { padding: 4px 8px; border-radius: var(--radius-sm); border: 1px solid var(--openidea-border); background: var(--openidea-bg-input); }
+  .cache-note { margin: var(--gap-3) var(--gap-5); padding: var(--gap-3) var(--gap-4); border-radius: var(--radius-sm); border: 1px solid var(--openidea-border); color: var(--openidea-fg-muted); }
+  .cache-note.bad { color: var(--openidea-error, #e5534b); border-color: currentColor; }
+  .cache-value { white-space: pre-wrap; word-break: break-all; font-family: var(--openidea-font-mono, monospace); font-size: .9em; max-height: 360px; overflow: auto; }
+  tr.cache-detail td { background: var(--openidea-bg-elevated); }
+  .cache-bar { display: flex; flex-wrap: wrap; gap: var(--gap-2); align-items: center; }
+  .cache-bar select { padding: 6px 8px; border-radius: var(--radius-sm); border: 1px solid var(--openidea-border); background: var(--openidea-bg-input); }
 </style>
 </head>
 <body>
@@ -342,6 +352,7 @@ const SECTIONS = [
   { group: "Data", id: "casts", title: "Casts", icon: "mappings", desc: "Custom attribute casts", count: "casts" },
   { group: "Data", id: "enums", title: "Enums", icon: "enum", desc: "Enums with their cases", count: "enums" },
   { group: "Data", id: "database", title: "Database", icon: "migrations", desc: "Tables and columns from your migrations", count: "tables" },
+  { group: "Data", id: "cache", title: "Cache", icon: "key", desc: "Keys and values in every cache store, whatever the driver" },
   { group: "Data", id: "factories", title: "Factories & Seeders", icon: "seeders", desc: "Model factories and database seeders", count: "factories" },
   { group: "Views", id: "views", title: "Views", icon: "views", desc: "Blade views by name", count: "views" },
   { group: "Views", id: "components", title: "Components", icon: "components", desc: "Blade and Livewire components", count: "components" },
@@ -396,7 +407,7 @@ const icon = (name, size = "") => {
   span.innerHTML = ICONS[name] || "";
   return span;
 };
-const state = { section: "overview", overview: null, data: {}, facetSel: {}, sort: {}, commands: [], globals: [], history: [], runner: "", current: null, values: {},
+const state = { section: "overview", overview: null, data: {}, facetSel: {}, sort: {}, pages: {}, commands: [], globals: [], history: [], runner: "", current: null, values: {},
   logs: { files: [], path: null, size: -1, entries: [], levels: new Set(LEVELS), expanded: false, hiddenBefore: 0 }, lastCapture: null };
 
 function toast(text) {
@@ -453,6 +464,7 @@ function go(id) {
   else if (id === "tinker") { renderTinker(); }
   else if (id === "sql") { $("search-box").hidden = true; renderSql(); }
   else if (id === "audit") { renderAudit(); }
+  else if (id === "cache") { renderCache(); requestCache("list"); }
   else if (id === "ai") { renderAgents(); }
   else { loading(); send({ type: "section", id }); }
 }
@@ -461,6 +473,45 @@ function loading() {
   const box = el("div", { className: "loading" });
   for (let i = 0; i < 8; i++) box.append(el("div", { className: "skeleton", style: "width:" + (40 + ((i * 37) % 55)) + "%" }));
   $("content").replaceChildren(box);
+}
+
+const PAGE_SIZES = [50, 100, 200, 500];
+function pageState(key) { return state.pages[key] || (state.pages[key] = { page: 0, size: 100 }); }
+function pageCount(key, total) { return Math.max(1, Math.ceil(total / pageState(key).size)); }
+function pageSlice(key, rows) {
+  const p = pageState(key);
+  p.page = Math.min(p.page, pageCount(key, rows.length) - 1);
+  return rows.slice(p.page * p.size, (p.page + 1) * p.size);
+}
+function stopFollow(target, toggle) {
+  target.follow = false;
+  const b = document.querySelector('[data-toggle="' + toggle + '"]');
+  if (b) b.setAttribute("aria-pressed", "false");
+}
+function resetPage(key) { if (state.pages[key]) state.pages[key].page = 0; }
+function pager(key, total, rerender, onMove) {
+  const p = pageState(key);
+  const pages = pageCount(key, total);
+  const move = (to) => { p.page = Math.max(0, Math.min(pages - 1, to)); if (onMove) onMove(); rerender(); $("content").scrollTop = 0; };
+  const btn = (label, title, to, disabled) => {
+    const b = el("button", { className: "btn ghost", textContent: label, title, "aria-label": title });
+    b.disabled = disabled;
+    b.addEventListener("click", () => move(to));
+    return b;
+  };
+  const size = el("select", { "aria-label": "Rows per page" });
+  for (const n of PAGE_SIZES) size.append(el("option", { value: String(n), textContent: n + " per page" }));
+  size.value = String(p.size);
+  size.addEventListener("change", () => { p.size = Number(size.value); p.page = 0; if (onMove) onMove(); rerender(); });
+  const from = total ? p.page * p.size + 1 : 0;
+  const to = Math.min(total, (p.page + 1) * p.size);
+  return el("div", { className: "pager" },
+    btn("«", "First page", 0, p.page === 0),
+    btn("‹", "Previous page", p.page - 1, p.page === 0),
+    el("span", { className: "pages", textContent: from + "–" + to + " of " + total + " · page " + (p.page + 1) + " of " + pages }),
+    btn("›", "Next page", p.page + 1, p.page >= pages - 1),
+    btn("»", "Last page", pages - 1, p.page >= pages - 1),
+    size);
 }
 
 function emptyState(text, iconName = "laravel") {
@@ -565,12 +616,12 @@ function renderFilters(id, data, facets, base) {
     const values = [...counts.entries()].sort((a, b) => b[1] - a[1] || compareCells(a[0], b[0])).slice(0, 400);
     for (const [v, n] of values) select.append(el("option", { value: v, textContent: v + "  (" + n + ")" }));
     select.value = sel[f.column] || "";
-    select.addEventListener("change", () => { if (select.value) sel[f.column] = select.value; else delete sel[f.column]; renderSection(id); });
+    select.addEventListener("change", () => { if (select.value) sel[f.column] = select.value; else delete sel[f.column]; resetPage(id); renderSection(id); });
     bar.append(el("label", { className: "facet" + (sel[f.column] ? " on" : "") }, el("span", { textContent: f.column }), select));
   }
   if (Object.keys(sel).length) {
     const reset = el("button", { className: "linkbtn", textContent: "Clear filters" });
-    reset.addEventListener("click", () => { state.facetSel[id] = {}; renderSection(id); });
+    reset.addEventListener("click", () => { state.facetSel[id] = {}; resetPage(id); renderSection(id); });
     bar.append(reset);
   }
 }
@@ -601,6 +652,7 @@ function renderSection(id) {
     th.addEventListener("click", () => {
       const cur = state.sort[id];
       state.sort[id] = !cur || cur.idx !== idx ? { idx, dir: 1 } : cur.dir > 0 ? { idx, dir: -1 } : null;
+      resetPage(id);
       renderSection(id);
     });
     headRow.append(th);
@@ -608,7 +660,7 @@ function renderSection(id) {
   headRow.append(el("th"));
   table.append(el("thead", {}, headRow));
   const body = el("tbody");
-  for (const r of rows.slice(0, 3000)) {
+  for (const r of pageSlice(id, rows)) {
     const tr = el("tr", { className: r.open ? "link" : "" });
     r.cells.forEach((cell, i) => {
       const td = el("td");
@@ -631,12 +683,15 @@ function renderSection(id) {
     body.append(tr);
   }
   table.append(body);
-  content.replaceChildren(rows.length ? table : emptyState(q ? "No match for “" + q + "”." : "No item matches the filters."));
+  const paged = rows.length > PAGE_SIZES[0] ? [pager(id, rows.length, () => renderSection(id))] : [];
+  content.replaceChildren(...(rows.length ? [table, ...paged] : [emptyState(q ? "No match for “" + q + "”." : "No item matches the filters.")]));
   $("count").hidden = false;
-  $("count").textContent = (rows.length === data.rows.length ? data.rows.length + " items" : rows.length + " of " + data.rows.length + " items") + (rows.length > 3000 ? " · showing the first 3000, filter to narrow" : "");
+  $("count").textContent = rows.length === data.rows.length ? data.rows.length + " items" : rows.length + " of " + data.rows.length + " items";
 }
 
 $("search").addEventListener("input", () => {
+  resetPage(state.section);
+  if (state.section === "cache") { clearTimeout(state.cache.searchTimer); state.cache.searchTimer = setTimeout(() => requestCache("list"), 300); return; }
   if (state.section === "artisan") renderCommandList();
   else if (state.section === "logs") renderEntries();
   else if (state.section === "audit") renderAuditList();
@@ -797,6 +852,7 @@ function renderLogs() {
   select.addEventListener("change", () => loadLog(select.value));
   const toggle = (label, key, initial) => {
     const b = el("button", { className: "pill", textContent: label });
+    b.dataset.toggle = "logs-" + key;
     b.setAttribute("aria-pressed", String(initial));
     L[key] = initial;
     b.addEventListener("click", () => { L[key] = !L[key]; b.setAttribute("aria-pressed", String(L[key])); if (key === "follow") renderEntries(); });
@@ -848,13 +904,15 @@ function renderEntries() {
   box.replaceChildren();
   if (!L.files.length) { box.append(emptyState("No log files in storage/logs yet.", "log")); return; }
   if (!visible.length) { box.append(emptyState(L.entries.length ? "No entry matches the filters." : "This log is empty.", "log")); return; }
-  for (const e of visible) {
+  if (L.follow) pageState("logs").page = pageCount("logs", visible.length) - 1;
+  for (const e of pageSlice("logs", visible)) {
     const head = el("div", { className: "head" }, el("span", { className: "lvl " + e.level, textContent: e.level }), el("span", { className: "time", textContent: e.time }), el("span", { className: "msg" }, ...highlight(e.message, q)));
     const node = el("div", { className: "entry" + (e.details ? " has-details" : "") + (L.expanded ? " open" : "") }, head);
     if (e.details) { node.append(el("div", { className: "details" }, ...detailNodes(e.details, q))); head.addEventListener("click", () => node.classList.toggle("open")); }
     box.append(node);
   }
   $("count").hidden = false;
+  if (visible.length > PAGE_SIZES[0]) box.append(pager("logs", visible.length, renderEntries, () => stopFollow(L, "logs-follow")));
   $("count").textContent = visible.length + " of " + (L.entries.length - L.hiddenBefore) + " entries · " + (L.path || "");
   if (L.follow) $("content").scrollTop = $("content").scrollHeight;
 }
@@ -2306,6 +2364,7 @@ function renderAudit() {
   pause.setAttribute("aria-pressed", String(!A.paused));
   pause.addEventListener("click", () => { A.paused = !A.paused; pause.setAttribute("aria-pressed", String(!A.paused)); });
   const follow = el("button", { className: "pill", textContent: "Follow" });
+  follow.dataset.toggle = "audit-follow";
   follow.setAttribute("aria-pressed", String(A.follow));
   follow.addEventListener("click", () => { A.follow = !A.follow; follow.setAttribute("aria-pressed", String(A.follow)); });
   const bar = el("div", { className: "au-bar" }, stateChip, toggle, el("span", { className: "sep" }), el("div", { className: "levels", id: "au-types" }), el("span", { className: "sep" }), pause, follow, clear);
@@ -2377,7 +2436,8 @@ function renderAuditList() {
   for (const r of A.records) if (["request", "job", "command"].includes(r.type) && !heads.has(r.scope)) heads.set(r.scope, r);
   for (const r of A.records) if (r.type === "boot" && !heads.has(r.scope)) heads.set(r.scope, r);
   let scope = null;
-  for (const r of visible.slice(-2500)) {
+  if (A.follow) pageState("audit").page = pageCount("audit", visible.length) - 1;
+  for (const r of pageSlice("audit", visible)) {
     if (r.scope !== scope) {
       scope = r.scope;
       const h = heads.get(scope);
@@ -2398,6 +2458,7 @@ function renderAuditList() {
     list.append(node);
   }
   $("count").hidden = false;
+  if (visible.length > PAGE_SIZES[0]) list.append(pager("audit", visible.length, renderAuditList, () => stopFollow(A, "audit-follow")));
   $("count").textContent = visible.length + " of " + A.records.length + " records · " + heads.size + " requests, jobs and commands";
   if (A.follow) $("content").scrollTop = $("content").scrollHeight;
 }
@@ -2406,6 +2467,109 @@ setInterval(() => {
   const A = state.audit;
   if (state.section === "audit" && !A.paused) send({ type: "audittail", size: A.size });
 }, 1500);
+
+
+/* ---------- cache ---------- */
+state.cache = { stores: [], store: "", driver: "", entries: [], total: 0, truncated: false, note: null, error: null, busy: false, open: new Set(), full: {}, flushArmed: false, searchTimer: null, now: 0 };
+
+function requestCache(action, key = "") {
+  const C = state.cache;
+  const p = pageState("cache");
+  if (action === "list") C.busy = true;
+  send({ type: "cache", action, store: C.store, page: p.page, size: p.size, search: $("search").value.trim(), key });
+  if (state.section === "cache") renderCache();
+}
+
+function onCache(msg) {
+  const C = state.cache;
+  if (msg.request === "value") {
+    const e = (msg.entries || [])[0];
+    if (e) C.full[e.key] = e.value;
+    else if (msg.error) toast(msg.error);
+    if (state.section === "cache") renderCache();
+    return;
+  }
+  if (msg.request === "forget" || msg.request === "flush") {
+    if (msg.error) toast(msg.error);
+    else toast(msg.request === "flush" ? "Flushed the " + (msg.store || "") + " store." : "Removed the key.");
+    requestCache("list");
+    return;
+  }
+  Object.assign(C, { busy: false, stores: msg.stores || C.stores, store: msg.store || C.store, driver: msg.driver || "", entries: msg.entries || [], total: msg.total || 0, truncated: !!msg.truncated, note: msg.note || null, error: msg.error || null, now: msg.now || Math.floor(Date.now() / 1000) });
+  if (typeof msg.page === "number") pageState("cache").page = msg.page;
+  if (state.section === "cache") renderCache();
+}
+
+function expiresText(at, now) {
+  if (!at) return "never";
+  const left = at - now;
+  if (left <= 0) return "expired";
+  const units = [[86400, "d"], [3600, "h"], [60, "min"], [1, "s"]];
+  const [size, label] = units.find(([n]) => left >= n);
+  return "in " + Math.floor(left / size) + " " + label;
+}
+
+function bytesText(n) {
+  return n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB";
+}
+
+function renderCache() {
+  const C = state.cache;
+  const select = el("select", { "aria-label": "Cache store" });
+  for (const st of C.stores) select.append(el("option", { value: st.name, textContent: st.name + " · " + st.driver + (st.default ? " · default" : "") + (st.listable ? "" : " · can't list") }));
+  select.value = C.store;
+  select.addEventListener("change", () => { C.store = select.value; C.open.clear(); C.full = {}; resetPage("cache"); requestCache("list"); });
+  const refresh = el("button", { className: "btn ghost", textContent: C.busy ? "Loading…" : "Refresh", disabled: C.busy });
+  refresh.addEventListener("click", () => requestCache("list"));
+  const flush = el("button", { className: "btn" + (C.flushArmed ? " primary" : " ghost"), textContent: C.flushArmed ? "Click again to flush " + C.store : "Flush store", disabled: !C.store });
+  flush.addEventListener("click", () => {
+    if (!C.flushArmed) { C.flushArmed = true; renderCache(); setTimeout(() => { C.flushArmed = false; if (state.section === "cache") renderCache(); }, 4000); return; }
+    C.flushArmed = false;
+    requestCache("flush");
+  });
+  $("toolbar").replaceChildren(el("div", { className: "cache-bar" }, select, refresh, flush));
+  $("filters").replaceChildren();
+  const content = $("content");
+  const notes = [];
+  if (C.error) notes.push(el("div", { className: "cache-note bad", textContent: C.error }));
+  if (C.note) notes.push(el("div", { className: "cache-note", textContent: C.note }));
+  if (C.truncated) notes.push(el("div", { className: "cache-note", textContent: "This store holds more keys than the hub reads at once: search to narrow it down." }));
+  if (!C.entries.length) {
+    content.replaceChildren(...notes, C.busy && !C.stores.length ? el("div", { className: "loading" }) : emptyState(C.busy ? "Reading the cache…" : $("search").value.trim() ? "No key matches the search." : "This store is empty.", "key"));
+    $("count").hidden = true;
+    return;
+  }
+  const q = $("search").value.trim().toLowerCase();
+  const table = el("table");
+  table.append(el("thead", {}, el("tr", {}, ...["Key", "Type", "Value", "Size", "Expires", ""].map((c) => el("th", { textContent: c })))));
+  const body = el("tbody");
+  for (const e of C.entries) {
+    const forget = el("button", { className: "btn ghost", textContent: "Forget", title: "Remove this key from the store" });
+    forget.addEventListener("click", (ev) => { ev.stopPropagation(); requestCache("forget", e.key); });
+    const tr = el("tr", { className: "link" },
+      el("td", { className: "first mono" }, ...highlight(e.key, q)),
+      el("td", { className: "mono", textContent: e.type }),
+      el("td", { className: "mono wrap", textContent: e.value.split("\n").join(" ") }),
+      el("td", { textContent: bytesText(e.bytes || 0) }),
+      el("td", { textContent: expiresText(e.expires, C.now) }),
+      el("td", {}, forget));
+    tr.title = "Show the whole value";
+    tr.addEventListener("click", () => {
+      if (C.open.has(e.key)) C.open.delete(e.key);
+      else { C.open.add(e.key); if (!e.full && C.full[e.key] == null) requestCache("value", e.key); }
+      renderCache();
+    });
+    body.append(tr);
+    if (C.open.has(e.key)) {
+      const value = e.full ? e.value : C.full[e.key];
+      body.append(el("tr", { className: "cache-detail" }, el("td", { colSpan: 6 }, el("div", { className: "cache-value", textContent: value == null ? "Loading the whole value…" : value }))));
+    }
+  }
+  table.append(body);
+  content.replaceChildren(...notes, table, pager("cache", C.total, () => requestCache("list")));
+  $("count").hidden = false;
+  $("count").textContent = C.total + " keys · " + C.store + " (" + C.driver + ")";
+}
 
 
 /* ---------- ai agents ---------- */
@@ -2531,6 +2695,9 @@ openidea.onMessage((text) => {
       break;
     case "error":
       toast(msg.message);
+      break;
+    case "cache":
+      onCache(msg);
       break;
     case "navigate": {
       if (!SECTIONS.some((s) => s.id === msg.id)) break;

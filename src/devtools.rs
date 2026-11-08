@@ -11,6 +11,14 @@ pub const MCP_PHP: &str = include_str!("../php/mcp.php");
 pub const SELECTION_PHP: &str = include_str!("../php/selection.php");
 pub const CREATE_FILE_PHP: &str = include_str!("../php/create_file.php");
 pub const TOOLS_PHP: &str = include_str!("../php/tools.php");
+pub const CACHE_PHP: &str = include_str!("../php/cache.php");
+const CACHE_MARKER: &str = "@@openidea-cache@@";
+
+pub fn cache_reply(stdout: &str) -> Option<Value> {
+    let at = stdout.rfind(CACHE_MARKER)?;
+    let line = stdout[at + CACHE_MARKER.len()..].lines().next()?;
+    serde_json::from_str(line).ok()
+}
 pub const GUIDELINES: &str = include_str!("../php/guidelines.md");
 pub const AUDIT_LOG: &str = "storage/logs/openidea-audit.jsonl";
 const MARKER: &str = "@@openidea@@";
@@ -44,6 +52,18 @@ pub fn records(stdout: &str) -> (Vec<Value>, String) {
         }
     }
     (out, noise)
+}
+
+pub fn fit_records(mut records: Vec<Value>, budget: usize) -> (Vec<Value>, usize) {
+    let sizes: Vec<usize> = records.iter().map(|r| r.to_string().len() + 1).collect();
+    let mut total: usize = sizes.iter().sum();
+    let mut drop = 0;
+    while total > budget && drop < sizes.len() {
+        total -= sizes[drop];
+        drop += 1;
+    }
+    records.drain(..drop);
+    (records, drop)
 }
 
 pub fn tail(text: &str, from: usize) -> (Vec<Value>, bool) {
@@ -953,6 +973,17 @@ pub fn status_from_files(project: &Project) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audit_records_are_trimmed_to_fit_a_message() {
+        let records: Vec<Value> = (0..100)
+            .map(|i| json!({ "seq": i, "pad": "x".repeat(100) }))
+            .collect();
+        let (kept, dropped) = fit_records(records, 2_000);
+        assert!(dropped > 0 && kept.len() + dropped == 100);
+        assert_eq!(kept.last().unwrap()["seq"], 99);
+        assert!(kept.iter().map(|r| r.to_string().len() + 1).sum::<usize>() <= 2_000);
+    }
 
     #[test]
     fn parses_marked_records_and_tails() {

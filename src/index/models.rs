@@ -82,19 +82,76 @@ pub fn is_model(class: &Class) -> bool {
         .is_some_and(|e| MODEL_BASES.contains(&e) || e.ends_with("Model"))
 }
 
+fn parent_of(class: &Class) -> Option<&str> {
+    let e = class.extends.as_deref()?;
+    Some(e.rsplit('\\').next().unwrap_or(e))
+}
+
 fn models_in(project: &Project, root: &str) -> Vec<(String, String, Class)> {
     let mut paths = find(project, root, "app/Models/**/*.php", 5000);
     paths.extend(find(project, root, "app/**/Models/**/*.php", 5000));
     paths.sort();
     paths.dedup();
-    paths
+    let classes: Vec<(String, String, Class)> = paths
         .into_iter()
         .filter_map(|path| {
             let text = crate::project::read_listed(project, &path).ok()?;
             let class = parse_class(&text)?;
-            is_model(&class).then_some((path, text, class))
+            Some((path, text, class))
         })
+        .collect();
+    let mut known: std::collections::BTreeSet<String> = classes
+        .iter()
+        .filter(|(_, _, c)| is_model(c))
+        .map(|(_, _, c)| c.name.clone())
+        .collect();
+    loop {
+        let more: Vec<String> = classes
+            .iter()
+            .filter(|(_, _, c)| {
+                !known.contains(&c.name) && parent_of(c).is_some_and(|p| known.contains(p))
+            })
+            .map(|(_, _, c)| c.name.clone())
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        known.extend(more);
+    }
+    classes
+        .into_iter()
+        .filter(|(_, _, c)| known.contains(&c.name))
         .collect()
+}
+
+fn inherit(models: &[(String, String, Class)], mut own: Vec<Entry>) -> Vec<Entry> {
+    let parents: std::collections::BTreeMap<&str, &str> = models
+        .iter()
+        .filter_map(|(_, _, c)| Some((c.name.as_str(), parent_of(c)?)))
+        .collect();
+    let mut inherited = Vec::new();
+    for child in parents.keys() {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut parent = parents.get(child).copied();
+        while let Some(p) = parent
+            && seen.insert(p)
+        {
+            let prefix = format!("{p}.");
+            for e in own.iter().filter(|e| e.key.starts_with(&prefix)) {
+                let key = format!("{child}.{}", &e.key[prefix.len()..]);
+                let defined = own
+                    .iter()
+                    .chain(inherited.iter())
+                    .any(|o: &Entry| o.key == key);
+                if !defined {
+                    inherited.push(Entry { key, ..e.clone() });
+                }
+            }
+            parent = parents.get(p).copied();
+        }
+    }
+    own.extend(inherited);
+    own
 }
 
 pub fn models(project: &Project, root: &str) -> Vec<Entry> {
@@ -139,9 +196,10 @@ pub fn relation_of(body: &str) -> Option<(String, Option<String>)> {
 }
 
 pub fn relations(project: &Project, root: &str) -> Vec<Entry> {
+    let models = models_in(project, root);
     let mut out = Vec::new();
-    for (path, text, class) in models_in(project, root) {
-        let lines = Lines::new(&text);
+    for (path, text, class) in &models {
+        let lines = Lines::new(text);
         for m in class
             .methods
             .iter()
@@ -157,12 +215,12 @@ pub fn relations(project: &Project, root: &str) -> Vec<Entry> {
             out.push(Entry::new(
                 format!("{}.{}", class.name, m.name),
                 Some(detail),
-                &path,
-                lines.range(&text, m.start, m.end),
+                path,
+                lines.range(text, m.start, m.end),
             ));
         }
     }
-    out
+    inherit(&models, out)
 }
 
 const MANY: [&str; 3] = ["belongsToMany", "morphToMany", "morphedByMany"];
@@ -279,9 +337,10 @@ pub fn pivots(project: &Project, root: &str) -> Vec<Entry> {
 }
 
 pub fn scopes(project: &Project, root: &str) -> Vec<Entry> {
+    let models = models_in(project, root);
     let mut out = Vec::new();
-    for (path, text, class) in models_in(project, root) {
-        let lines = Lines::new(&text);
+    for (path, text, class) in &models {
+        let lines = Lines::new(text);
         for m in &class.methods {
             let Some(rest) = m
                 .name
@@ -295,8 +354,8 @@ pub fn scopes(project: &Project, root: &str) -> Vec<Entry> {
                     out.push(Entry::new(
                         format!("{}.{}", class.name, m.name),
                         Some("scope".into()),
-                        &path,
-                        lines.range(&text, m.start, m.end),
+                        path,
+                        lines.range(text, m.start, m.end),
                     ));
                 }
                 continue;
@@ -306,12 +365,12 @@ pub fn scopes(project: &Project, root: &str) -> Vec<Entry> {
             out.push(Entry::new(
                 format!("{}.{name}", class.name),
                 Some("scope".into()),
-                &path,
-                lines.range(&text, m.start, m.end),
+                path,
+                lines.range(text, m.start, m.end),
             ));
         }
     }
-    out
+    inherit(&models, out)
 }
 
 #[cfg(test)]

@@ -47,6 +47,7 @@ enum Ctx {
     Simple(RefKind),
     Middleware,
     Rules,
+    Casts,
     Columns(Option<String>),
     Relations(String),
     Methods(String),
@@ -533,6 +534,7 @@ fn ctx_of(arg: &StringArg, scope: &Scope) -> Option<(Ctx, usize, bool)> {
             _ => return None,
         },
         CallKind::Property => match name {
+            "casts" if scope.model && !arg.is_key && arg.after_arrow => (Ctx::Casts, arg.arg, true),
             "fillable" | "guarded" | "hidden" | "visible" | "dates" | "casts" | "appends"
                 if scope.model =>
             {
@@ -558,6 +560,7 @@ fn ctx_of(arg: &StringArg, scope: &Scope) -> Option<(Ctx, usize, bool)> {
         },
         CallKind::Return => match name {
             "rules" => (Ctx::Rules, arg.arg, true),
+            "casts" if scope.model && !arg.is_key && arg.after_arrow => (Ctx::Casts, arg.arg, true),
             "casts" if scope.model => (Ctx::Columns(scope.class.clone()), arg.arg, true),
             "middleware" => (Ctx::Middleware, arg.arg, true),
             _ => return None,
@@ -626,6 +629,153 @@ fn rules_segment(value: &str, at: usize) -> Option<Segment> {
             want: Want::Kind(RefKind::Rule),
             start: s,
             end: colon.unwrap_or(e),
+        }),
+    }
+}
+
+pub const CAST_TYPES: [(&str, &str); 39] = [
+    ("array", "JSON column ⇄ PHP array"),
+    ("boolean", "true / false"),
+    ("bool", "true / false"),
+    ("collection", "JSON column ⇄ Collection"),
+    ("date", "Carbon at midnight · date:Y-m-d"),
+    ("datetime", "Carbon · datetime:Y-m-d H:i"),
+    (
+        "custom_datetime",
+        "Carbon with a format · custom_datetime:Y-m-d",
+    ),
+    ("immutable_date", "CarbonImmutable at midnight"),
+    (
+        "immutable_datetime",
+        "CarbonImmutable · immutable_datetime:Y-m-d H:i",
+    ),
+    ("immutable_custom_datetime", "CarbonImmutable with a format"),
+    ("timestamp", "Unix timestamp as int"),
+    ("decimal", "string with fixed decimals · decimal:2"),
+    ("double", "float"),
+    ("float", "float"),
+    ("real", "float"),
+    ("integer", "int"),
+    ("int", "int"),
+    ("string", "string"),
+    ("object", "JSON column ⇄ stdClass"),
+    ("json", "JSON column ⇄ PHP array"),
+    ("json:unicode", "JSON without escaping unicode"),
+    ("hashed", "hashed on set (passwords)"),
+    ("encrypted", "encrypted string · encrypted:array"),
+    ("encrypted:array", "encrypted JSON ⇄ array"),
+    ("encrypted:collection", "encrypted JSON ⇄ Collection"),
+    ("encrypted:json", "encrypted JSON ⇄ array"),
+    ("encrypted:object", "encrypted JSON ⇄ stdClass"),
+    (
+        "Illuminate\\Database\\Eloquent\\Casts\\AsArrayObject",
+        "AsArrayObject · JSON ⇄ ArrayObject",
+    ),
+    (
+        "Illuminate\\Database\\Eloquent\\Casts\\AsCollection",
+        "AsCollection · JSON ⇄ Collection",
+    ),
+    (
+        "Illuminate\\Database\\Eloquent\\Casts\\AsEncryptedArrayObject",
+        "AsEncryptedArrayObject",
+    ),
+    (
+        "Illuminate\\Database\\Eloquent\\Casts\\AsEncryptedCollection",
+        "AsEncryptedCollection",
+    ),
+    (
+        "Illuminate\\Database\\Eloquent\\Casts\\AsEnumArrayObject",
+        "AsEnumArrayObject · :App\\Enums\\…",
+    ),
+    (
+        "Illuminate\\Database\\Eloquent\\Casts\\AsEnumCollection",
+        "AsEnumCollection · :App\\Enums\\…",
+    ),
+    (
+        "Illuminate\\Database\\Eloquent\\Casts\\AsStringable",
+        "AsStringable · Stringable",
+    ),
+    (
+        "Illuminate\\Database\\Eloquent\\Casts\\AsUri",
+        "AsUri · Illuminate\\Support\\Uri",
+    ),
+    (
+        "Illuminate\\Database\\Eloquent\\Casts\\AsFluent",
+        "AsFluent · JSON ⇄ Fluent",
+    ),
+    (
+        "Illuminate\\Database\\Eloquent\\Casts\\AsHtmlString",
+        "AsHtmlString · HtmlString",
+    ),
+    (
+        "Illuminate\\Database\\Eloquent\\Casts\\AsBinary",
+        "AsBinary · binary UUID / ULID",
+    ),
+    (
+        "Illuminate\\Database\\Eloquent\\Casts\\AsVector",
+        "AsVector · vector column ⇄ array",
+    ),
+];
+
+const CAST_JSON: [(&str, &str); 1] = [("unicode", "keep unicode characters unescaped")];
+
+const CAST_DECIMALS: [(&str, &str); 5] = [
+    ("0", "no decimal places"),
+    ("1", "1 decimal place"),
+    ("2", "2 decimal places (money)"),
+    ("3", "3 decimal places"),
+    ("4", "4 decimal places"),
+];
+
+const CAST_FORMATS: [(&str, &str); 9] = [
+    ("Y-m-d", "2026-11-07"),
+    ("Y-m-d H:i:s", "2026-11-07 14:30:00"),
+    ("Y-m-d H:i", "2026-11-07 14:30"),
+    ("d/m/Y", "07/11/2026"),
+    ("d/m/Y H:i", "07/11/2026 14:30"),
+    ("m/d/Y", "11/07/2026"),
+    ("H:i", "14:30"),
+    ("c", "ISO 8601 · 2026-11-07T14:30:00+00:00"),
+    ("U", "Unix timestamp"),
+];
+
+const CAST_ENCRYPTED: [(&str, &str); 4] = [
+    ("array", "encrypted JSON ⇄ array"),
+    ("collection", "encrypted JSON ⇄ Collection"),
+    ("json", "encrypted JSON ⇄ array"),
+    ("object", "encrypted JSON ⇄ stdClass"),
+];
+
+const CAST_BINARY: [(&str, &str); 2] = [("uuid", "16-byte UUID"), ("ulid", "16-byte ULID")];
+
+fn casts_segment(value: &str, at: usize) -> Option<Segment> {
+    let at = at.min(value.len());
+    match value.find(':') {
+        Some(c) if at > c => {
+            let name = value[..c].rsplit('\\').next().unwrap_or(&value[..c]);
+            let values: &'static [(&'static str, &'static str)] = match name {
+                "decimal" => &CAST_DECIMALS,
+                "date"
+                | "datetime"
+                | "custom_datetime"
+                | "immutable_date"
+                | "immutable_datetime"
+                | "immutable_custom_datetime" => &CAST_FORMATS,
+                "encrypted" => &CAST_ENCRYPTED,
+                "json" => &CAST_JSON,
+                "AsBinary" => &CAST_BINARY,
+                _ => return None,
+            };
+            Some(Segment {
+                want: Want::Static(values),
+                start: c + 1,
+                end: value.len(),
+            })
+        }
+        _ => Some(Segment {
+            want: Want::Static(&CAST_TYPES),
+            start: 0,
+            end: value.len(),
         }),
     }
 }
@@ -712,6 +862,7 @@ pub fn segment(arg: &StringArg, at: usize, scope: &Scope) -> Option<Segment> {
         {
             rules_segment(value, at)
         }
+        Ctx::Casts if !arg.is_key => casts_segment(value, at),
         Ctx::Columns(model) if !value.contains(['.', ' ', '(']) => {
             whole(Want::Columns { model, table: None })
         }

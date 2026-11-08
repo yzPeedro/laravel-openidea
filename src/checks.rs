@@ -43,6 +43,7 @@ pub struct Enabled {
     pub env: bool,
     pub fillable: bool,
     pub n_plus_one: bool,
+    pub duplicate_keys: bool,
 }
 
 pub struct Facts<'a> {
@@ -691,6 +692,120 @@ fn n_plus_one(toks: &[Tok], facts: &Facts, out: &mut Vec<Finding>) {
     }
 }
 
+const BEFORE_LITERAL: &[&str] = &[
+    "return", "yield", "echo", "print", "case", "else", "and", "or", "xor", "throw", "in", "as",
+    "default", "clone",
+];
+
+fn opens_array(toks: &[Tok], i: usize) -> bool {
+    let t = &toks[i];
+    if t.kind == Kind::Ident && t.text.eq_ignore_ascii_case("array") {
+        let after_arrow = i > 0
+            && toks[i - 1].kind == Kind::Sym
+            && matches!(toks[i - 1].text.as_str(), "->" | "?->" | "::");
+        return !after_arrow && is_sym(toks.get(i + 1), "(");
+    }
+    if !(t.kind == Kind::Sym && t.text == "[") {
+        return false;
+    }
+    let Some(prev) = i.checked_sub(1).map(|p| &toks[p]) else {
+        return true;
+    };
+    match prev.kind {
+        Kind::Var | Kind::Str | Kind::Num => false,
+        Kind::Ident => BEFORE_LITERAL.contains(&prev.text.to_ascii_lowercase().as_str()),
+        Kind::Sym => !matches!(prev.text.as_str(), ")" | "]" | "}" | "#"),
+    }
+}
+
+fn entry_keys(toks: &[Tok], open: usize) -> Vec<(usize, String, usize)> {
+    let close = closing(toks, open);
+    let mut depth = 0;
+    let mut out = Vec::new();
+    let mut entry_start = true;
+    let mut pending: Option<(usize, String)> = None;
+    for i in open + 1..close {
+        let t = &toks[i];
+        if t.kind == Kind::Sym {
+            match t.text.as_str() {
+                "(" | "[" | "{" => depth += 1,
+                ")" | "]" | "}" => depth -= 1,
+                "," if depth == 0 => {
+                    if let Some((at, name)) = pending.take() {
+                        out.push((at, name, i));
+                    }
+                    entry_start = true;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        if depth == 0 && entry_start && is_sym(toks.get(i + 1), "=>") {
+            let key = match t.kind {
+                Kind::Str if !t.text.contains('$') => Some(t.text.clone()),
+                Kind::Num if !t.text.contains('.') => {
+                    Some(t.text.trim_start_matches('0').to_owned())
+                }
+                _ => None,
+            };
+            pending = key.map(|k| (i, if k.is_empty() { "0".into() } else { k }));
+        }
+        entry_start = false;
+    }
+    if let Some((at, name)) = pending {
+        out.push((at, name, close));
+    }
+    out
+}
+
+fn duplicate_keys(text: &str, toks: &[Tok], facts: &Facts, out: &mut Vec<Finding>) {
+    let opens = (0..toks.len()).filter(|&i| opens_array(toks, i));
+    for open in opens {
+        let open = if toks[open].kind == Kind::Ident {
+            open + 1
+        } else {
+            open
+        };
+        let keys = entry_keys(toks, open);
+        for (n, (at, key, _)) in keys.iter().enumerate() {
+            let Some((earlier, _, end)) = keys[..n].iter().rev().find(|(_, k, _)| k == key) else {
+                continue;
+            };
+            let tok = &toks[*at];
+            let line = text[..toks[*earlier].start].matches('\n').count() + 1;
+            let shown = if tok.kind == Kind::Str {
+                format!("'{key}'")
+            } else {
+                key.clone()
+            };
+            let remove_to = toks.get(end + 1).map_or(toks[*end].end, |t| t.start);
+            let fixes = if toks[*end].text == "," {
+                vec![Fix {
+                    title: format!("Remove the overwritten {shown} entry"),
+                    edits: vec![Edit {
+                        path: facts.path.to_owned(),
+                        start: toks[*earlier].start,
+                        end: remove_to,
+                        text: String::new(),
+                    }],
+                }]
+            } else {
+                Vec::new()
+            };
+            out.push(Finding {
+                start: tok.start,
+                end: tok.end,
+                message: format!(
+                    "Duplicate array key {shown}: it overwrites the value set on line {line}"
+                ),
+                code: "laravel.duplicate-key",
+                fixes,
+                info: false,
+            });
+        }
+    }
+}
+
 pub fn php(text: &str, facts: &Facts) -> Vec<Finding> {
     let toks = tokenize(text);
     let mut out = Vec::new();
@@ -705,6 +820,9 @@ pub fn php(text: &str, facts: &Facts) -> Vec<Finding> {
     }
     if facts.enabled.n_plus_one {
         n_plus_one(&toks, facts, &mut out);
+    }
+    if facts.enabled.duplicate_keys {
+        duplicate_keys(text, &toks, facts, &mut out);
     }
     out.sort_by_key(|f| (f.start, f.end));
     out
@@ -817,6 +935,7 @@ mod tests {
                 env: true,
                 fillable: true,
                 n_plus_one: true,
+                duplicate_keys: true,
             },
         }
     }
@@ -941,6 +1060,42 @@ mod tests {
             apply(all, &found[0].fixes[0].edits[0]),
             all.replace("Post::all()", "Post::with('comments')->get()")
         );
+    }
+
+    #[test]
+    fn repeated_array_keys_are_reported_with_a_fix() {
+        let (m, c, e) = setup();
+        let text = "<?php\n$product = Product::create([\n    'name' => $data['name'],\n    'stock' => $data['stock'],\n    'stock' => 1,\n    \"name\" => 'x',\n]);\n";
+        let found = php(text, &facts(&m, &c, &e, "app/A.php"));
+        let dupes: Vec<_> = found
+            .iter()
+            .filter(|f| f.code == "laravel.duplicate-key")
+            .collect();
+        assert_eq!(dupes.len(), 2, "{found:?}");
+        assert_eq!(&text[dupes[0].start..dupes[0].end], "'stock'");
+        assert_eq!(
+            dupes[0].message,
+            "Duplicate array key 'stock': it overwrites the value set on line 4"
+        );
+        assert_eq!(&text[dupes[1].start..dupes[1].end], "\"name\"");
+        assert_eq!(
+            apply(text, &dupes[0].fixes[0].edits[0]),
+            text.replace("    'stock' => $data['stock'],\n", "")
+        );
+    }
+
+    #[test]
+    fn distinct_and_nested_keys_are_not_duplicates() {
+        let (m, c, e) = setup();
+        let text = "<?php\n$a = ['x' => ['k' => 1], 'y' => ['k' => 2], 1 => 'a', '1x' => 'b', \"$v\" => 1, \"$v\" => 2];\n$b = array('k' => 1, 'k' => 2);\n$c = $rows['k'] + $rows['k'];\n$d = [1, 1, 'a', 'a'];\n";
+        let found = php(text, &facts(&m, &c, &e, "app/A.php"));
+        let dupes: Vec<_> = found
+            .iter()
+            .filter(|f| f.code == "laravel.duplicate-key")
+            .map(|f| (&text[f.start..f.end], f.start))
+            .collect();
+        assert_eq!(dupes.len(), 1, "{dupes:?}");
+        assert!(dupes[0].1 > text.find("array(").unwrap());
     }
 
     #[test]

@@ -4,6 +4,7 @@ mod blade_syntax;
 mod casts;
 mod checks;
 mod completions;
+mod configfiles;
 mod devtools;
 mod directives;
 mod dotenv;
@@ -18,6 +19,7 @@ mod logs;
 mod mcp;
 mod members;
 mod modeldoc;
+mod objects;
 mod panels;
 mod pest;
 mod php;
@@ -25,6 +27,8 @@ mod project;
 mod queries;
 mod querysql;
 mod refs;
+mod relations;
+use relations::Shape;
 mod renames;
 mod resources;
 mod runner;
@@ -243,6 +247,51 @@ fn path_params(doc: &Document, before: usize) -> Vec<Entry> {
     out
 }
 
+fn object_items(members: &objects::Members, typed: &str, replace: Range) -> Vec<CompletionItem> {
+    let lower = typed.to_lowercase();
+    let mut out = Vec::new();
+    let mut field = |name: &str, detail: String, rank: &str| {
+        if name.to_lowercase().contains(&lower) {
+            out.push(CompletionItem {
+                detail: Some(detail),
+                replace: Some(replace),
+                sort_text: Some(format!("{rank}{name}")),
+                ..CompletionItem::new(name, openidea_plugin::providers::CompletionKind::Field)
+            });
+        }
+    };
+    if members.kind == "enum" {
+        field(
+            "name",
+            format!("string · case name of {}", members.name),
+            "0",
+        );
+        if let Some(backed) = &members.backed {
+            field("value", format!("{backed} · backed value"), "0");
+        }
+    }
+    for (name, ty) in &members.properties {
+        let detail = if ty.is_empty() {
+            members.name.clone()
+        } else {
+            ty.clone()
+        };
+        field(name, detail, "1");
+    }
+    let methods: Vec<(&str, &str)> = members
+        .methods
+        .iter()
+        .filter(|(_, _, is_static)| !is_static)
+        .map(|(n, s, _)| (n.as_str(), s.as_str()))
+        .collect();
+    let mut calls = relations::method_items(&methods, &members.name, typed, replace);
+    for item in &mut calls {
+        item.sort_text = item.sort_text.take().map(|s| format!("2{s}"));
+    }
+    out.extend(calls);
+    out
+}
+
 fn relation_target(detail: Option<&str>) -> Option<String> {
     let d = detail?;
     Some(d[d.find('(')? + 1..d.find(')')?].to_owned())
@@ -366,6 +415,78 @@ impl Laravel {
         members::items(&model, ctx, at, position(text, ctx.start))
     }
 
+    pub(crate) fn env_key_entries(&mut self, project: &Project, root: &str) -> Vec<Entry> {
+        let mut entries: Vec<Entry> = self
+            .cache
+            .get(RefKind::Config, project, root)
+            .iter()
+            .filter_map(|e| {
+                let key = dotenv::env_key(e.detail.as_deref()?)?;
+                Some(Entry {
+                    key: key.to_owned(),
+                    detail: Some(e.key.clone()),
+                    location: e.location.clone(),
+                })
+            })
+            .collect();
+        entries.extend(dotenv::LARAVEL_KEYS.iter().map(|(k, d)| {
+            Entry::new(
+                *k,
+                (!d.is_empty()).then(|| (*d).to_owned()),
+                "",
+                Range::default(),
+            )
+        }));
+        entries.extend(self.cache.get(RefKind::Env, project, root).iter().cloned());
+        entries
+    }
+
+    pub(crate) fn env_value_entries(
+        &mut self,
+        project: &Project,
+        root: &str,
+        key: &str,
+    ) -> Option<(RefKind, Vec<Entry>)> {
+        let fixed = |values: &[(&str, &str)]| -> Vec<Entry> {
+            values
+                .iter()
+                .map(|(v, d)| {
+                    Entry::new(
+                        *v,
+                        (!d.is_empty()).then(|| (*d).to_owned()),
+                        "",
+                        Range::default(),
+                    )
+                })
+                .collect()
+        };
+        Some(match dotenv::values_for(key)? {
+            dotenv::Values::Kind(kind) => (kind, self.cache.get(kind, project, root).to_vec()),
+            dotenv::Values::Static(values) => (RefKind::Rule, fixed(values)),
+            dotenv::Values::Boolean => (RefKind::Rule, fixed(&[("true", ""), ("false", "")])),
+            dotenv::Values::Locales => {
+                let mut locales: BTreeSet<String> = self
+                    .cache
+                    .get(RefKind::Translation, project, root)
+                    .iter()
+                    .filter_map(|e| {
+                        e.detail
+                            .as_deref()
+                            .map(|d| d.split(':').next().unwrap_or(d).trim().to_owned())
+                    })
+                    .collect();
+                locales.extend(["en", "en_US", "pt_BR", "es", "fr", "de", "it"].map(str::to_owned));
+                (
+                    RefKind::Rule,
+                    locales
+                        .into_iter()
+                        .map(|l| Entry::new(l, Some("locale".into()), "", Range::default()))
+                        .collect(),
+                )
+            }
+        })
+    }
+
     fn env_completion(
         &mut self,
         project: &Project,
@@ -385,28 +506,7 @@ impl Laravel {
                         l.split_once('=').map(|(k, _)| k.trim().to_owned())
                     })
                     .collect();
-                let mut entries: Vec<Entry> = self
-                    .cache
-                    .get(RefKind::Config, project, root)
-                    .iter()
-                    .filter_map(|e| {
-                        let key = dotenv::env_key(e.detail.as_deref()?)?;
-                        Some(Entry {
-                            key: key.to_owned(),
-                            detail: Some(e.key.clone()),
-                            location: e.location.clone(),
-                        })
-                    })
-                    .collect();
-                entries.extend(dotenv::LARAVEL_KEYS.iter().map(|(k, d)| {
-                    Entry::new(
-                        *k,
-                        (!d.is_empty()).then(|| (*d).to_owned()),
-                        "",
-                        Range::default(),
-                    )
-                }));
-                entries.extend(self.cache.get(RefKind::Env, project, root).iter().cloned());
+                let mut entries = self.env_key_entries(project, root);
                 entries.retain(|e| !present.contains(&e.key));
                 items(
                     RefKind::Env,
@@ -422,54 +522,8 @@ impl Laravel {
                 .collect()
             }
             Some(dotenv::Context::Value { key, start, typed }) => {
-                let (kind, entries) = match dotenv::values_for(&key) {
-                    Some(dotenv::Values::Kind(kind)) => {
-                        (kind, self.cache.get(kind, project, root).to_vec())
-                    }
-                    Some(dotenv::Values::Static(values)) => (
-                        RefKind::Rule,
-                        values
-                            .iter()
-                            .map(|(v, d)| {
-                                Entry::new(
-                                    *v,
-                                    (!d.is_empty()).then(|| (*d).to_owned()),
-                                    "",
-                                    Range::default(),
-                                )
-                            })
-                            .collect(),
-                    ),
-                    Some(dotenv::Values::Boolean) => (
-                        RefKind::Rule,
-                        ["true", "false"]
-                            .iter()
-                            .map(|v| Entry::new(*v, None, "", Range::default()))
-                            .collect(),
-                    ),
-                    Some(dotenv::Values::Locales) => {
-                        let mut locales: BTreeSet<String> = self
-                            .cache
-                            .get(RefKind::Translation, project, root)
-                            .iter()
-                            .filter_map(|e| {
-                                e.detail
-                                    .as_deref()
-                                    .map(|d| d.split(':').next().unwrap_or(d).trim().to_owned())
-                            })
-                            .collect();
-                        locales.extend(
-                            ["en", "en_US", "pt_BR", "es", "fr", "de", "it"].map(str::to_owned),
-                        );
-                        (
-                            RefKind::Rule,
-                            locales
-                                .into_iter()
-                                .map(|l| Entry::new(l, Some("locale".into()), "", Range::default()))
-                                .collect(),
-                        )
-                    }
-                    None => return Vec::new(),
+                let Some((kind, entries)) = self.env_value_entries(project, root, &key) else {
+                    return Vec::new();
                 };
                 items(
                     kind,
@@ -511,11 +565,27 @@ impl Laravel {
         &mut self,
         project: &Project,
         root: &str,
-        (text, cursor): (&str, usize),
+        at: (&str, usize),
         base: &eloquent::Base,
         path: &[String],
         depth: u8,
     ) -> Option<(String, bool)> {
+        match self.chain_of(project, root, at, base, path, depth)? {
+            (model, Shape::Model) => Some((model, false)),
+            (model, Shape::Many) => Some((model, true)),
+            (_, Shape::Query) => None,
+        }
+    }
+
+    fn chain_of(
+        &mut self,
+        project: &Project,
+        root: &str,
+        (text, cursor): (&str, usize),
+        base: &eloquent::Base,
+        path: &[String],
+        depth: u8,
+    ) -> Option<(String, Shape)> {
         if depth > 4 {
             return None;
         }
@@ -525,14 +595,24 @@ impl Laravel {
             .iter()
             .map(|e| e.key.clone())
             .collect();
-        let (mut current, mut many) = match base {
+        let (mut current, mut shape) = match base {
             eloquent::Base::This => {
                 let scope = scope_of(text);
-                (scope.class.filter(|_| scope.model)?, false)
+                (scope.class.filter(|_| scope.model)?, Shape::Model)
             }
-            eloquent::Base::AuthUser => ("User".to_owned(), false),
+            eloquent::Base::AuthUser => ("User".to_owned(), Shape::Model),
+            eloquent::Base::Static(class) => {
+                let class = if matches!(class.as_str(), "static" | "self") {
+                    scope_of(text).class?
+                } else {
+                    class.clone()
+                };
+                (class, Shape::Query)
+            }
             eloquent::Base::Var(var) => match eloquent::origin(text, cursor, var) {
-                Some(eloquent::Origin::Class { name, many }) => (name, many),
+                Some(eloquent::Origin::Class { name, many }) => {
+                    (name, if many { Shape::Many } else { Shape::Model })
+                }
                 Some(eloquent::Origin::Chain {
                     base,
                     path,
@@ -543,14 +623,21 @@ impl Laravel {
                     if element && !many {
                         return None;
                     }
-                    (model, many && !element)
+                    (
+                        model,
+                        if many && !element {
+                            Shape::Many
+                        } else {
+                            Shape::Model
+                        },
+                    )
                 }
                 None => {
                     let param =
                         eloquent::closure_param(text, cursor, var).filter(|p| !p.builder)?;
                     (
                         self.closure_model(project, root, text, &param, depth + 1)?,
-                        false,
+                        Shape::Model,
                     )
                 }
             },
@@ -559,18 +646,46 @@ impl Laravel {
             return None;
         }
         let relations = self.cache.get(RefKind::Relation, project, root);
+        let scopes = self.cache.get(RefKind::Scope, project, root);
         for step in path {
-            if many {
+            if let Some(call) = step.strip_suffix("()") {
+                let relation = (shape == Shape::Model)
+                    .then(|| {
+                        relations
+                            .iter()
+                            .find(|e| e.key == format!("{current}.{call}"))
+                            .and_then(|e| relation_target(e.detail.as_deref()))
+                    })
+                    .flatten();
+                if let Some(target) = relation {
+                    current = target;
+                    shape = Shape::Query;
+                    continue;
+                }
+                if shape != Shape::Many
+                    && scopes.iter().any(|e| e.key == format!("{current}.{call}"))
+                {
+                    shape = Shape::Query;
+                    continue;
+                }
+                shape = relations::after_call(shape, call)?;
+                continue;
+            }
+            if shape != Shape::Model {
                 return None;
             }
             let entry = relations
                 .iter()
                 .find(|e| e.key == format!("{current}.{step}"))?;
             let detail = entry.detail.as_deref()?;
-            many = eloquent::is_many(detail.split('(').next().unwrap_or(detail));
+            shape = if eloquent::is_many(detail.split('(').next().unwrap_or(detail)) {
+                Shape::Many
+            } else {
+                Shape::Model
+            };
             current = relation_target(Some(detail))?;
         }
-        Some((current, many))
+        Some((current, shape))
     }
 
     fn head_model(
@@ -693,7 +808,39 @@ impl Laravel {
         at: Position,
     ) -> Option<Vec<CompletionItem>> {
         let access = eloquent::access_at(&doc.text, cursor, false)?;
-        let (model, many) = self.model_of(
+        let typed = &doc.text[access.start..cursor];
+        let replace = Range::new(position(&doc.text, access.start), at);
+        if let Some((last, parents)) = access.path.split_last()
+            && let Some(name) = last.strip_suffix("()")
+            && let Some((parent, false)) =
+                self.model_of(project, root, (&doc.text, cursor), &access.base, parents, 0)
+            && let Some(detail) = self
+                .cache
+                .get(RefKind::Relation, project, root)
+                .iter()
+                .find(|e| e.key == format!("{parent}.{name}"))
+                .and_then(|e| e.detail.clone())
+            && let Some(target) = relation_target(Some(&detail))
+        {
+            let kind = detail.split('(').next().unwrap_or(&detail);
+            return Some(relations::method_items(
+                &relations::relation_methods(kind),
+                &target,
+                typed,
+                replace,
+            ));
+        }
+        if let Some((column, parents)) = access.path.split_last()
+            && !column.ends_with("()")
+            && let Some((model, false)) =
+                self.model_of(project, root, (&doc.text, cursor), &access.base, parents, 0)
+            && let Some(model_text) = self.model_text(project, root, &model)
+            && let Some((path, text)) = casts::target_file(project, &model_text, column)
+            && let Some(members) = objects::with_traits(project, (&path, &text), 0)
+        {
+            return Some(object_items(&members, typed, replace));
+        }
+        let (model, shape) = self.chain_of(
             project,
             root,
             (&doc.text, cursor),
@@ -701,11 +848,38 @@ impl Laravel {
             &access.path,
             0,
         )?;
-        if many {
-            return None;
+        match shape {
+            Shape::Many => {
+                return Some(relations::method_items(
+                    relations::COLLECTION,
+                    &model,
+                    typed,
+                    replace,
+                ));
+            }
+            Shape::Query => {
+                let prefix = format!("{model}.");
+                let scopes: Vec<(String, &str)> = self
+                    .cache
+                    .get(RefKind::Scope, project, root)
+                    .iter()
+                    .filter_map(|e| e.key.strip_prefix(&prefix))
+                    .map(|name| (name.to_owned(), "scope: Builder<{T}>"))
+                    .collect();
+                let mut out = relations::method_items(&scopes, &model, typed, replace);
+                for item in &mut out {
+                    item.sort_text = item.sort_text.take().map(|s| format!("!{s}"));
+                }
+                out.extend(relations::method_items(
+                    relations::QUERY,
+                    &model,
+                    typed,
+                    replace,
+                ));
+                return Some(out);
+            }
+            Shape::Model => {}
         }
-        let typed = &doc.text[access.start..cursor];
-        let replace = Range::new(position(&doc.text, access.start), at);
         let mut out = Vec::new();
         if let Some(table) = self.model_table(project, root, &model) {
             let model_text = self.model_text(project, root, &model).unwrap_or_default();
@@ -752,6 +926,53 @@ impl Laravel {
                 }),
         );
         Some(out)
+    }
+
+    fn scope_call_definition(
+        &mut self,
+        project: &Project,
+        root: &str,
+        doc: &Document,
+        cursor: usize,
+    ) -> Option<Vec<Location>> {
+        let text = &doc.text;
+        let (start, end) = eloquent::word_span(text, cursor)?;
+        if !text[end..].trim_start().starts_with('(') {
+            return None;
+        }
+        let name = &text[start..end];
+        let before = text[..start].trim_end();
+        let model = if let Some(class_end) = before.strip_suffix("::") {
+            let class = &class_end[eloquent::word_span(class_end, class_end.len())?.0..];
+            Some(class.rsplit('\\').next().unwrap_or(class).to_owned())
+        } else if before.ends_with("->") {
+            eloquent::access_at(text, cursor, true).and_then(|a| {
+                self.model_of(project, root, (text, cursor), &a.base, &a.path, 0)
+                    .map(|(m, _)| m)
+            })
+        } else {
+            return None;
+        };
+        let scopes = self.cache.get(RefKind::Scope, project, root);
+        let of_model: Vec<Location> = model
+            .iter()
+            .flat_map(|m| {
+                scopes
+                    .iter()
+                    .filter(move |e| e.key == format!("{m}.{name}"))
+            })
+            .map(|e| e.location.clone())
+            .collect();
+        let found = if of_model.is_empty() {
+            scopes
+                .iter()
+                .filter(|e| e.key.rsplit('.').next() == Some(name))
+                .map(|e| e.location.clone())
+                .collect()
+        } else {
+            of_model
+        };
+        (!found.is_empty()).then_some(found)
     }
 
     fn eloquent_definition(
@@ -1101,10 +1322,22 @@ impl Laravel {
             .or_error(&format!("publishing diagnostics for {path}"));
     }
 
+    fn artisan_terminal(&self, ctx: &Invocation, command: &str) -> Result<Option<String>, Error> {
+        let project = ctx.project().ok_or("open a Laravel project first")?;
+        let mode = runner::detect(&project);
+        host::open_terminal(
+            &format!("artisan {command}"),
+            mode.program(),
+            &mode.args(&[command.to_owned()], true),
+        )?;
+        Ok(None)
+    }
+
     fn artisan(&self, ctx: &Invocation, args: &[&str]) -> Result<Option<String>, Error> {
         let project = ctx.project().ok_or("open a Laravel project first")?;
         let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
-        let out = project.run_process("php", &args, None)?;
+        let mode = runner::detect(&project);
+        let out = project.run_process(mode.program(), &mode.args(&args[1..], false), None)?;
         let text = if out.stdout.trim().is_empty() {
             out.stderr
         } else {
@@ -1514,6 +1747,19 @@ impl Providers for Laravel {
         {
             return renames::usage_locations(&project, &root, doc, RefKind::Ability, &arg.value);
         }
+        if !is_blade(&doc.path)
+            && let Some(name) = eloquent::scope_at(&doc.text, cursor)
+            && let Some(model) = scope_of(&doc.text).class
+        {
+            return renames::locations_matching(&project, &root, doc, |text, _| {
+                eloquent::scope_calls(text, &model, &name)
+            });
+        }
+        if !is_blade(&doc.path)
+            && let Some(found) = self.scope_call_definition(&project, &root, doc, cursor)
+        {
+            return found;
+        }
         if project::rel(&root, &doc.path)
             .replace('\\', "/")
             .starts_with("routes/")
@@ -1674,16 +1920,11 @@ impl Laravel {
             "related-file" => self.related_file(ctx),
             "artisan-optimize-clear" => self.artisan(ctx, &["artisan", "optimize:clear"]),
             "artisan-migrate" => self.artisan(ctx, &["artisan", "migrate"]),
-            "artisan-tinker" => {
-                host::open_terminal("Tinker", "php", &["artisan".into(), "tinker".into()])?;
-                Ok(None)
-            }
+            "artisan-tinker" => self.artisan_terminal(ctx, "tinker"),
             "copy-query-sql" => self.copy_query_sql(ctx),
             "run-in-tinker" => self.run_selection_in_tinker(ctx),
-            "artisan-serve" => {
-                host::open_terminal("artisan serve", "php", &["artisan".into(), "serve".into()])?;
-                Ok(None)
-            }
+            "extract-form-request" => self.extract_form_request(ctx),
+            "artisan-serve" => self.artisan_terminal(ctx, "serve"),
             _ => Err(Error::NotFound(format!("command {id}"))),
         }
     }
@@ -2204,7 +2445,7 @@ mod tests {
         let host = setup();
         host.add_file(
             "app/Models/Order.php",
-            "<?php\nnamespace App\\Models;\n\nclass Order extends Model\n{\n    public function user()\n    {\n        return $this->belongsTo(User::class);\n    }\n\n    public function lines()\n    {\n        return $this->hasMany(Post::class);\n    }\n}\n",
+            "<?php\nnamespace App\\Models;\n\nclass Order extends Model\n{\n    public function user()\n    {\n        return $this->belongsTo(User::class);\n    }\n\n    public function lines()\n    {\n        return $this->hasMany(Post::class);\n    }\n\n    public function scopePaid($query) {}\n}\n",
         );
         let mut plugin = Laravel::default();
         let text = "<?php\nclass OrderController\n{\n    public function store(Request $request)\n    {\n        $order = Order::create(['user_id' => 1]);\n        $order->\n        $order->user->na\n        foreach ($order->lines as $line) {\n            $line->\n        }\n        $order->lines->\n    }\n}\n";
@@ -2229,11 +2470,50 @@ mod tests {
             "{:?}",
             labels_of(&line)
         );
+        let collection = plugin.completion(&d, at(text, "$order->lines->", 15), None);
+        let first = collection.iter().find(|i| i.label == "first").unwrap();
+        assert_eq!(first.insert_text, "first($0)");
         assert!(
-            plugin
-                .completion(&d, at(text, "$order->lines->", 15), None)
-                .is_empty()
+            first
+                .detail
+                .as_deref()
+                .is_some_and(|d| d.ends_with("?Post")),
+            "{:?}",
+            first.detail
         );
+        assert!(!labels_of(&collection).contains(&"title".to_owned()));
+        for (code, expected, absent) in [
+            ("$order->lines()->", "createMany", "attach"),
+            ("$order->user()->", "associate", "createMany"),
+            ("$order->lines->first()->", "title", "first"),
+            ("$order->lines()->get()->", "pluck", "title"),
+            (
+                "$order->lines()->where('a', 1)->latest()->",
+                "paginate",
+                "title",
+            ),
+            (
+                "$order->lines()->where(fn ($q) => $q->x())->first()->",
+                "title",
+                "first",
+            ),
+            ("Order::", "paid", "user_id"),
+            ("Order::paid()->", "where", "user"),
+            ("Order::where('status', 'x')->first()->", "user", "paid"),
+            ("Order::query()->paid()->get()->", "pluck", "user"),
+        ] {
+            let probe = text.replace("        $order->lines->\n", &format!("        {code}\n"));
+            let found = plugin.completion(
+                &doc("app/Http/Controllers/OrderController.php", &probe),
+                at(&probe, code, code.len()),
+                None,
+            );
+            let found = labels_of(&found);
+            assert!(
+                found.contains(&expected.to_owned()) && !found.contains(&absent.to_owned()),
+                "{code}: {found:?}"
+            );
+        }
 
         let found = plugin.definition(&d, at(text, "user->na", 2));
         assert_eq!(found.len(), 1);
@@ -2253,6 +2533,49 @@ mod tests {
                 .first()
                 .is_some_and(|l| l.path.contains("database/migrations")),
             "{found:?}"
+        );
+    }
+
+    #[test]
+    fn cast_columns_complete_the_members_of_their_enum_or_class() {
+        let host = setup();
+        host.add_file(
+            "app/Models/Invoice.php",
+            "<?php\nnamespace App\\Models;\n\nuse App\\Casts\\AsMoney;\nuse App\\Enums\\InvoiceStatus;\n\nclass Invoice extends Model\n{\n    protected function casts(): array\n    {\n        return ['status' => InvoiceStatus::class, 'total' => AsMoney::class];\n    }\n}\n",
+        );
+        host.add_file(
+            "app/Enums/InvoiceStatus.php",
+            "<?php\nnamespace App\\Enums;\n\nuse App\\Concerns\\HasLabel;\n\nenum InvoiceStatus: string\n{\n    use HasLabel;\n\n    case Paid = 'paid';\n\n    public function color(): string\n    {\n        return 'green';\n    }\n\n    public static function fallback(): self\n    {\n        return self::Paid;\n    }\n}\n",
+        );
+        host.add_file(
+            "app/Concerns/HasLabel.php",
+            "<?php\nnamespace App\\Concerns;\n\ntrait HasLabel\n{\n    public function label(): string\n    {\n        return ucfirst($this->value);\n    }\n}\n",
+        );
+        host.add_file(
+            "app/Casts/AsMoney.php",
+            "<?php\nnamespace App\\Casts;\n\nuse App\\Support\\Money;\n\nclass AsMoney implements CastsAttributes\n{\n    public function get($model, string $key, mixed $value, array $attributes): Money\n    {\n        return new Money($value);\n    }\n}\n",
+        );
+        host.add_file(
+            "app/Support/Money.php",
+            "<?php\nnamespace App\\Support;\n\nfinal class Money\n{\n    public function __construct(public readonly int $cents) {}\n\n    public function format(): string\n    {\n        return '';\n    }\n}\n",
+        );
+        let mut plugin = Laravel::default();
+        let text = "<?php\nclass InvoiceController\n{\n    public function show(Invoice $invoice)\n    {\n        $invoice->status->\n        $invoice->total->\n    }\n}\n";
+        let d = doc("app/Http/Controllers/InvoiceController.php", text);
+        let status = plugin.completion(&d, at(text, "status->\n", 8), None);
+        let status = labels(&status);
+        assert!(
+            ["name", "value", "color", "label"]
+                .iter()
+                .all(|l| status.contains(l))
+                && !status.contains(&"fallback"),
+            "{status:?}"
+        );
+        let total = plugin.completion(&d, at(text, "total->\n", 7), None);
+        let total = labels(&total);
+        assert!(
+            total.contains(&"cents") && total.contains(&"format"),
+            "{total:?}"
         );
     }
 
@@ -2523,6 +2846,92 @@ mod tests {
     }
 
     #[test]
+    fn models_extending_a_model_inherit_its_relations_and_scopes() {
+        let host = setup();
+        host.add_file(
+            "app/Models/Product.php",
+            "<?php\nnamespace App\\Models;\n\nclass Product extends Model\n{\n    public function category()\n    {\n        return $this->belongsTo(Category::class);\n    }\n\n    public function scopePublished($query) {}\n}\n",
+        );
+        host.add_file(
+            "app/Models/DigitalProduct.php",
+            "<?php\nnamespace App\\Models;\n\nclass DigitalProduct extends Product\n{\n    public function downloads()\n    {\n        return $this->hasMany(Download::class);\n    }\n}\n",
+        );
+        host.add_file(
+            "app/Models/Ebook.php",
+            "<?php\nnamespace App\\Models;\n\nclass Ebook extends DigitalProduct\n{\n}\n",
+        );
+        let mut plugin = Laravel::default();
+        let text = "<?php\nclass ShopController\n{\n    public function show()\n    {\n        $book = Ebook::find(1);\n        $book->\n        Ebook::published();\n    }\n}\n";
+        let d = doc("app/Http/Controllers/ShopController.php", text);
+        let found = plugin.completion(&d, at(text, "$book->\n", 7), None);
+        let found = labels(&found);
+        assert!(
+            found.contains(&"category") && found.contains(&"downloads"),
+            "{found:?}"
+        );
+        let scope = plugin.definition(&d, at(text, "published()", 2));
+        assert!(
+            scope
+                .iter()
+                .any(|l| l.path.ends_with("app/Models/Product.php")),
+            "{scope:?}"
+        );
+    }
+
+    #[test]
+    fn a_scope_definition_leads_to_its_usages() {
+        let host = setup();
+        let model = "<?php\nnamespace App\\Models;\n\nclass Product extends Model\n{\n    public function scopePublished(Builder $query): void\n    {\n        $query->whereNotNull('published_at');\n    }\n\n    #[Scope]\n    protected function cheap(Builder $query): void\n    {\n        $query->where('price', '<', 10);\n    }\n\n    public function latestPublished()\n    {\n        return static::published()->latest();\n    }\n}\n";
+        host.add_file("app/Models/Product.php", model);
+        host.add_file(
+            "app/Http/Controllers/ProductController.php",
+            "<?php\nclass ProductController {\n    public function index() {\n        $a = Product::published()->get();\n        $b = Product::query()->cheap()->published()->get();\n        $c = Order::published();\n        $d = $published;\n    }\n}\n",
+        );
+        let mut plugin = Laravel::default();
+        let d = doc("app/Models/Product.php", model);
+        let lines_of = |found: Vec<Location>| {
+            let mut out: Vec<(String, u32)> = found
+                .into_iter()
+                .map(|l| {
+                    (
+                        l.path.trim_start_matches("/project/").to_owned(),
+                        l.range.start.line,
+                    )
+                })
+                .collect();
+            out.sort();
+            out
+        };
+        assert_eq!(
+            lines_of(plugin.definition(&d, at(model, "scopePublished", 6))),
+            [
+                ("app/Http/Controllers/ProductController.php".to_owned(), 3),
+                ("app/Http/Controllers/ProductController.php".to_owned(), 4),
+                ("app/Models/Product.php".to_owned(), 18),
+            ]
+        );
+        assert_eq!(
+            lines_of(plugin.definition(&d, at(model, "cheap(Builder", 2))),
+            [("app/Http/Controllers/ProductController.php".to_owned(), 4)]
+        );
+        let controller = "<?php\nclass ProductController {\n    public function index(Product $product) {\n        $a = Product::published()->get();\n        $b = $product->cheap();\n        $c = Product::query()->published();\n    }\n}\n";
+        host.add_file("app/Http/Controllers/ProductController.php", controller);
+        let c = doc("app/Http/Controllers/ProductController.php", controller);
+        assert_eq!(
+            lines_of(plugin.definition(&c, at(controller, "published()->get", 3))),
+            [("app/Models/Product.php".to_owned(), 5)]
+        );
+        assert_eq!(
+            lines_of(plugin.definition(&c, at(controller, "cheap()", 2))),
+            [("app/Models/Product.php".to_owned(), 11)]
+        );
+        assert_eq!(
+            lines_of(plugin.definition(&c, at(controller, "published();", 2))),
+            [("app/Models/Product.php".to_owned(), 5)]
+        );
+    }
+
+    #[test]
     fn completes_middleware_guards_and_controller_methods() {
         let _host = setup();
         let mut plugin = Laravel::default();
@@ -2785,6 +3194,35 @@ return Post::query()->create([
             None,
         );
         assert_eq!(labels(&items), ["title", "id"]);
+    }
+
+    #[test]
+    fn completes_cast_types_and_their_arguments() {
+        let _host = setup();
+        let text = "<?php\nnamespace App\\Models;\n\nclass Post extends Model\n{\n    protected function casts(): array\n    {\n        return [\n            'title' => 'bool',\n            'body' => 'decimal:',\n            'published_at' => 'datetime:',\n            'secret' => 'encrypted:',\n            '' => 'string',\n        ];\n    }\n}\n";
+        let d = doc("app/Models/Post.php", text);
+        let mut plugin = Laravel::default();
+        let types = plugin.completion(&d, at(text, "'bool'", 1), None);
+        let types = labels(&types);
+        assert!(
+            types.contains(&"boolean")
+                && types.contains(&"datetime")
+                && types.contains(&"encrypted:array")
+                && !types.contains(&"title"),
+            "{types:?}"
+        );
+        let decimals = plugin.completion(&d, at(text, "decimal:", 8), None);
+        let decimals = labels(&decimals);
+        assert!(decimals.contains(&"2"), "{decimals:?}");
+        let formats = plugin.completion(&d, at(text, "datetime:", 9), None);
+        let formats = labels(&formats);
+        assert!(formats.contains(&"Y-m-d H:i:s"), "{formats:?}");
+        let encrypted = plugin.completion(&d, at(text, "encrypted:", 10), None);
+        let encrypted = labels(&encrypted);
+        assert!(encrypted.contains(&"collection"), "{encrypted:?}");
+        let keys = plugin.completion(&d, at(text, "'' =>", 1), None);
+        let keys = labels(&keys);
+        assert!(keys.contains(&"title"), "{keys:?}");
     }
 
     #[test]
