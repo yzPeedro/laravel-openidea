@@ -66,6 +66,23 @@ const STATUS_ID: &str = "laravel";
 const USAGE_FILES: usize = 300;
 const USAGE_TOOLTIP_LINES: usize = 12;
 const LARAVEL_MARKER: &str = "icons/laravel.svg";
+const MANY_CHANGES: usize = 200;
+const WATCHED: [&str; 14] = [
+    "app/**",
+    "routes/**",
+    "config/**",
+    "database/**",
+    "resources/**",
+    "lang/**",
+    "tests/**",
+    "bootstrap/app.php",
+    "bootstrap/providers.php",
+    "bootstrap/cache/routes-v7.php",
+    "composer.lock",
+    "vendor/composer/installed.json",
+    ".env",
+    ".env.example",
+];
 
 fn scope_name(method: &resources::Method) -> Option<String> {
     if let Some(rest) = method.name.strip_prefix("scope")
@@ -446,6 +463,54 @@ impl Laravel {
                 self.cached_facts(&project, &root);
             }
             self.read_project(&project, &root, EVENT_SLICE);
+        }
+    }
+
+    fn forget_everything(&mut self) {
+        self.hub_tables = None;
+        self.facts_cache = None;
+        self.files.clear();
+        self.originals.clear();
+        self.live.clear();
+        self.cache.clear();
+    }
+
+    fn absolute(&self, path: &str) -> String {
+        if runner::is_windows_root(path) || path.starts_with('/') {
+            return path.to_owned();
+        }
+        self.projects
+            .iter()
+            .filter(|(_, laravel)| **laravel)
+            .map(|(root, _)| join(root, path))
+            .find(|p| project_of(p).is_some())
+            .unwrap_or_else(|| path.to_owned())
+    }
+
+    fn disk_changed(&mut self, path: &str) -> bool {
+        let Some(project) = project_of(path) else {
+            return false;
+        };
+        let Ok(root) = project.root() else {
+            return false;
+        };
+        self.hub_tables = None;
+        self.facts_cache = None;
+        self.live.remove(path);
+        self.reindex_usages(&project, &root, path);
+        self.cache.invalidate(&root, path);
+        if path.replace('\\', "/").contains("/tests/") {
+            self.pest.remove(&root);
+        }
+        match project.read_file(path) {
+            Ok(text) => {
+                self.remember_original(&root, path, &text, true);
+                true
+            }
+            Err(_) => {
+                self.originals.remove(path);
+                false
+            }
         }
     }
 
@@ -2097,11 +2162,19 @@ impl Laravel {
             self.cache.locale.clone()
         };
         let mut out = Vec::new();
+        let existing = |name: String| {
+            ["lang", "resources/lang"].iter().find_map(|dir| {
+                let relative = format!("{dir}/{name}");
+                project
+                    .read_file(&relative)
+                    .ok()
+                    .map(|text| (relative, text))
+            })
+        };
         if let Some((file, rest)) = key.split_once('.')
             && !key.contains(' ')
         {
-            let relative = format!("lang/{locale}/{file}.php");
-            if let Ok(text) = project.read_file(&relative)
+            if let Some((relative, text)) = existing(format!("{locale}/{file}.php"))
                 && let Some(close) = text.rfind(']')
             {
                 let before = text[..close].trim_end();
@@ -2128,8 +2201,7 @@ impl Laravel {
                 });
             }
         }
-        let relative = format!("lang/{locale}.json");
-        if let Ok(text) = project.read_file(&relative)
+        if let Some((relative, text)) = existing(format!("{locale}.json"))
             && let Some(close) = text.rfind('}')
         {
             let before = text[..close].trim_end();
@@ -2673,6 +2745,9 @@ impl openidea_plugin::Plugin for Laravel {
         ] {
             host::subscribe(kind).or_error(&format!("subscribing to {kind:?}"));
         }
+        host::subscribe(EventKind::FilesChanged).or_error("subscribing to FilesChanged");
+        host::subscribe_paths(EventKind::FilesChanged.name(), &WATCHED)
+            .or_error("filtering FilesChanged");
         for project in host::projects()
             .or_error("listing the open projects")
             .unwrap_or_default()
@@ -2745,11 +2820,26 @@ impl openidea_plugin::Plugin for Laravel {
                     }
                     paths.insert(path.clone());
                 }
+                Event::FilesChanged(changed) => {
+                    let all: Vec<&String> = changed
+                        .created
+                        .iter()
+                        .chain(&changed.modified)
+                        .chain(&changed.removed)
+                        .collect();
+                    if all.len() > MANY_CHANGES {
+                        self.forget_everything();
+                    } else {
+                        for path in all {
+                            let path = self.absolute(path);
+                            if self.disk_changed(&path) {
+                                paths.insert(path);
+                            }
+                        }
+                    }
+                }
                 Event::VcsChanged(repo) => {
-                    self.hub_tables = None;
-                    self.facts_cache = None;
-                    self.files.clear();
-                    self.cache.clear();
+                    self.forget_everything();
                     paths.insert(repo.clone());
                 }
                 Event::EditorFocused(Some(path)) => {
@@ -3795,6 +3885,25 @@ mod tests {
     }
 
     #[test]
+    fn adds_missing_translations_to_resources_lang_on_older_laravel() {
+        let host = setup();
+        host.add_file(
+            "resources/lang/en/messages.php",
+            "<?php\n\nreturn [\n    'welcome' => 'Welcome',\n];\n",
+        );
+        let text = "<?php\n__('messages.brand_new');\n";
+        let actions = Laravel::default().code_actions(
+            &doc("app/X.php", text),
+            Range::new(at(text, "brand", 1), at(text, "brand", 1)),
+        );
+        let titles: Vec<&str> = actions.iter().map(|a| a.title.as_str()).collect();
+        assert!(
+            titles.contains(&"Add 'messages.brand_new' to resources/lang/en/messages.php"),
+            "{titles:?}"
+        );
+    }
+
+    #[test]
     fn reports_unknown_views_when_files_open() {
         let host = setup();
         let mut plugin = Laravel::default();
@@ -4302,6 +4411,20 @@ Blade::if('admin', fn () => true);
             "{:?}",
             labels(&items)
         );
+        let imported = "<?php\nnamespace App\\Http\\Controllers;\n\nuse App\\Enums\\OrderStatus;\n\nclass OrdersController\n{\n    public function index()\n    {\n        Ord\n    }\n}\n";
+        let d = doc("app/Http/Controllers/OrdersController.php", imported);
+        let items = plugin.completion(&d, at(imported, "Ord\n", 3), None);
+        let item = items.iter().find(|i| i.label == "OrderStatus::");
+        assert!(item.is_some(), "{:?}", labels(&items));
+        assert!(item.unwrap().additional_edits.is_empty());
+        host.add_file(
+            "config/app.php",
+            "<?php\nreturn [\n    'name' => 'x',\n    'aliases' => [\n        'Cache' => Illuminate\\Support\\Facades\\Cache::class,\n    ],\n];\n",
+        );
+        let facade = "<?php\nnamespace App\\Http\\Controllers;\n\nuse Illuminate\\Support\\Facades\\Cache;\n\nclass OrdersController\n{\n    public function index()\n    {\n        Cac\n    }\n}\n";
+        let d = doc("app/Http/Controllers/OrdersController.php", facade);
+        let items = plugin.completion(&d, at(facade, "Cac\n", 3), None);
+        assert!(labels(&items).contains(&"Cache::"), "{:?}", labels(&items));
         let model = "<?php\nnamespace App\\Models;\n\nclass Order extends Model\n{\n    protected $casts = [\n        'status' => Ord\n    ];\n}\n";
         let items = plugin.completion(
             &doc("app/Models/Order.php", model),
@@ -4310,6 +4433,84 @@ Blade::if('admin', fn () => true);
         );
         assert_eq!(labels(&items), ["OrderStatus::class"]);
         assert_eq!(items[0].insert_text, "OrderStatus::class");
+    }
+
+    #[test]
+    fn ctrl_click_on_a_cast_column_opens_its_enum_or_value_class() {
+        let host = setup();
+        host.add_file(
+            "app/Enums/OrderStatus.php",
+            "<?php\nnamespace App\\Enums;\n\nenum OrderStatus: string\n{\n    case Paid = 'paid';\n}\n",
+        );
+        host.add_file(
+            "app/Support/Money.php",
+            "<?php\nnamespace App\\Support;\n\nclass Money\n{\n    public function __construct(public int $cents) {}\n}\n",
+        );
+        host.add_file(
+            "app/Casts/MoneyCast.php",
+            "<?php\nnamespace App\\Casts;\n\nuse App\\Support\\Money;\n\nclass MoneyCast implements CastsAttributes\n{\n    public function get($model, $key, $value, $attributes): Money\n    {\n        return new Money((int) $value);\n    }\n}\n",
+        );
+        host.add_file(
+            "app/Models/Order.php",
+            "<?php\nnamespace App\\Models;\n\nuse App\\Casts\\MoneyCast;\nuse App\\Enums\\OrderStatus;\nuse Illuminate\\Database\\Eloquent\\Model;\n\nclass Order extends Model\n{\n    protected $casts = [\n        'status' => OrderStatus::class,\n        'total' => MoneyCast::class,\n    ];\n}\n",
+        );
+        host.add_file(
+            "database/migrations/2024_01_02_000000_create_orders_table.php",
+            "<?php\nSchema::create('orders', function (Blueprint $table) {\n    $table->id();\n    $table->string('status');\n    $table->integer('total');\n});\n",
+        );
+        let mut plugin = Laravel::default();
+        let text = "<?php\nnamespace App\\Http\\Controllers;\n\nuse App\\Models\\Order;\n\nclass A\n{\n    public function b(Order $order)\n    {\n        $order->status;\n        $order->total;\n    }\n}\n";
+        let d = doc("app/Http/Controllers/A.php", text);
+        let found = plugin.definition(&d, at(text, ">status", 2));
+        assert_eq!(
+            found[0].path, "/project/app/Enums/OrderStatus.php",
+            "{found:?}"
+        );
+        let found = plugin.definition(&d, at(text, ">total", 2));
+        assert_eq!(found[0].path, "/project/app/Support/Money.php", "{found:?}");
+    }
+
+    #[test]
+    fn files_changed_outside_the_editor_refresh_the_index() {
+        let host = setup();
+        let mut plugin = Laravel::default();
+        let text = "<?php\nroute('');\n";
+        let d = doc("app/X.php", text);
+        let before = plugin.completion(&d, at(text, "('", 2), None);
+        assert!(!labels(&before).contains(&"brand.new"));
+        host.add_file(
+            "routes/web.php",
+            &format!("{ROUTES}Route::get('/new', fn () => 1)->name('brand.new');\n"),
+        );
+        let stale = plugin.completion(&d, at(text, "('", 2), None);
+        assert!(!labels(&stale).contains(&"brand.new"));
+        plugin.handle_events(
+            &[Event::FilesChanged(openidea_plugin::FilesChanged {
+                created: Vec::new(),
+                modified: vec!["/project/routes/web.php".into()],
+                removed: Vec::new(),
+            })],
+            &host.invocation(),
+        );
+        let after = plugin.completion(&d, at(text, "('", 2), None);
+        assert!(
+            labels(&after).contains(&"brand.new"),
+            "{:?}",
+            labels(&after)
+        );
+        let many: Vec<String> = (0..MANY_CHANGES + 1)
+            .map(|i| format!("/project/app/F{i}.php"))
+            .collect();
+        plugin.handle_events(
+            &[Event::FilesChanged(openidea_plugin::FilesChanged {
+                created: many,
+                modified: Vec::new(),
+                removed: Vec::new(),
+            })],
+            &host.invocation(),
+        );
+        let again = plugin.completion(&d, at(text, "('", 2), None);
+        assert!(labels(&again).contains(&"brand.new"));
     }
 
     #[test]

@@ -314,6 +314,14 @@ impl Laravel {
     }
 
     pub(crate) fn path_items(&mut self, project: &Project, root: &str, base: &str) -> Vec<Entry> {
+        let base = if base == "lang/"
+            && crate::project::find(project, root, "lang/*", 1).is_empty()
+            && !crate::project::find(project, root, "resources/lang/*", 1).is_empty()
+        {
+            "resources/lang/"
+        } else {
+            base
+        };
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
