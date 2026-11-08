@@ -2709,12 +2709,20 @@ impl Laravel {
                 self.cache.load_framework(&project, &root);
                 self.files.remove(&root);
                 self.read_project(&project, &root, VIEW_SLICE);
-                let counts: Vec<String> = RefKind::ALL
+                let mut counts: Vec<String> = RefKind::ALL
                     .iter()
                     .map(|k| (self.cache.get(*k, &project, &root).len(), k.label()))
                     .filter(|(n, _)| *n > 0)
                     .map(|(n, label)| format!("{n} {label}"))
                     .collect();
+                let statics = self.static_candidates(&project, &root);
+                let facades = statics
+                    .iter()
+                    .filter(|c| c.detail.starts_with("Laravel"))
+                    .count();
+                if facades > 0 {
+                    counts.push(format!("{facades} facades and helpers"));
+                }
                 Ok(Some(format!("Indexed {}", counts.join(", "))))
             }
             "related-file" => self.related_file(ctx),

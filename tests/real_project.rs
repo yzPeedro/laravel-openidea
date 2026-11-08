@@ -108,6 +108,18 @@ fn indexes_a_real_project() {
         "=> '",
     );
     println!("validation rules from vendor: {} in {ms} ms", rules.len());
+    let (statics, ms) = probe(
+        &mut plugin,
+        "<?php\nnamespace App\\Http\\Controllers;\n\nclass A\n{\n    public function b()\n    {\n        Cac\n    }\n}\n",
+        "        Cac",
+    );
+    println!(
+        "static classes for Cac: {:?} in {ms} ms",
+        statics
+            .iter()
+            .filter(|l| l.ends_with("::"))
+            .collect::<Vec<_>>()
+    );
     let (query, ms) = probe(&mut plugin, "<?php\nUser::query()->wh\n", "->wh");
     println!(
         "User::query()->wh: {} methods in {ms} ms, e.g. {:?}",
