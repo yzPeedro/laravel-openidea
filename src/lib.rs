@@ -2173,33 +2173,31 @@ impl Laravel {
         };
         if let Some((file, rest)) = key.split_once('.')
             && !key.contains(' ')
+            && let Some((relative, text)) = existing(format!("{locale}/{file}.php"))
+            && let Some(close) = text.rfind(']')
         {
-            if let Some((relative, text)) = existing(format!("{locale}/{file}.php"))
-                && let Some(close) = text.rfind(']')
-            {
-                let before = text[..close].trim_end();
-                let comma = if before.ends_with('[') || before.ends_with(',') {
-                    ""
-                } else {
-                    ","
-                };
-                let insert_at = before.len();
-                let escaped = rest.replace('\'', "\\'");
-                let pos = position(&text, insert_at);
-                out.push(CodeAction {
-                    title: format!("Add '{key}' to {relative}"),
-                    kind: Some("quickfix".into()),
-                    preferred: true,
-                    data: None,
-                    edits: vec![(
-                        join(root, &relative),
-                        vec![TextEdit {
-                            range: Range::new(pos, pos),
-                            text: format!("{comma}\n    '{escaped}' => '{escaped}',"),
-                        }],
-                    )],
-                });
-            }
+            let before = text[..close].trim_end();
+            let comma = if before.ends_with('[') || before.ends_with(',') {
+                ""
+            } else {
+                ","
+            };
+            let insert_at = before.len();
+            let escaped = rest.replace('\'', "\\'");
+            let pos = position(&text, insert_at);
+            out.push(CodeAction {
+                title: format!("Add '{key}' to {relative}"),
+                kind: Some("quickfix".into()),
+                preferred: true,
+                data: None,
+                edits: vec![(
+                    join(root, &relative),
+                    vec![TextEdit {
+                        range: Range::new(pos, pos),
+                        text: format!("{comma}\n    '{escaped}' => '{escaped}',"),
+                    }],
+                )],
+            });
         }
         if let Some((relative, text)) = existing(format!("{locale}.json"))
             && let Some(close) = text.rfind('}')
