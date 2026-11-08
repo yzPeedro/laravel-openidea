@@ -36,6 +36,7 @@ mod renames;
 mod resources;
 mod runner;
 mod sections;
+mod snippets;
 mod toolconfig;
 mod tools;
 
@@ -1627,6 +1628,13 @@ impl Laravel {
     }
 }
 
+fn php_snippets(text: &str, cursor: usize, at: Position) -> Vec<CompletionItem> {
+    let Some(start) = snippets::word_at(text, cursor) else {
+        return Vec::new();
+    };
+    snippets::items(text, cursor, Range::new(position(text, start), at))
+}
+
 fn fixed_entries(values: &[(&str, &str)]) -> Vec<Entry> {
     values
         .iter()
@@ -1749,7 +1757,7 @@ impl Providers for Laravel {
             );
             let typed = &doc.text[start + 1..cursor];
             let replace = Range::new(position(&doc.text, start), at);
-            return items(RefKind::Directive, &entries, typed, replace)
+            let mut out: Vec<CompletionItem> = items(RefKind::Directive, &entries, typed, replace)
                 .into_iter()
                 .map(|mut item| {
                     item.label = format!("@{}", item.label);
@@ -1757,6 +1765,12 @@ impl Providers for Laravel {
                     item
                 })
                 .collect();
+            out.extend(snippets::blade_items(typed, replace, |directive| {
+                entries
+                    .iter()
+                    .any(|e| e.key.eq_ignore_ascii_case(directive))
+            }));
+            return out;
         }
         if blade && let Some((kind, start, _)) = tag_at(&doc.text, cursor, &TAGS) {
             let entries = self.cache.get(kind, &project, &root);
@@ -1790,11 +1804,17 @@ impl Providers for Laravel {
         {
             let scope = scope_of(&doc.text);
             if let (true, Some(class)) = (scope.model, scope.class.as_deref()) {
-                return self.member_items(&project, &root, class, &doc.text, &ctx, at);
+                let mut out = self.member_items(&project, &root, class, &doc.text, &ctx, at);
+                out.extend(php_snippets(&doc.text, cursor, at));
+                return out;
             }
         }
         let Some(mut arg) = php::open_arg_at(&doc.text, blade, cursor) else {
-            return Vec::new();
+            return if blade {
+                Vec::new()
+            } else {
+                php_snippets(&doc.text, cursor, at)
+            };
         };
         if !blade {
             self.infer_head(&project, &root, &doc.text, &mut arg);
@@ -2531,6 +2551,14 @@ mod tests {
         items.iter().map(|i| i.label.as_str()).collect()
     }
 
+    fn members_only(items: &[CompletionItem]) -> Vec<&str> {
+        items
+            .iter()
+            .filter(|i| i.kind != Some(openidea_plugin::providers::CompletionKind::Snippet))
+            .map(|i| i.label.as_str())
+            .collect()
+    }
+
     #[test]
     fn completes_route_names_inside_route_calls() {
         let _host = setup();
@@ -3228,7 +3256,7 @@ mod tests {
             at(post, "aut\n", 3),
             None,
         );
-        assert!(labels(&rel).is_empty(), "author() already exists");
+        assert!(members_only(&rel).is_empty(), "author() already exists");
         let user = "<?php\nclass User extends Authenticatable\n{\n    pos\n}\n";
         let has_many = plugin.completion(
             &doc("app/Models/User.php", user),
@@ -3272,7 +3300,18 @@ Blade::if('admin', fn () => true);
         let items = plugin.completion(&d, at(text, "@fore", 5), None);
         assert_eq!(
             labels(&items),
-            ["@foreach", "@endforeach", "@forelse", "@endforelse"]
+            [
+                "@foreach",
+                "@endforeach",
+                "@forelse",
+                "@endforelse",
+                "@foreach … @end",
+                "@forelse … @end"
+            ]
+        );
+        assert_eq!(
+            items[4].insert_text,
+            "@foreach (${1:\\$items} as ${2:\\$item})\n\t$0\n@endforeach"
         );
         assert_eq!(items[0].replace.unwrap().start, at(text, "@fore", 0));
         let custom = plugin.completion(&d, at(text, "@adm", 4), None);
@@ -3416,7 +3455,10 @@ Blade::if('admin', fn () => true);
             at(blade, "@fore", 5),
             None,
         );
-        assert_eq!(labels(&directives), ["@foreach", "@endforeach"]);
+        assert_eq!(
+            labels(&directives),
+            ["@foreach", "@endforeach", "@foreach … @end"]
+        );
         let casts = "<?php\nclass Post extends Model\n{\n    protected $casts = ['published_at' => ''];\n}\n";
         let types = plugin.completion(
             &doc("app/Models/Post.php", casts),

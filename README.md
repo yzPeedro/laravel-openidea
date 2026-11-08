@@ -94,6 +94,8 @@ Install the zip as above, or link the folder for development with `openidea-plug
 
 Completion and navigation come from cached indexes of your project files, built to answer within the IDE's 50 ms completion budget.
 
+**Snippets**: about 200 PHP and Laravel snippets (`pubf`, `ctorp`, `foreach`, `hasmany`, `scope`, `rget`, `qwhere`, `cremember`, `postjson`, `it`…) expand with Tab where they make sense (outside a class, in a class body or in code), add the `use` statements they need, and Blade block directives come with their closing tag. Every snippet is listed in [docs/snippets.md](docs/snippets.md).
+
 | Routes, with verb and URI | Eloquent columns from migrations |
 | :---: | :---: |
 | <img src="docs/media/editor-route-completion.webp" alt="Route name completion"> | <img src="docs/media/editor-column-completion.webp" alt="Column completion"> |
