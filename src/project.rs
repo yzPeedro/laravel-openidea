@@ -1,17 +1,48 @@
 use crate::audit::{self, Logged};
 use openidea_plugin::{Error, Position, Project, Range, host};
 
+pub fn plain_path(path: &str) -> std::borrow::Cow<'_, str> {
+    if let Some(rest) = path.strip_prefix("\\\\?\\UNC\\") {
+        return format!("\\\\{rest}").into();
+    }
+    path.strip_prefix("\\\\?\\").unwrap_or(path).into()
+}
+
+fn prefix_len(root: &str, path: &str) -> Option<usize> {
+    if path.starts_with(root) {
+        return Some(root.len());
+    }
+    let canon = |s: &str| {
+        let s = plain_path(s).replace('\\', "/");
+        if crate::runner::is_windows_root(&s) || s.starts_with("//") {
+            s.to_ascii_lowercase()
+        } else {
+            s
+        }
+    };
+    let (root_c, path_c) = (canon(root), canon(path));
+    let rest = path_c.strip_prefix(root_c.trim_end_matches('/'))?;
+    if !(rest.is_empty() || rest.starts_with('/')) {
+        return None;
+    }
+    let at = path.len().checked_sub(rest.len())?;
+    path.is_char_boundary(at).then_some(at)
+}
+
+pub fn same_path(a: &str, b: &str) -> bool {
+    prefix_len(a, b).is_some_and(|at| at == b.len())
+}
+
 pub fn project_of(path: &str) -> Option<Project> {
     host::projects()
         .or_warn("listing the open projects")?
         .into_iter()
-        .filter(|p| p.root().is_ok_and(|r| path.starts_with(&r)))
+        .filter(|p| p.root().is_ok_and(|r| prefix_len(&r, path).is_some()))
         .max_by_key(|p| p.root().map(|r| r.len()).unwrap_or(0))
 }
 
 pub fn rel<'a>(root: &str, path: &'a str) -> &'a str {
-    path.strip_prefix(root)
-        .map_or(path, |r| r.trim_start_matches(['/', '\\']))
+    prefix_len(root, path).map_or(path, |len| path[len..].trim_start_matches(['/', '\\']))
 }
 
 pub fn abs(root: &str, path: &str) -> String {
@@ -98,6 +129,50 @@ impl Lines {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paths_match_their_root_whatever_the_separators() {
+        let root = "C:\\Users\\Pedro\\projects\\app";
+        assert_eq!(
+            rel(root, "C:/Users/Pedro/projects/app/app/Models/Order.php"),
+            "app/Models/Order.php"
+        );
+        assert_eq!(
+            rel(root, "c:\\users\\pedro\\projects\\app\\routes\\web.php"),
+            "routes\\web.php"
+        );
+        assert_eq!(
+            rel(root, "C:/Users/Pedro/projects/app2/x.php"),
+            "C:/Users/Pedro/projects/app2/x.php"
+        );
+        assert_eq!(
+            rel("/home/p/app", "/home/p/app/routes/web.php"),
+            "routes/web.php"
+        );
+        assert_eq!(
+            rel("/home/p/app", "/home/p/App/routes/web.php"),
+            "/home/p/App/routes/web.php"
+        );
+        assert_eq!(
+            rel(
+                root,
+                "\\\\?\\C:\\Users\\Pedro\\projects\\app\\app\\Models\\Order.php"
+            ),
+            "app\\Models\\Order.php"
+        );
+        assert_eq!(
+            rel(
+                "\\\\srv\\share\\app",
+                "\\\\?\\UNC\\srv\\share\\app\\routes\\web.php"
+            ),
+            "routes\\web.php"
+        );
+        assert!(same_path(
+            "C:\\Users\\Pedro\\projects\\app\\a.php",
+            "\\\\?\\C:\\Users\\Pedro\\projects\\app\\a.php"
+        ));
+        assert_eq!(plain_path("\\\\?\\C:\\x\\a.php"), "C:\\x\\a.php");
+    }
 
     #[test]
     fn maps_offsets_to_utf16_positions() {

@@ -139,7 +139,7 @@ One tool window for everything your app has. It refreshes from your files and op
 
 **Everything about a model**: click a model in the hub's Models section to see its table and migrations, relations, scopes, casts, factory and seeders, and every controller, Form Request, API Resource, policy, observer, job, event, listener, notification, mail, Livewire or Filament class, command, route and test that uses it. Mentions in comments and `use` imports are left out; *Open ›* on the row still opens the model's file.
 
-**Usages in the gutter**: a Laravel icon next to every class in `app/` and `database/` (models, API Resources, Form Requests, jobs, events, enums and the rest) and next to every model scope lists in its tooltip the files that use it, comments and imports left out, and goes to the first one. Ctrl+click on the class name lists every usage to choose from.
+**Usages in the gutter**: a Laravel icon next to every class in `app/` and `database/` (models, API Resources, Form Requests, jobs, events, enums and the rest) and next to every model scope opens the list of every place that uses it, with each file's icon, to pick one; comments, strings and `use` imports are left out. The usages are published to the IDE's own background index, so they follow your edits and changes on disk. Ctrl+click on the class name lists them too.
 
 **Search the whole hub**: the box above the sections searches every table at once (routes, models, tables and columns, views, config, env, translations, classes, events, listeners, jobs and the rest), shows the first matches of each section with a link to its file, offers the sections whose name matches, and *Show all* opens a section searched for the same text.
 

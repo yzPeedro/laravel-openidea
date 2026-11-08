@@ -44,6 +44,11 @@ web = "web/hub.html"
 [[contributes.markerIcons]]
 id = "laravel"
 icon = "icons/laravel.svg"
+markers = ["laravel-usages#"]
+tooltip = "Where it's used"
+
+[[contributes.documentIndexers]]
+extensions = ["php"]
 
 [[contributes.customEditors]]
 id = "hub"

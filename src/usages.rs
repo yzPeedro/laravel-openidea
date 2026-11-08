@@ -1,4 +1,3 @@
-use crate::project::Lines;
 use std::collections::BTreeMap;
 
 pub const GLOBS: [&str; 8] = [
@@ -214,10 +213,6 @@ impl Index {
             .filter_map(|(path, words)| words.get(word).map(|line| (path.clone(), *line)))
             .collect()
     }
-}
-
-pub fn line_at(text: &str, at: usize) -> u32 {
-    Lines::new(text).position(text, at).line
 }
 
 #[cfg(test)]
