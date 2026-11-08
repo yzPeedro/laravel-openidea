@@ -41,9 +41,22 @@ icon = "icons/laravel.svg"
 location = "bottom"
 web = "web/hub.html"
 
+[[contributes.customEditors]]
+id = "hub"
+title = "Laravel OpenIDEA"
+patterns = ["*.laravel-hub"]
+priority = "default"
+layout = "tab"
+web = "web/hub.html"
+
 [[contributes.commands]]
 id = "refresh-index"
 title = "Laravel: Refresh Index"
+category = "Laravel"
+
+[[contributes.commands]]
+id = "open-hub-tab"
+title = "Laravel: Open the Hub in an Editor Tab"
 category = "Laravel"
 
 [[contributes.commands]]
@@ -181,6 +194,11 @@ icon = "icons/laravel.svg"
 [[contributes.fileIcons]]
 id = "laravel-artisan"
 patterns = ["artisan"]
+icon = "icons/laravel.svg"
+
+[[contributes.fileIcons]]
+id = "laravel-hub"
+patterns = ["*.laravel-hub"]
 icon = "icons/laravel.svg"
 
 [[contributes.fileIcons]]

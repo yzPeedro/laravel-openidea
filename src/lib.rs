@@ -14,6 +14,7 @@ mod formrequest;
 mod framework;
 mod helpers;
 mod hierarchy;
+mod hubtabs;
 mod index;
 mod inspect;
 mod inspections;
@@ -72,6 +73,8 @@ pub struct Laravel {
     mcp_synced: BTreeMap<String, String>,
     helpers_synced: BTreeMap<String, String>,
     listed: BTreeMap<String, (u64, Vec<String>)>,
+    hub_pending: Option<hubtabs::Pending>,
+    hub_synced: BTreeSet<String>,
 }
 
 fn kebab(name: &str) -> String {
@@ -1860,6 +1863,17 @@ impl Providers for Laravel {
         }
         if !is_blade(&doc.path)
             && let Some(arg) = php::arg_at(&doc.text, false, cursor)
+            && let Some(key) = hubtabs::cache_key(&arg)
+            && project.read_file(&hubtabs::file_path("cache")).is_ok()
+        {
+            self.remember_hub_filter("cache", key);
+            return vec![Location {
+                path: project::join(&root, &hubtabs::file_path("cache")),
+                range: Range::default(),
+            }];
+        }
+        if !is_blade(&doc.path)
+            && let Some(arg) = php::arg_at(&doc.text, false, cursor)
             && arg.arg == 0
             && arg.callee.kind == php::CallKind::Static
             && arg.callee.class.as_deref() == Some("gate")
@@ -2021,6 +2035,19 @@ impl Providers for Laravel {
 impl Laravel {
     fn command(&mut self, id: &str, ctx: &Invocation) -> Result<Option<String>, Error> {
         match id {
+            "open-hub-tab" => {
+                let project = ctx.project().ok_or("open a Laravel project first")?;
+                let root = project.root()?;
+                if !self.sync_hub_files(&project, true) {
+                    return Err("the hub tab files couldn't be written to storage/openidea/hub: allow process:php or process:docker for Laravel OpenIDEA in Settings › Plugins".into());
+                }
+                host::open_location(
+                    &project::join(&root, &hubtabs::file_path(hubtabs::WHOLE)),
+                    0,
+                    0,
+                )?;
+                Ok(None)
+            }
             "refresh-index" => {
                 self.cache.clear();
                 self.projects.clear();
@@ -2144,9 +2171,11 @@ impl openidea_plugin::Plugin for Laravel {
                 }
                 Event::EditorFocused(Some(path)) => {
                     self.index_in_background(path);
+                    self.hub_tab_focused(path);
                     if let Some((project, _)) = self.laravel_project(path) {
                         self.sync_mcp(&project);
                         self.sync_helpers(&project);
+                        self.sync_hub_files(&project, false);
                     }
                 }
                 _ => {}
@@ -3390,6 +3419,71 @@ Blade::if('admin', fn () => true);
         assert_eq!(labels(&values), ["pending", "paid"]);
         let columns = plugin.completion(&doc("app/Y.php", op), at(op, "'status'", 3), None);
         assert!(labels(&columns).contains(&"status"));
+    }
+
+    #[test]
+    fn ctrl_click_on_a_cache_key_opens_the_cache_tab_filtered() {
+        use openidea_plugin::views::{ViewEvent, Views};
+        let host = setup();
+        let mut plugin = Laravel::default();
+        let text = "<?php\n$total = Cache::get('orders.total');\n";
+        let d = doc("app/X.php", text);
+        assert!(plugin.definition(&d, at(text, "orders", 2)).is_empty());
+        host.add_file(
+            "storage/openidea/hub/cache.laravel-hub",
+            "{\"section\":\"cache\"}\n",
+        );
+        let found = plugin.definition(&d, at(text, "orders", 2));
+        assert_eq!(
+            found[0].path,
+            "/project/storage/openidea/hub/cache.laravel-hub"
+        );
+        host.open_editor(
+            "/project/storage/openidea/hub/cache.laravel-hub",
+            "plaintext",
+            "{\"section\":\"cache\"}\n",
+            &[],
+        );
+        plugin
+            .handle(
+                "hub",
+                ViewEvent::Message(r#"{"type":"hello","instance":"tab1"}"#.into()),
+                &host.invocation(),
+            )
+            .unwrap();
+        let (view, message) = host.view_messages().pop().unwrap();
+        let message: serde_json::Value = serde_json::from_str(&message).unwrap();
+        assert_eq!(view, "hub");
+        assert_eq!(message["type"], "navigate");
+        assert_eq!(message["id"], "cache");
+        assert_eq!(message["cacheKey"], "orders.total");
+        assert_eq!(message["instance"], "tab1");
+        plugin
+            .handle(
+                "hub",
+                ViewEvent::Message(r#"{"type":"hello","instance":"tab2"}"#.into()),
+                &host.invocation(),
+            )
+            .unwrap();
+        let (_, again) = host.view_messages().pop().unwrap();
+        assert!(!again.contains("cacheKey"), "the filter is used once");
+        host.add_file(
+            "storage/openidea/hub/sections",
+            &(hubtabs::SECTIONS.join("\n") + "\nhub\n"),
+        );
+        plugin
+            .handle(
+                "laravel",
+                ViewEvent::Message(
+                    r#"{"type":"openeditor","id":"routes","instance":"side"}"#.into(),
+                ),
+                &host.invocation(),
+            )
+            .unwrap();
+        assert_eq!(
+            host.opened_locations().pop().unwrap().0,
+            "/project/storage/openidea/hub/routes.laravel-hub"
+        );
     }
 
     fn install_laravel_10(host: &MockHost) {

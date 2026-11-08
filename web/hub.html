@@ -307,6 +307,7 @@
     <span class="icon lg" id="section-icon"></span>
     <div class="titles"><h1 id="section-title"></h1><p id="section-desc"></p></div>
     <label class="search" id="search-box"><input id="search" type="search" placeholder="Filter…" aria-label="Filter"></label>
+    <button class="btn ghost" id="open-tab" title="Open this section in an editor tab (drag the tab to split it beside another)">Open in editor</button>
   </header>
   <div class="toolbar" id="toolbar"></div>
   <div class="filters" id="filters"></div>
@@ -392,7 +393,8 @@ const QUICK = [
 const LEVELS = ["emergency", "alert", "critical", "error", "warning", "notice", "info", "debug"];
 
 const $ = (id) => document.getElementById(id);
-const send = (msg) => openidea.postMessage(JSON.stringify(msg));
+const INSTANCE = Math.random().toString(36).slice(2) + Date.now().toString(36);
+const send = (msg) => openidea.postMessage(JSON.stringify({ ...msg, instance: INSTANCE }));
 const el = (tag, props = {}, ...children) => {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
@@ -407,7 +409,7 @@ const icon = (name, size = "") => {
   span.innerHTML = ICONS[name] || "";
   return span;
 };
-const state = { section: "overview", overview: null, data: {}, facetSel: {}, sort: {}, pages: {}, commands: [], globals: [], history: [], runner: "", current: null, values: {},
+const state = { section: "overview", file: null, overview: null, data: {}, facetSel: {}, sort: {}, pages: {}, commands: [], globals: [], history: [], runner: "", current: null, values: {},
   logs: { files: [], path: null, size: -1, entries: [], levels: new Set(LEVELS), expanded: false, hiddenBefore: 0 }, lastCapture: null };
 
 function toast(text) {
@@ -2470,7 +2472,7 @@ setInterval(() => {
 
 
 /* ---------- cache ---------- */
-state.cache = { stores: [], store: "", driver: "", entries: [], total: 0, truncated: false, note: null, error: null, busy: false, open: new Set(), full: {}, flushArmed: false, searchTimer: null, now: 0 };
+state.cache = { stores: [], store: "", driver: "", entries: [], total: 0, truncated: false, note: null, error: null, busy: false, open: new Set(), full: {}, flushArmed: false, searchTimer: null, now: 0, focusKey: null };
 
 function requestCache(action, key = "") {
   const C = state.cache;
@@ -2494,6 +2496,14 @@ function onCache(msg) {
     else toast(msg.request === "flush" ? "Flushed the " + (msg.store || "") + " store." : "Removed the key.");
     requestCache("list");
     return;
+  }
+  if (C.focusKey) {
+    const hit = (msg.entries || []).find((e) => e.key === C.focusKey || e.key.endsWith(C.focusKey));
+    if (hit) {
+      C.open.add(hit.key);
+      if (!hit.full && C.full[hit.key] == null) setTimeout(() => requestCache("value", hit.key), 0);
+    }
+    C.focusKey = null;
   }
   Object.assign(C, { busy: false, stores: msg.stores || C.stores, store: msg.store || C.store, driver: msg.driver || "", entries: msg.entries || [], total: msg.total || 0, truncated: !!msg.truncated, note: msg.note || null, error: msg.error || null, now: msg.now || Math.floor(Date.now() / 1000) });
   if (typeof msg.page === "number") pageState("cache").page = msg.page;
@@ -2654,6 +2664,8 @@ function renderAgents() {
 /* ---------- messages ---------- */
 openidea.onMessage((text) => {
   const msg = JSON.parse(text);
+  if (msg.instance && msg.instance !== INSTANCE) return;
+  if (msg.file && !msg.instance && msg.file !== state.file) return;
   switch (msg.type) {
     case "overview":
       state.overview = msg;
@@ -2701,6 +2713,8 @@ openidea.onMessage((text) => {
       break;
     case "navigate": {
       if (!SECTIONS.some((s) => s.id === msg.id)) break;
+      if (msg.file && msg.instance) state.file = msg.file;
+      if (msg.cacheKey) state.cache.focusKey = msg.cacheKey;
       if (msg.facets) state.facetSel[msg.id] = { ...msg.facets };
       if (msg.sort) state.sort[msg.id] = msg.sort;
       if (msg.levels) state.logs.levels = new Set(msg.levels);
@@ -2776,9 +2790,12 @@ openidea.onMessage((text) => {
   }
 });
 
+$("open-tab").addEventListener("click", () => send({ type: "openeditor", id: state.section === "overview" ? "hub" : state.section }));
+
 loadIcons().then(() => {
   document.querySelectorAll("[data-icon]").forEach((n) => { n.innerHTML = ICONS[n.dataset.icon] || ""; });
   go("overview");
+  send({ type: "hello" });
 });
 </script>
 </body>

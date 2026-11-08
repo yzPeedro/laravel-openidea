@@ -38,6 +38,10 @@ const PROJECT_DIRS: [&str; 10] = [
 #[serde(tag = "type", rename_all = "lowercase")]
 enum Request {
     Overview,
+    Hello,
+    Openeditor {
+        id: String,
+    },
     Section {
         id: String,
     },
@@ -200,7 +204,8 @@ fn remember(argv: &[String]) -> Vec<Vec<String>> {
     recent
 }
 
-fn post(view: &str, value: serde_json::Value) {
+fn post(view: &str, mut value: serde_json::Value) {
+    crate::hubtabs::tag(&mut value);
     let kind = value["type"].as_str().unwrap_or_default();
     let problem = match kind {
         "error" => value["message"].as_str(),
@@ -1333,10 +1338,56 @@ impl Laravel {
         let ViewEvent::Message(text) = event else {
             return Ok(());
         };
-        let request: Request =
+        let value: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| Error::Invalid(e.to_string()))?;
+        let instance = value["instance"].as_str().map(str::to_owned);
+        let request: Request =
+            serde_json::from_value(value).map_err(|e| Error::Invalid(e.to_string()))?;
+        crate::hubtabs::with_instance(instance, || self.dispatch(view, ctx, request))
+    }
+
+    fn hub_hello(&mut self, view: &str, ctx: &Invocation) -> Result<(), Error> {
+        if view != crate::hubtabs::EDITOR {
+            return Ok(());
+        }
+        let Some(path) = ctx.editor().map(|e| e.path()) else {
+            return Ok(());
+        };
+        let Some(section) = crate::hubtabs::section_of(&path) else {
+            return Ok(());
+        };
+        let search = self.take_hub_filter(section);
+        post(
+            view,
+            crate::hubtabs::navigate(section, &path, search.as_deref()),
+        );
+        Ok(())
+    }
+
+    fn open_hub_tab(&mut self, view: &str, ctx: &Invocation, id: &str) -> Result<(), Error> {
+        let (project, root) = project(ctx)?;
+        if id != crate::hubtabs::WHOLE && !crate::hubtabs::SECTIONS.contains(&id) {
+            return Err(Error::Invalid(format!("unknown hub section {id}")));
+        }
+        if !self.sync_hub_files(&project, true) {
+            post(
+                view,
+                json!({ "type": "error", "message": "The hub tab files couldn't be written to storage/openidea/hub: allow process:php (or process:docker) for Laravel OpenIDEA in Settings › Plugins." }),
+            );
+            return Ok(());
+        }
+        let path = crate::project::join(&root, &crate::hubtabs::file_path(id));
+        if let Err(e) = host::open_location(&path, 0, 0) {
+            post(view, json!({ "type": "error", "message": e.to_string() }));
+        }
+        Ok(())
+    }
+
+    fn dispatch(&mut self, view: &str, ctx: &Invocation, request: Request) -> Result<(), Error> {
         match request {
             Request::Overview => self.overview(view, ctx),
+            Request::Hello => self.hub_hello(view, ctx),
+            Request::Openeditor { id } => self.open_hub_tab(view, ctx, &id),
             Request::Section { id } => self.section(view, ctx, &id),
             Request::Init => self.send_commands(view, ctx, false),
             Request::Refresh => self.send_commands(view, ctx, true),

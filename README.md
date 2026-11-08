@@ -137,6 +137,8 @@ Completion and navigation come from cached indexes of your project files, built 
 
 One tool window for everything your app has. It refreshes from your files and opens every row in the editor. Every table section, Logs and Live Audit show 100 rows per page (50 to 500) with a pager that stays at the bottom; searching, filtering or sorting goes back to the first page.
 
+**In editor tabs**: *Open in editor* in the hub's header opens the current section (or, from the Overview, the whole hub) in an editor tab, and *Laravel: Open the Hub in an Editor Tab* does it from the command palette. Each tab keeps its own state, so you can drag tabs into a split to see two sections side by side. Ctrl+click on a cache key (`Cache::get('…')`, `cache('…')`, `cache()->remember('…')`…) opens the Cache section in a tab, searched for that key and expanded to show its value and when it expires. The tabs are small files in `storage/openidea/hub`, which the plugin writes with `process:php` (or `process:docker`).
+
 <img src="docs/media/hub-overview.webp" alt="Hub overview">
 
 | Routes, filtered by method, prefix, controller and tests | Listeners and the events they handle |
