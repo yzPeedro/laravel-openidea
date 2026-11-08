@@ -23,6 +23,11 @@ pub enum Want {
     Static(&'static [(&'static str, &'static str)]),
     Container,
     CastTypes,
+    EnumValues {
+        model: String,
+        call_start: usize,
+        index: usize,
+    },
     SchemaProperties(usize),
     RoutePaths,
     PathParams(usize),
@@ -57,6 +62,7 @@ enum Ctx {
     Section(&'static str),
     Static(&'static [(&'static str, &'static str)]),
     Container,
+    EnumValues(String),
     SchemaProperties,
     RoutePaths,
     PathParams,
@@ -569,8 +575,23 @@ fn ctx_of(arg: &StringArg, scope: &Scope) -> Option<(Ctx, usize, bool)> {
     })
 }
 
+const ENUM_VALUE_METHODS: [&str; 9] = [
+    "where",
+    "orwhere",
+    "wherenot",
+    "orwherenot",
+    "firstwhere",
+    "wherein",
+    "orwherein",
+    "wherenotin",
+    "orwherenotin",
+];
+
 fn model_ctx(arg: &StringArg, name: &str) -> Option<(Ctx, usize, bool)> {
     let model = model_head(arg.head.as_deref())?;
+    if ENUM_VALUE_METHODS.contains(&name) && (1..=2).contains(&arg.arg) && !arg.is_key {
+        return Some((Ctx::EnumValues(model), arg.arg, name.ends_with("in")));
+    }
     if RELATION_METHODS.contains(&name) {
         return Some((Ctx::Relations(model), 0, true));
     }
@@ -875,6 +896,11 @@ pub fn segment(arg: &StringArg, at: usize, scope: &Scope) -> Option<Segment> {
         }
         Ctx::Static(values) if !arg.is_key => whole(Want::Static(values)),
         Ctx::Container if !arg.is_key => whole(Want::Container),
+        Ctx::EnumValues(model) => whole(Want::EnumValues {
+            model,
+            call_start: arg.call_start,
+            index: arg.arg,
+        }),
         Ctx::SchemaProperties if !arg.is_key && arg.in_array => {
             whole(Want::SchemaProperties(arg.call_start))
         }

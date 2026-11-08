@@ -1,4 +1,4 @@
-use openidea_plugin::{Project, host};
+use openidea_plugin::{Error, ProcessOutput, Project, host};
 
 const COMPOSE_FILES: [&str; 4] = [
     "compose.yaml",
@@ -70,6 +70,35 @@ impl Mode {
         args.extend(argv.iter().cloned());
         args
     }
+}
+
+pub const WINDOWLESS_PHP: &str = "php-win";
+
+pub fn is_windows_root(root: &str) -> bool {
+    root.as_bytes().get(1) == Some(&b':') || root.starts_with("\\\\")
+}
+
+fn unavailable(error: &Error) -> bool {
+    match error {
+        Error::Denied(_) | Error::NotFound(_) => true,
+        Error::Failed(message) => message.starts_with(&format!("process:{WINDOWLESS_PHP}")),
+        _ => false,
+    }
+}
+
+pub fn run(
+    project: &Project,
+    mode: &Mode,
+    args: &[String],
+    stdin: Option<&str>,
+) -> Result<ProcessOutput, Error> {
+    if *mode == Mode::Php && project.root().is_ok_and(|r| is_windows_root(&r)) {
+        match project.run_process(WINDOWLESS_PHP, args, stdin) {
+            Err(e) if unavailable(&e) => {}
+            other => return other,
+        }
+    }
+    project.run_process(mode.program(), args, stdin)
 }
 
 impl Mode {
@@ -221,6 +250,54 @@ pub fn detect(project: &Project) -> Mode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openidea_plugin::mock::MockHost;
+
+    fn ran(host: &MockHost) -> Vec<String> {
+        host.process_runs().into_iter().map(|r| r.program).collect()
+    }
+
+    #[test]
+    fn windows_projects_run_php_without_a_console_window_when_allowed() {
+        let ok = |_: &[String], _: Option<&str>| {
+            Ok(ProcessOutput {
+                status: Some(0),
+                stdout: "ok".into(),
+                stderr: String::new(),
+            })
+        };
+        let host = MockHost::install().with_capabilities(&[
+            "project.read",
+            "process:php",
+            "process:php-win",
+        ]);
+        host.set_project_root(Some("C:\\Users\\dev\\shop"));
+        host.on_process("php", ok);
+        host.on_process("php-win", ok);
+        let project = host::projects().unwrap().remove(0);
+        let args = ["-v".to_owned()];
+        assert_eq!(run(&project, &Mode::Php, &args, None).unwrap().stdout, "ok");
+        assert_eq!(ran(&host), ["php-win"]);
+
+        let host = MockHost::install().with_capabilities(&["project.read", "process:php"]);
+        host.set_project_root(Some("C:\\Users\\dev\\shop"));
+        host.on_process("php", ok);
+        let project = host::projects().unwrap().remove(0);
+        run(&project, &Mode::Php, &args, None).unwrap();
+        assert_eq!(ran(&host), ["php"]);
+
+        let host = MockHost::install().with_capabilities(&[
+            "project.read",
+            "process:php",
+            "process:php-win",
+        ]);
+        host.on_process("php", ok);
+        host.on_process("php-win", ok);
+        let project = host::projects().unwrap().remove(0);
+        run(&project, &Mode::Php, &args, None).unwrap();
+        assert_eq!(ran(&host), ["php"]);
+        assert!(is_windows_root("\\\\?\\UNC\\wsl.localhost\\Ubuntu\\app"));
+        assert!(!is_windows_root("/home/dev/app"));
+    }
 
     #[test]
     fn reads_compose_services_and_builds_commands() {

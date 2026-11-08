@@ -297,7 +297,7 @@ impl Laravel {
             devtools::script(devtools::INSTALL_PHP),
             "helpers".into(),
         ]);
-        match project.run_process(mode.program(), &run, Some(&wanted)) {
+        match crate::runner::run(project, &mode, &run, Some(&wanted)) {
             Ok(out) if out.status != Some(0) => {
                 audit::error("IDE helper sync", audit::output(&out));
             }

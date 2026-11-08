@@ -74,7 +74,7 @@ impl Laravel {
             "mcp-sync".into(),
         ]);
         let input = payload(&command, &args, level);
-        match project.run_process(mode.program(), &run, Some(&input)) {
+        match crate::runner::run(project, &mode, &run, Some(&input)) {
             Ok(out) if out.status != Some(0) => {
                 audit::error("MCP server sync", audit::output(&out));
             }

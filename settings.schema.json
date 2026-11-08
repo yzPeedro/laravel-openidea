@@ -30,6 +30,11 @@
       "title": "Report create() and similar keys that $fillable leaves out",
       "default": true
     },
+    "enumValueInspection": {
+      "type": "boolean",
+      "title": "Report where() values that the column's enum cast doesn't have",
+      "default": true
+    },
     "nPlusOneInspection": {
       "type": "boolean",
       "title": "Report relations loaded once per item in a foreach (N+1 queries)",

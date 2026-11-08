@@ -482,7 +482,7 @@ impl Laravel {
         if !colored.iter().any(|a| a == "--ansi" || a == "--no-ansi") {
             colored.push("--ansi".into());
         }
-        let result = project.run_process(mode.program(), &mode.args(&colored, false), None);
+        let result = crate::runner::run(&project, &mode, &mode.args(&colored, false), None);
         drop(task);
         let message = match result {
             Ok(out) => {
@@ -1093,7 +1093,7 @@ impl Laravel {
         let mode = runner::detect(&project);
         let task = host::begin_task("Tinker", true);
         let args = mode.php_args(&["-r".into(), devtools::script(devtools::TINKER_PHP)]);
-        let result = project.run_process(mode.program(), &args, Some(code));
+        let result = crate::runner::run(&project, &mode, &args, Some(code));
         drop(task);
         let message = match result {
             Ok(out) => {
@@ -1131,7 +1131,7 @@ impl Laravel {
         let task = host::begin_task("Reading the cache", true);
         let args = mode.php_args(&["-r".into(), devtools::script(devtools::CACHE_PHP)]);
         let input = serde_json::to_string(request).map_err(|e| Error::Failed(e.to_string()))?;
-        let result = project.run_process(mode.program(), &args, Some(&input));
+        let result = crate::runner::run(&project, &mode, &args, Some(&input));
         drop(task);
         let mut message = match result {
             Ok(out) => devtools::cache_reply(&out.stdout).unwrap_or_else(|| {
@@ -1162,7 +1162,7 @@ impl Laravel {
             action.into(),
         ]);
         let stdin = (action == "install").then_some(devtools::RECORDER_PHP);
-        let result = project.run_process(mode.program(), &args, stdin);
+        let result = crate::runner::run(&project, &mode, &args, stdin);
         drop(task);
         let message = match result {
             Ok(out) => {
@@ -1222,8 +1222,9 @@ impl Laravel {
             devtools::script(devtools::INSTALL_PHP),
             action.into(),
         ]);
-        let result = project.run_process(
-            mode.program(),
+        let result = crate::runner::run(
+            &project,
+            &mode,
             &run,
             (action == "agents").then_some(payload.as_str()),
         );

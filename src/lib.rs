@@ -9,6 +9,7 @@ mod devtools;
 mod directives;
 mod dotenv;
 mod eloquent;
+mod enums;
 mod formrequest;
 mod framework;
 mod helpers;
@@ -20,6 +21,7 @@ mod logs;
 mod mcp;
 mod members;
 mod modeldoc;
+mod namespaces;
 mod objects;
 mod panels;
 mod pest;
@@ -1218,6 +1220,37 @@ impl Laravel {
                 }
                 (RefKind::Route, entries)
             }
+            Want::EnumValues {
+                model,
+                call_start,
+                index,
+            } => {
+                let args = enums::call_args(&doc.text, *call_start);
+                let column = enums::value_column(&args, *index).map(str::to_owned);
+                let entries = column
+                    .zip(self.model_text(project, root, model))
+                    .and_then(|(column, model_text)| {
+                        let composer = project.read_file("composer.json").unwrap_or_default();
+                        enums::of_model(project, &casts::psr4(&composer), &model_text)
+                            .into_iter()
+                            .find(|e| e.column == column)
+                    })
+                    .map(|cast| {
+                        cast.values
+                            .iter()
+                            .map(|(case, value)| {
+                                Entry::new(
+                                    value,
+                                    Some(format!("{}::{case}", cast.name)),
+                                    "",
+                                    Range::default(),
+                                )
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (RefKind::Env, entries)
+            }
             Want::Columns { model, table } => {
                 let table = table
                     .clone()
@@ -1380,7 +1413,7 @@ impl Laravel {
         let project = ctx.project().ok_or("open a Laravel project first")?;
         let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
         let mode = runner::detect(&project);
-        let out = project.run_process(mode.program(), &mode.args(&args[1..], false), None)?;
+        let out = crate::runner::run(&project, &mode, &mode.args(&args[1..], false), None)?;
         let text = if out.stdout.trim().is_empty() {
             out.stderr
         } else {
@@ -1688,6 +1721,16 @@ impl Providers for Laravel {
             }
         }
         let blade = is_blade(&doc.path);
+        if !blade
+            && doc.path.ends_with(".php")
+            && let Some(start) = namespaces::typed_at(&doc.text, cursor)
+        {
+            let composer = project.read_file("composer.json").unwrap_or_default();
+            let found =
+                namespaces::for_path(project::rel(&root, &doc.path), &casts::psr4(&composer));
+            let replace = Range::new(position(&doc.text, start), at);
+            return namespaces::items(&found, &doc.text, start, cursor, replace);
+        }
         if php::open_arg_at(&doc.text, blade, cursor).is_none()
             && let Some(found) = self.eloquent_members(&project, &root, doc, cursor, at)
             && !found.is_empty()
@@ -3237,6 +3280,77 @@ Blade::if('admin', fn () => true);
             labels(&custom),
             ["@admin", "@elseadmin", "@unlessadmin", "@endadmin"]
         );
+    }
+
+    #[test]
+    fn completes_the_psr4_namespace_of_the_file() {
+        let host = setup();
+        host.add_file(
+            "composer.json",
+            r#"{"require": {"laravel/framework": "^12.0"}, "autoload": {"psr-4": {"App\\": "app/"}}, "autoload-dev": {"psr-4": {"Tests\\": "tests/"}}}"#,
+        );
+        let mut plugin = Laravel::default();
+        let text = "<?php\n\nnamespace \n";
+        let items = plugin.completion(
+            &doc("app/Http/Controllers/Admin/UserController.php", text),
+            at(text, "namespace ", 10),
+            None,
+        );
+        assert_eq!(labels(&items), ["App\\Http\\Controllers\\Admin"]);
+        assert_eq!(items[0].insert_text, "App\\Http\\Controllers\\Admin;");
+        let test = "<?php\nnamespace Tests\\F";
+        let items = plugin.completion(
+            &doc("tests/Feature/OrderTest.php", test),
+            position(test, test.len()),
+            None,
+        );
+        assert_eq!(labels(&items), ["Tests\\Feature"]);
+    }
+
+    #[test]
+    fn checks_and_completes_enum_values_in_where_clauses() {
+        let host = setup();
+        host.add_file(
+            "app/Models/Order.php",
+            "<?php\nnamespace App\\Models;\n\nuse App\\Enums\\OrderStatus;\n\nclass Order extends Model\n{\n    protected function casts(): array\n    {\n        return ['status' => OrderStatus::class];\n    }\n}\n",
+        );
+        host.add_file(
+            "app/Enums/OrderStatus.php",
+            "<?php\nnamespace App\\Enums;\n\nenum OrderStatus: string\n{\n    case Pending = 'pending';\n    case Paid = 'paid';\n    case Refunded = 'refunded';\n}\n",
+        );
+        host.add_file(
+            "database/migrations/2024_02_01_000000_create_orders.php",
+            "<?php\nreturn new class extends Migration {\n    public function up(): void {\n        Schema::create('orders', function (Blueprint $table) {\n            $table->id();\n            $table->string('status');\n        });\n    }\n};\n",
+        );
+        let mut plugin = Laravel::default();
+        let text = "<?php\nOrder::where('status', 'refused')->get();\nOrder::query()->where('status', '!=', 'paid')->orWhereIn('status', ['pending', 'lost'])->get();\nOrder::where('status', '');\n";
+        let problems = plugin.inspect("/project/app/X.php", text);
+        let messages: Vec<&str> = problems
+            .iter()
+            .filter(|p| p.code.as_deref() == Some("laravel.unknown-enum-value"))
+            .map(|p| p.message.as_str())
+            .collect();
+        assert_eq!(
+            messages,
+            [
+                "Column 'status' can never be 'refused': it is cast to OrderStatus ('pending', 'paid', 'refunded')",
+                "Column 'status' can never be 'lost': it is cast to OrderStatus ('pending', 'paid', 'refunded')",
+            ]
+        );
+        let d = doc("app/X.php", text);
+        let actions = plugin.code_actions(
+            &d,
+            Range::new(at(text, "refused", 2), at(text, "refused", 2)),
+        );
+        assert!(actions.iter().any(|a| a.title == "Change to 'refunded'"));
+        let values = plugin.completion(&d, at(text, "'status', '')", 11), None);
+        assert_eq!(labels(&values), ["pending", "paid", "refunded"]);
+        assert_eq!(values[0].detail.as_deref(), Some("OrderStatus::Pending"));
+        let op = "<?php\nOrder::where('status', '<>', 'p');\n";
+        let values = plugin.completion(&doc("app/Y.php", op), at(op, "'p')", 2), None);
+        assert_eq!(labels(&values), ["pending", "paid"]);
+        let columns = plugin.completion(&doc("app/Y.php", op), at(op, "'status'", 3), None);
+        assert!(labels(&columns).contains(&"status"));
     }
 
     fn install_laravel_10(host: &MockHost) {

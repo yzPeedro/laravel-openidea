@@ -32,6 +32,7 @@ pub struct ModelFacts {
     pub path: String,
     pub source: String,
     pub relations: Vec<String>,
+    pub enums: Vec<crate::enums::EnumColumn>,
 }
 
 pub type Columns = BTreeMap<String, BTreeSet<String>>;
@@ -44,6 +45,7 @@ pub struct Enabled {
     pub fillable: bool,
     pub n_plus_one: bool,
     pub duplicate_keys: bool,
+    pub enum_values: bool,
 }
 
 pub struct Facts<'a> {
@@ -319,6 +321,134 @@ fn unknown_columns(toks: &[Tok], facts: &Facts, out: &mut Vec<Finding>) {
                 fixes,
                 info: false,
             });
+        }
+    }
+}
+
+const ENUM_METHODS: &[&str] = &[
+    "where",
+    "orWhere",
+    "whereNot",
+    "orWhereNot",
+    "firstWhere",
+    "whereIn",
+    "orWhereIn",
+    "whereNotIn",
+    "orWhereNotIn",
+];
+
+fn call_args(toks: &[Tok], call: &Call) -> Vec<Vec<usize>> {
+    let mut out = vec![Vec::new()];
+    let mut depth = 0usize;
+    let end = call.close.min(toks.len());
+    for (i, t) in toks.iter().enumerate().take(end).skip(call.open + 1) {
+        if t.kind == Kind::Sym {
+            match t.text.as_str() {
+                "(" | "[" | "{" => depth += 1,
+                ")" | "]" | "}" => depth = depth.saturating_sub(1),
+                "," if depth == 0 => {
+                    out.push(Vec::new());
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        if let Some(last) = out.last_mut() {
+            last.push(i);
+        }
+    }
+    out
+}
+
+fn literal(toks: &[Tok], arg: &[usize]) -> Option<usize> {
+    match arg {
+        [i] if matches!(toks[*i].kind, Kind::Str | Kind::Num) => Some(*i),
+        _ => None,
+    }
+}
+
+fn enum_values(toks: &[Tok], facts: &Facts, out: &mut Vec<Finding>) {
+    for chain in chains(toks) {
+        let Some(model) = facts.model(&chain.class).filter(|m| !m.enums.is_empty()) else {
+            continue;
+        };
+        for call in &chain.calls {
+            if !ENUM_METHODS.contains(&call.name.as_str()) {
+                continue;
+            }
+            let args = call_args(toks, call);
+            let Some(column) = args
+                .first()
+                .and_then(|a| literal(toks, a))
+                .filter(|&i| toks[i].kind == Kind::Str)
+                .map(|i| toks[i].text.clone())
+            else {
+                continue;
+            };
+            let Some(cast) = model.enums.iter().find(|e| e.column == column) else {
+                continue;
+            };
+            let values: Vec<usize> = if call.name.ends_with("In") {
+                args.get(1)
+                    .map(|a| {
+                        a.iter()
+                            .copied()
+                            .filter(|&i| matches!(toks[i].kind, Kind::Str | Kind::Num))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                match args.len() {
+                    2 => literal(toks, &args[1]).into_iter().collect(),
+                    3 => literal(toks, &args[1])
+                        .filter(|&i| crate::enums::OPERATORS.contains(&toks[i].text.as_str()))
+                        .and_then(|_| literal(toks, &args[2]))
+                        .into_iter()
+                        .collect(),
+                    _ => Vec::new(),
+                }
+            };
+            for i in values {
+                let value = &toks[i].text;
+                if value.is_empty() || cast.values.iter().any(|(_, v)| v == value) {
+                    continue;
+                }
+                let quoted = toks[i].kind == Kind::Str;
+                let (start, end) = if quoted {
+                    (toks[i].start + 1, toks[i].end.saturating_sub(1))
+                } else {
+                    (toks[i].start, toks[i].end)
+                };
+                let allowed: Vec<&String> = cast.values.iter().map(|(_, v)| v).collect();
+                let listed = allowed
+                    .iter()
+                    .map(|v| format!("'{v}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let mut fixes = Vec::new();
+                if let Some(best) = closest(value, allowed.iter().copied()) {
+                    fixes.push(Fix {
+                        title: format!("Change to '{best}'"),
+                        edits: vec![Edit {
+                            path: facts.path.to_owned(),
+                            start,
+                            end,
+                            text: best.clone(),
+                        }],
+                    });
+                }
+                out.push(Finding {
+                    start,
+                    end,
+                    message: format!(
+                        "Column '{column}' can never be '{value}': it is cast to {} ({listed})",
+                        cast.name
+                    ),
+                    code: "laravel.unknown-enum-value",
+                    fixes,
+                    info: false,
+                });
+            }
         }
     }
 }
@@ -821,6 +951,9 @@ pub fn php(text: &str, facts: &Facts) -> Vec<Finding> {
     if facts.enabled.n_plus_one {
         n_plus_one(&toks, facts, &mut out);
     }
+    if facts.enabled.enum_values {
+        enum_values(&toks, facts, &mut out);
+    }
     if facts.enabled.duplicate_keys {
         duplicate_keys(text, &toks, facts, &mut out);
     }
@@ -936,6 +1069,7 @@ mod tests {
                 fillable: true,
                 n_plus_one: true,
                 duplicate_keys: true,
+                enum_values: true,
             },
         }
     }
@@ -947,6 +1081,7 @@ mod tests {
             path: "/p/app/Models/Post.php".into(),
             source: POST.into(),
             relations: vec!["user".into(), "comments".into()],
+            enums: Vec::new(),
         }];
         let mut columns = BTreeMap::new();
         columns.insert(

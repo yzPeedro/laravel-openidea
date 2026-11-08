@@ -9,6 +9,9 @@ All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](h
 - The model member snippet for casts writes the `protected $casts` property on Laravel versions without the `casts()` method.
 - Directives from Livewire, Volt, Inertia, Ziggy and Spatie Permission are only suggested when the package is installed.
 - Without `vendor/` (before `composer install`) the plugin falls back to the built-in lists.
+- On Windows the hub, Tinker, the Cache browser, Live Audit, the MCP sync and the other background PHP calls run through `php-win.exe` when the new optional `process:php-win` permission is allowed, so no console window flashes on screen. Without it the plugin keeps using `php`.
+- `namespace` completes with the PSR-4 namespace of the file's folder, read from `autoload` and `autoload-dev` in `composer.json`.
+- Values compared with an enum-cast column are checked: `Order::where('status', 'refused')`, `where('status', '!=', …)`, `orWhere`, `whereNot`, `firstWhere` and the `whereIn` family warn when the backed enum has no such value, with a quick fix to the closest one, and the value argument completes the enum's values. The `enumValueInspection` setting turns it off.
 
 ## 0.14.1
 

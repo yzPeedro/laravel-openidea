@@ -8,6 +8,7 @@ pub struct Members {
     pub name: String,
     pub backed: Option<String>,
     pub cases: Vec<String>,
+    pub values: Vec<(String, String)>,
     pub methods: Vec<(String, String, bool)>,
     pub properties: Vec<(String, String)>,
     pub traits: Vec<String>,
@@ -71,6 +72,16 @@ pub fn read(text: &str) -> Option<Members> {
             Some("case") if m.kind == "enum" => {
                 if let Some(name) = ident(&tokens, i + 1) {
                     m.cases.push(name.to_owned());
+                    if tokens.get(i + 2).is_some_and(|t| t.kind == Kind::Assign) {
+                        let value = match tokens.get(i + 3).map(|t| &t.kind) {
+                            Some(Kind::Str { value, .. }) => Some(value.clone()),
+                            Some(Kind::Num(n)) => Some(n.clone()),
+                            _ => None,
+                        };
+                        if let Some(value) = value {
+                            m.values.push((name.to_owned(), value));
+                        }
+                    }
                 }
             }
             Some("use") => {
@@ -215,6 +226,13 @@ mod tests {
         assert_eq!((m.kind.as_str(), m.name.as_str()), ("enum", "OrderStatus"));
         assert_eq!(m.backed.as_deref(), Some("string"));
         assert_eq!(m.cases, ["APPROVED", "PENDING"]);
+        assert_eq!(
+            m.values,
+            [
+                ("APPROVED".to_owned(), "approved".to_owned()),
+                ("PENDING".to_owned(), "pending".to_owned())
+            ]
+        );
         assert_eq!(m.traits, ["HasLabel", "Comparable"]);
         assert_eq!(
             m.methods,

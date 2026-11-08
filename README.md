@@ -67,7 +67,7 @@ https://github.com/user-attachments/assets/a653530b-f3d4-44e3-921e-bef9119cd659
 
    <img src="docs/media/settings-plugins-menu.webp" alt="Settings, Plugins, gear menu, Install Plugin from Package File" width="80%">
 
-3. **Allow `process:php` or `process:docker`** in the plugin's permissions. They are optional: completion and navigation work without them, while Artisan, Tinker and Live Audit need one of them.
+3. **Allow `process:php` or `process:docker`** in the plugin's permissions. They are optional: completion and navigation work without them, while Artisan, Tinker and Live Audit need one of them. On Windows, also allow `process:php-win` (the `php-win.exe` next to `php.exe`): the hub, Tinker, the Cache browser and the other background calls then run without flashing a console window.
 
    <img src="docs/media/settings-plugins.webp" alt="Plugin permissions in Settings" width="80%">
 
