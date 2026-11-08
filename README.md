@@ -17,11 +17,9 @@
   every resource of your app, live logs, a live audit of requests, queries and events, and an MCP server for AI agents.
 </p>
 
-<p align="center">
-  <a href="docs/media/tour.mp4"><img src="docs/media/tour.webp" alt="Watch the Laravel OpenIDEA 0.14 tour" width="100%"></a>
-</p>
+https://github.com/user-attachments/assets/a653530b-f3d4-44e3-921e-bef9119cd659
 
-<p align="center"><sub>A 79-second tour of 0.14: Live Audit, SQL to Laravel and back, Copy Query as MySQL, Form Request extraction, inspections with quick fixes, Eloquent chains, casts, the Cache browser, Tinker, and composer.json and phpunit.xml completion. <a href="docs/media/tour.mp4">Watch or download the MP4</a>.</sub></p>
+<p align="center"><sub>An 87-second tour of 0.14: Live Audit, SQL to Laravel and back, Copy Query as MySQL, Form Request extraction, inspections with quick fixes, Eloquent chains, casts, the Cache browser, Tinker, and composer.json and phpunit.xml completion. <a href="docs/media/tour.mp4">Download the MP4</a>.</sub></p>
 
 ---
 
