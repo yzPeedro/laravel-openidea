@@ -12,7 +12,7 @@ pub struct Completion {
     pub items: Vec<Suggestion>,
 }
 
-fn key(label: &str, detail: &str) -> Suggestion {
+pub(crate) fn key(label: &str, detail: &str) -> Suggestion {
     Suggestion {
         label: label.to_owned(),
         detail: detail.to_owned(),
@@ -20,7 +20,7 @@ fn key(label: &str, detail: &str) -> Suggestion {
     }
 }
 
-fn value(label: &str, detail: &str) -> Suggestion {
+pub(crate) fn value(label: &str, detail: &str) -> Suggestion {
     Suggestion {
         label: label.to_owned(),
         detail: detail.to_owned(),
@@ -293,7 +293,10 @@ enum Frame {
     },
 }
 
-fn json_context(text: &str, cursor: usize) -> Option<(usize, usize, Vec<String>, Option<String>)> {
+pub(crate) fn json_context(
+    text: &str,
+    cursor: usize,
+) -> Option<(usize, usize, Vec<String>, Option<String>)> {
     let b = text.as_bytes();
     let mut stack: Vec<Frame> = Vec::new();
     let mut i = 0;

@@ -200,6 +200,27 @@ fn location(root: &str, path: &str, text: &str, start: usize, end: usize) -> Loc
     }
 }
 
+pub fn target_file(project: &Project, model_text: &str, column: &str) -> Option<(String, String)> {
+    let expr = modeldoc::casts(model_text)
+        .into_iter()
+        .find(|(c, _)| c == column)
+        .map(|(_, e)| e)?;
+    let class = cast_class(&expr)?;
+    let composer = project.read_file("composer.json").unwrap_or_default();
+    let map = psr4(&composer);
+    let fqn = resolve_name(model_text, &class);
+    let (path, text) = file_of(project, &map, &fqn)?;
+    let (keyword, _, _) = declaration(&text, short(&fqn))?;
+    if keyword == "enum" {
+        return Some((path, text));
+    }
+    let result = get_return_type(&text)?;
+    if SCALARS.contains(&result.to_ascii_lowercase().as_str()) {
+        return None;
+    }
+    file_of(project, &map, &resolve_name(&text, &result))
+}
+
 pub fn resolve(project: &Project, root: &str, model_text: &str, column: &str) -> Option<Target> {
     let expr = modeldoc::casts(model_text)
         .into_iter()

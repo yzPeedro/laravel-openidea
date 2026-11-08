@@ -35,6 +35,11 @@
       "title": "Report relations loaded once per item in a foreach (N+1 queries)",
       "default": true
     },
+    "duplicateKeyInspection": {
+      "type": "boolean",
+      "title": "Report keys repeated in the same array (the last value wins)",
+      "default": true
+    },
     "envKeysInspection": {
       "type": "boolean",
       "title": "Report keys that are in .env but not in .env.example, and the other way around",

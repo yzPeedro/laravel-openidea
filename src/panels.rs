@@ -20,6 +20,7 @@ const HISTORY_KEY: &str = "artisan.history";
 const HISTORY_SIZE: usize = 20;
 const MAX_ROWS: usize = 5000;
 const MAX_OUTPUT: usize = 400_000;
+const MAX_MESSAGE: usize = 900_000;
 const PROJECT_DIRS: [&str; 10] = [
     "app/",
     "routes/",
@@ -37,26 +38,83 @@ const PROJECT_DIRS: [&str; 10] = [
 #[serde(tag = "type", rename_all = "lowercase")]
 enum Request {
     Overview,
-    Section { id: String },
+    Section {
+        id: String,
+    },
     Init,
     Refresh,
-    Run { argv: Vec<String> },
-    Capture { argv: Vec<String> },
+    Run {
+        argv: Vec<String>,
+    },
+    Capture {
+        argv: Vec<String>,
+    },
     Files,
-    Tail { path: String, size: i64 },
-    Open { path: String, line: u32 },
-    Tinker { code: String, tab: String },
-    Tinkersave { tabs: serde_json::Value },
+    Tail {
+        path: String,
+        size: i64,
+    },
+    Open {
+        path: String,
+        line: u32,
+    },
+    Tinker {
+        code: String,
+        tab: String,
+    },
+    Tinkersave {
+        tabs: serde_json::Value,
+    },
     Tinkerload,
-    Audit { action: String },
-    Audittail { size: i64 },
-    Agents { action: String },
-    Composer { argv: Vec<String> },
+    Audit {
+        action: String,
+    },
+    Audittail {
+        size: i64,
+    },
+    Agents {
+        action: String,
+    },
+    Composer {
+        argv: Vec<String>,
+    },
     Sqlload,
-    Sqlsave { state: serde_json::Value },
-    Sqlcopy { code: String },
-    Sqlinsert { code: String },
-    Php2sql { code: String, seq: u64 },
+    Sqlsave {
+        state: serde_json::Value,
+    },
+    Sqlcopy {
+        code: String,
+    },
+    Sqlinsert {
+        code: String,
+    },
+    Php2sql {
+        code: String,
+        seq: u64,
+    },
+    Cache {
+        action: String,
+        #[serde(default)]
+        store: String,
+        #[serde(default)]
+        page: u32,
+        #[serde(default)]
+        size: u32,
+        #[serde(default)]
+        search: String,
+        #[serde(default)]
+        key: String,
+    },
+}
+
+#[derive(Serialize)]
+struct CacheRequest<'a> {
+    action: &'a str,
+    store: &'a str,
+    page: u32,
+    size: u32,
+    search: &'a str,
+    key: &'a str,
 }
 
 const TINKER_KEY: &str = "tinker.tabs";
@@ -399,10 +457,7 @@ impl Laravel {
     ) -> Result<(), Error> {
         let (project, _) = project(ctx)?;
         let mode = runner::detect(&project);
-        let title = format!(
-            "artisan {}",
-            argv.first().map(String::as_str).unwrap_or_default()
-        );
+        let title = format!("artisan {}", argv.join(" "));
         let error = host::open_terminal(&title, mode.program(), &mode.args(&argv, true))
             .err()
             .map(|e| denied(e, &mode));
@@ -1059,6 +1114,41 @@ impl Laravel {
         Ok(())
     }
 
+    fn cache_store(
+        &mut self,
+        view: &str,
+        ctx: &Invocation,
+        request: &CacheRequest,
+    ) -> Result<(), Error> {
+        if !["list", "value", "forget", "flush"].contains(&request.action) {
+            return Err(Error::Invalid(format!(
+                "unknown cache action {}",
+                request.action
+            )));
+        }
+        let (project, _) = project(ctx)?;
+        let mode = runner::detect(&project);
+        let task = host::begin_task("Reading the cache", true);
+        let args = mode.php_args(&["-r".into(), devtools::script(devtools::CACHE_PHP)]);
+        let input = serde_json::to_string(request).map_err(|e| Error::Failed(e.to_string()))?;
+        let result = project.run_process(mode.program(), &args, Some(&input));
+        drop(task);
+        let mut message = match result {
+            Ok(out) => devtools::cache_reply(&out.stdout).unwrap_or_else(|| {
+                let err = quiet(&out.stderr);
+                json!({ "error": if err.is_empty() { out.stdout.trim().chars().take(600).collect::<String>() } else { err } })
+            }),
+            Err(e) => {
+                audit::failed("hub cache", &e);
+                json!({ "error": denied(e, &mode) })
+            }
+        };
+        message["type"] = json!("cache");
+        message["request"] = json!(request.action);
+        post(view, message);
+        Ok(())
+    }
+
     fn audit(&mut self, view: &str, ctx: &Invocation, action: &str) -> Result<(), Error> {
         if !["install", "uninstall", "clear", "status"].contains(&action) {
             return Err(Error::Invalid(format!("unknown audit action {action}")));
@@ -1098,9 +1188,10 @@ impl Laravel {
             Ok(text) if text.len() as i64 == size => {}
             Ok(text) => {
                 let (records, reset) = devtools::tail(&text, size.max(0) as usize);
+                let (records, dropped) = devtools::fit_records(records, MAX_MESSAGE);
                 post(
                     view,
-                    json!({ "type": "audit", "size": text.len(), "reset": reset, "records": records }),
+                    json!({ "type": "audit", "size": text.len(), "reset": reset, "records": records, "dropped": dropped }),
                 );
             }
             Err(_) => post(
@@ -1271,6 +1362,25 @@ impl Laravel {
             Request::Audittail { size } => self.audit_tail(view, ctx, size),
             Request::Agents { action } => self.agents(view, ctx, &action),
             Request::Composer { argv } => self.composer(view, ctx, argv),
+            Request::Cache {
+                action,
+                store,
+                page,
+                size,
+                search,
+                key,
+            } => self.cache_store(
+                view,
+                ctx,
+                &CacheRequest {
+                    action: &action,
+                    store: &store,
+                    page,
+                    size,
+                    search: &search,
+                    key: &key,
+                },
+            ),
             Request::Sqlload => {
                 let (project, root) = project(ctx)?;
                 let models: Vec<serde_json::Value> = self

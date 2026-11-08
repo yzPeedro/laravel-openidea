@@ -16,7 +16,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   SDK_REPOSITORY: l0ng-ai/openidea
-  SDK_REF: v0.1.37
+  SDK_REF: v0.1.38
 
 jobs:
   rust:
