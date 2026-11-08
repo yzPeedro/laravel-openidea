@@ -51,6 +51,14 @@ jobs:
         working-directory: laravel-openidea
         run: ./scripts/package.sh
 
+      - name: Sign the marketplace package
+        working-directory: laravel-openidea
+        env:
+          OPENIDEA_PUBLISHER_KEY: ${{ secrets.OPENIDEA_PUBLISHER_KEY }}
+        run: |
+          test -n "${OPENIDEA_PUBLISHER_KEY}" || { echo "the OPENIDEA_PUBLISHER_KEY secret is not set"; exit 1; }
+          ./scripts/oiplugin.sh
+
       - name: Release notes
         working-directory: laravel-openidea
         run: |
@@ -60,7 +68,7 @@ jobs:
             echo
             echo "### Install"
             echo
-            echo "Download \`laravel-openidea-${version}.zip\`, then in OpenIDEA open **Settings › Plugins › ⚙ › Install Plugin from Package File…** and pick it. Requires OpenIDEA 0.1.38 or newer."
+            echo "In OpenIDEA open **Settings › Plugins › Available** and install **Laravel OpenIDEA**. Without the marketplace, download \`laravel-openidea-${version}.zip\` and pick it in **Settings › Plugins › ⚙ › Install Plugin from Package File…**. Requires OpenIDEA 0.1.38 or newer."
           } >> build/notes.md
 
       - name: Publish
@@ -72,4 +80,4 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --title "Laravel OpenIDEA ${GITHUB_REF_NAME}" \
             --notes-file build/notes.md \
-            build/*.zip build/*.sha256
+            build/*.zip build/*.oiplugin build/*.sha256

@@ -2,6 +2,11 @@
 
 All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [semantic versioning](https://semver.org/).
 
+## 0.14.1
+
+- Listed in the OpenIDEA marketplace (Settings › Plugins › Available): the plugin has its own icon, the Frameworks, Tools and AI categories and a fuller description.
+- Releases also ship `pedro.laravel-openidea-<version>.oiplugin`, the signed package the marketplace installs.
+
 ## 0.14.0
 
 - Requires OpenIDEA 0.1.38 or newer (plugin API 1.2), which the Form Request name prompt uses.
