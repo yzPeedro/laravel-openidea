@@ -59,6 +59,8 @@ const STATUS_ID: &str = "laravel";
 
 type References = Vec<(Segment, StringArg)>;
 
+type HubTables = std::rc::Rc<Vec<(&'static str, sections::Table)>>;
+
 #[derive(Default)]
 pub struct Laravel {
     cache: Cache,
@@ -75,6 +77,7 @@ pub struct Laravel {
     listed: BTreeMap<String, (u64, Vec<String>)>,
     hub_pending: Option<hubtabs::Pending>,
     hub_synced: BTreeSet<String>,
+    hub_tables: Option<(String, HubTables)>,
 }
 
 fn kebab(name: &str) -> String {
@@ -2135,6 +2138,7 @@ impl openidea_plugin::Plugin for Laravel {
                             self.helpers_synced.remove(&root);
                             self.sync_helpers(&project);
                         }
+                        self.hub_tables = None;
                         let before = self.snapshot_keys(&project, &root, path);
                         self.cache.invalidate(&root, path);
                         let after = self.snapshot_keys(&project, &root, path);
@@ -2165,6 +2169,7 @@ impl openidea_plugin::Plugin for Laravel {
                     paths.insert(path.clone());
                 }
                 Event::VcsChanged(repo) => {
+                    self.hub_tables = None;
                     self.cache.clear();
                     self.symbols.clear();
                     paths.insert(repo.clone());
@@ -3484,6 +3489,51 @@ Blade::if('admin', fn () => true);
             host.opened_locations().pop().unwrap().0,
             "/project/storage/openidea/hub/routes.laravel-hub"
         );
+    }
+
+    #[test]
+    fn searches_every_hub_section() {
+        use openidea_plugin::views::{ViewEvent, Views};
+        let host = setup();
+        let mut plugin = Laravel::default();
+        let search = |plugin: &mut Laravel, query: &str| {
+            plugin
+                .handle(
+                    "laravel",
+                    ViewEvent::Message(
+                        serde_json::json!({ "type": "search", "query": query, "instance": "side" })
+                            .to_string(),
+                    ),
+                    &host.invocation(),
+                )
+                .unwrap();
+            let (_, message) = host.view_messages().pop().unwrap();
+            serde_json::from_str::<serde_json::Value>(&message).unwrap()
+        };
+        let found = search(&mut plugin, "users");
+        assert_eq!(found["type"], "searchresults");
+        assert_eq!(found["instance"], "side");
+        let ids: Vec<&str> = found["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|g| g["id"].as_str())
+            .collect();
+        assert!(
+            ids.contains(&"routes") && ids.contains(&"database"),
+            "{ids:?}"
+        );
+        let routes = found["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["id"] == "routes")
+            .unwrap();
+        assert!(routes["rows"][0]["open"]["path"].is_string());
+        let none = search(&mut plugin, "zzzz-nothing");
+        assert_eq!(none["groups"].as_array().unwrap().len(), 0);
+        let short = search(&mut plugin, "u");
+        assert_eq!(short["groups"].as_array().unwrap().len(), 0);
     }
 
     fn install_laravel_10(host: &MockHost) {

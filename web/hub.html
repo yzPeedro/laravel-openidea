@@ -27,6 +27,12 @@
   .brand .title { font-weight: 700; color: var(--openidea-fg-strong); letter-spacing: .01em; }
   .brand .sub { color: var(--openidea-fg-muted); font-size: .88em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
   nav { flex: 1; overflow: auto; padding: var(--gap-2) var(--gap-2) var(--gap-4); }
+  .hub-search { display: block; padding: var(--gap-3) var(--gap-3) 0; }
+  .hub-search input { width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: var(--radius-sm); border: 1px solid var(--openidea-border); background: var(--openidea-bg-input); color: inherit; }
+  .search-group { margin: 0 var(--gap-5) var(--gap-5); }
+  .search-group h3 { display: flex; align-items: center; gap: var(--gap-3); margin: var(--gap-4) 0 var(--gap-2); font-size: 1em; }
+  .search-group h3 .grow { flex: 1; }
+  .search-sections { display: flex; flex-wrap: wrap; gap: var(--gap-2); margin: var(--gap-4) var(--gap-5) 0; }
   .nav-group { margin: var(--gap-4) var(--gap-2) var(--gap-1); font-size: .72em; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--openidea-fg-muted); }
   .nav-item { width: 100%; display: flex; align-items: center; gap: var(--gap-3); padding: 7px var(--gap-3); border: 0; background: none; border-radius: var(--radius-sm); cursor: pointer; text-align: left; }
   .nav-item:hover { background: var(--openidea-bg-hover); }
@@ -300,6 +306,7 @@
       <div class="sub" id="brand-sub">Loading…</div>
     </div>
   </div>
+  <label class="hub-search"><input id="hub-search" type="search" placeholder="Search the hub…" aria-label="Search the whole hub"></label>
   <nav id="nav" aria-label="Sections"></nav>
 </aside>
 <main>
@@ -448,8 +455,73 @@ function renderNav() {
   }
 }
 
+function showSearch(query) {
+  state.section = "search";
+  state.searchQuery = query;
+  $("section-icon").replaceChildren(icon("filter", "lg"));
+  $("section-title").textContent = "Search";
+  $("section-desc").textContent = "Results for “" + query + "” across every section";
+  $("search-box").hidden = true;
+  $("open-tab").hidden = true;
+  $("toolbar").replaceChildren();
+  $("filters").replaceChildren();
+  $("count").hidden = true;
+  renderNav();
+  renderSearch(null);
+  send({ type: "search", query });
+}
+
+function renderSearch(groups) {
+  const q = state.searchQuery.toLowerCase();
+  const sections = SECTIONS.filter((s) => (s.title + " " + s.desc).toLowerCase().includes(q));
+  const parts = [];
+  if (sections.length) {
+    const chips = el("div", { className: "search-sections" });
+    for (const s of sections) {
+      const b = el("button", { className: "btn ghost" }, icon(s.icon), s.title);
+      b.addEventListener("click", () => { $("hub-search").value = ""; go(s.id); });
+      chips.append(b);
+    }
+    parts.push(chips);
+  }
+  if (groups === null) parts.push(el("div", { className: "loading" }));
+  else if (!groups.length && !sections.length) parts.push(emptyState("Nothing in the hub matches “" + state.searchQuery + "”.", "filter"));
+  for (const g of groups || []) {
+    const s = SECTIONS.find((x) => x.id === g.id);
+    if (!s) continue;
+    const all = el("button", { className: "btn ghost", textContent: g.total > g.rows.length ? "Show all " + g.total : "Open section" });
+    all.addEventListener("click", () => {
+      const query = state.searchQuery;
+      $("hub-search").value = "";
+      go(g.id);
+      $("search").value = query;
+      $("search").dispatchEvent(new Event("input"));
+    });
+    const table = el("table");
+    table.append(el("thead", {}, el("tr", {}, ...g.columns.map((c) => el("th", { textContent: c })))));
+    const body = el("tbody");
+    for (const r of g.rows) {
+      const tr = el("tr", { className: r.open ? "link" : "" }, ...r.cells.map((c, i) => el("td", { className: i === 0 ? "first" : "" }, ...highlight(c, q))));
+      if (r.open) tr.addEventListener("click", () => send({ type: "open", path: r.open.path, line: r.open.line }));
+      body.append(tr);
+    }
+    table.append(body);
+    parts.push(el("div", { className: "search-group" }, el("h3", {}, icon(s.icon), el("span", { className: "grow", textContent: s.title + " · " + g.total }), all), table));
+  }
+  $("content").replaceChildren(...parts);
+}
+
+let hubSearchTimer = null;
+$("hub-search").addEventListener("input", () => {
+  clearTimeout(hubSearchTimer);
+  const query = $("hub-search").value.trim();
+  if (query.length < 2) { if (state.section === "search") go("overview"); return; }
+  hubSearchTimer = setTimeout(() => showSearch(query), 350);
+});
+
 function go(id) {
   state.section = id;
+  $("open-tab").hidden = false;
   const s = SECTIONS.find((x) => x.id === id);
   $("section-icon").replaceChildren(icon(s.icon, "lg"));
   $("section-title").textContent = s.title;
@@ -2710,6 +2782,9 @@ openidea.onMessage((text) => {
       break;
     case "cache":
       onCache(msg);
+      break;
+    case "searchresults":
+      if (state.section === "search" && msg.query === state.searchQuery) renderSearch(msg.groups || []);
       break;
     case "navigate": {
       if (!SECTIONS.some((s) => s.id === msg.id)) break;

@@ -42,6 +42,9 @@ enum Request {
     Openeditor {
         id: String,
     },
+    Search {
+        query: String,
+    },
     Section {
         id: String,
     },
@@ -258,6 +261,42 @@ fn found_rows(found: Vec<Found>) -> Vec<Row> {
 }
 
 const DEV_SECTIONS: [&str; 4] = ["debug-tools", "debug-calls", "profiles", "ecosystem"];
+
+const SEARCHABLE: [&str; 32] = [
+    "routes",
+    "controllers",
+    "requests",
+    "api-resources",
+    "middleware",
+    "models",
+    "scopes",
+    "observers",
+    "casts",
+    "enums",
+    "database",
+    "factories",
+    "views",
+    "components",
+    "frontend",
+    "translations",
+    "classes",
+    "providers",
+    "bindings",
+    "rules",
+    "macros",
+    "config",
+    "env",
+    "services",
+    "policies",
+    "queues",
+    "schedule",
+    "events",
+    "listeners",
+    "mail",
+    "tests",
+    "debug-calls",
+];
+const SEARCH_ROWS: usize = 6;
 
 const CODE_SECTIONS: [&str; 18] = [
     "classes",
@@ -1025,36 +1064,7 @@ impl Laravel {
 
     fn section(&mut self, view: &str, ctx: &Invocation, id: &str) -> Result<(), Error> {
         let (project, root) = project(ctx)?;
-        let built = if DEV_SECTIONS.contains(&id) {
-            Some(match id {
-                "debug-tools" => devtools::tools(&project),
-                "debug-calls" => devtools::debug_calls(&project, &root),
-                "ecosystem" => {
-                    let config: Vec<(String, String)> = self
-                        .cache
-                        .get(RefKind::Config, &project, &root)
-                        .iter()
-                        .map(|e| (e.key.clone(), e.detail.clone().unwrap_or_default()))
-                        .collect();
-                    let mut count = |k: RefKind| self.cache.get(k, &project, &root).len();
-                    let counts = [
-                        ("token abilities", count(RefKind::TokenAbility)),
-                        ("socialite", count(RefKind::SocialiteDriver)),
-                        ("roles", count(RefKind::Role)),
-                        ("permissions", count(RefKind::Permission)),
-                        ("livewire", count(RefKind::Livewire)),
-                        ("inertia", count(RefKind::InertiaPage)),
-                    ];
-                    devtools::ecosystem(&project, &root, &config, &counts)
-                }
-                _ => devtools::profiles(&project, &root),
-            })
-        } else if CODE_SECTIONS.contains(&id) {
-            let scan = resources::scan(&project, &root);
-            sections::build(id, &scan, &project, &root, &mut self.cache)
-        } else {
-            self.index_section(&project, &root, id)
-        };
+        let built = self.build_section(&project, &root, id, &mut None);
         let Some(mut t) = built else {
             return Err(Error::NotFound(format!("section {id}")));
         };
@@ -1064,6 +1074,96 @@ impl Laravel {
             json!({ "type": "section", "id": id, "columns": t.columns, "rows": t.rows, "facets": t.facets, "actions": section_actions(id, &project) }),
         );
         Ok(())
+    }
+
+    fn hub_search(&mut self, view: &str, ctx: &Invocation, query: &str) -> Result<(), Error> {
+        let (project, root) = project(ctx)?;
+        let needle = query.trim().to_lowercase();
+        if needle.chars().count() < 2 {
+            post(
+                view,
+                json!({ "type": "searchresults", "query": query, "groups": [] }),
+            );
+            return Ok(());
+        }
+        let fresh = self.hub_tables.as_ref().is_some_and(|(r, _)| *r == root);
+        if !fresh {
+            let _task = host::begin_task("Laravel: indexing the hub for search", false);
+            let mut scan = None;
+            let mut tables = Vec::new();
+            for id in SEARCHABLE {
+                if let Some(t) = self.build_section(&project, &root, id, &mut scan) {
+                    tables.push((id, t));
+                }
+            }
+            self.hub_tables = Some((root.clone(), Rc::new(tables)));
+        }
+        let Some((_, tables)) = self.hub_tables.clone() else {
+            return Ok(());
+        };
+        let groups: Vec<serde_json::Value> = tables
+            .iter()
+            .filter_map(|(id, t)| {
+                let hits: Vec<&sections::Row> = t
+                    .rows
+                    .iter()
+                    .filter(|r| r.cells.iter().any(|c| c.to_lowercase().contains(&needle)))
+                    .collect();
+                (!hits.is_empty()).then(|| {
+                    json!({
+                        "id": id,
+                        "total": hits.len(),
+                        "columns": t.columns,
+                        "rows": hits.into_iter().take(SEARCH_ROWS).collect::<Vec<_>>(),
+                    })
+                })
+            })
+            .collect();
+        post(
+            view,
+            json!({ "type": "searchresults", "query": query, "groups": groups }),
+        );
+        Ok(())
+    }
+
+    fn build_section(
+        &mut self,
+        project: &Project,
+        root: &str,
+        id: &str,
+        scan: &mut Option<resources::Scan>,
+    ) -> Option<Table> {
+        let (project, root) = (project, root.to_owned());
+        if DEV_SECTIONS.contains(&id) {
+            Some(match id {
+                "debug-tools" => devtools::tools(project),
+                "debug-calls" => devtools::debug_calls(project, &root),
+                "ecosystem" => {
+                    let config: Vec<(String, String)> = self
+                        .cache
+                        .get(RefKind::Config, project, &root)
+                        .iter()
+                        .map(|e| (e.key.clone(), e.detail.clone().unwrap_or_default()))
+                        .collect();
+                    let mut count = |k: RefKind| self.cache.get(k, project, &root).len();
+                    let counts = [
+                        ("token abilities", count(RefKind::TokenAbility)),
+                        ("socialite", count(RefKind::SocialiteDriver)),
+                        ("roles", count(RefKind::Role)),
+                        ("permissions", count(RefKind::Permission)),
+                        ("livewire", count(RefKind::Livewire)),
+                        ("inertia", count(RefKind::InertiaPage)),
+                    ];
+                    devtools::ecosystem(project, &root, &config, &counts)
+                }
+                _ => devtools::profiles(project, &root),
+            })
+        } else if CODE_SECTIONS.contains(&id) {
+            let scan = scan.get_or_insert_with(|| resources::scan(project, &root));
+            sections::build(id, scan, project, &root, &mut self.cache)
+        } else {
+            self.index_section(project, &root, id)
+        }
     }
 }
 
@@ -1387,6 +1487,7 @@ impl Laravel {
         match request {
             Request::Overview => self.overview(view, ctx),
             Request::Hello => self.hub_hello(view, ctx),
+            Request::Search { query } => self.hub_search(view, ctx, &query),
             Request::Openeditor { id } => self.open_hub_tab(view, ctx, &id),
             Request::Section { id } => self.section(view, ctx, &id),
             Request::Init => self.send_commands(view, ctx, false),
