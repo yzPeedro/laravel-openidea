@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/yzPeedro/laravel-openidea/actions/workflows/ci.yml"><img src="https://github.com/yzPeedro/laravel-openidea/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/yzPeedro/laravel-openidea/releases/latest"><img src="https://img.shields.io/github/v/release/yzPeedro/laravel-openidea?color=ff2d20&label=release" alt="Latest release"></a>
-  <img src="https://img.shields.io/badge/OpenIDEA-0.1.37%2B-4f46e5" alt="OpenIDEA 0.1.37 and newer">
+  <img src="https://img.shields.io/badge/OpenIDEA-0.1.38%2B-4f46e5" alt="OpenIDEA 0.1.38 and newer">
   <img src="https://img.shields.io/badge/Laravel-10%2B-ff2d20?logo=laravel&logoColor=white" alt="Laravel 10 and newer">
   <img src="https://img.shields.io/badge/built%20with-Rust%20%2B%20WebAssembly-orange?logo=rust" alt="Rust and WebAssembly">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
@@ -62,7 +62,7 @@
 
 ## Installation
 
-**Requirements:** [OpenIDEA](https://github.com/l0ng-ai/openidea/releases/latest) 0.1.37 or newer and a Laravel 10 (or newer) project. PHP or Docker Compose is needed for the runtime features (Artisan, Tinker, Live Audit).
+**Requirements:** [OpenIDEA](https://github.com/l0ng-ai/openidea/releases/latest) 0.1.38 or newer and a Laravel 10 (or newer) project. PHP or Docker Compose is needed for the runtime features (Artisan, Tinker, Live Audit).
 
 1. **Download** `laravel-openidea-<version>.zip` from the [latest release](https://github.com/yzPeedro/laravel-openidea/releases/latest).
 2. In OpenIDEA open **Settings › Plugins › ⚙ › Install Plugin from Package File…** and pick the zip.
@@ -79,7 +79,7 @@
 <summary><b>Build from source</b></summary>
 
 ```sh
-git clone https://github.com/l0ng-ai/openidea --branch v0.1.37
+git clone https://github.com/l0ng-ai/openidea --branch v0.1.38
 git clone https://github.com/yzPeedro/laravel-openidea
 cd laravel-openidea
 rustup target add wasm32-wasip2
