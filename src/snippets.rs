@@ -1788,6 +1788,7 @@ pub fn items(text: &str, cursor: usize, replace: Range) -> Vec<CompletionItem> {
     let typed = text[start..cursor].to_ascii_lowercase();
     SNIPPETS
         .iter()
+        .filter(|s| s.group != RELATION)
         .filter(|s| match place {
             Some(place) => s.places.contains(&place) && s.prefix != "php",
             None => s.prefix == "php",
@@ -1846,9 +1847,11 @@ pub fn markdown() -> String {
         }
     }
     for group in groups {
-        out.push_str(&format!(
-            "\n## {group}\n\n| Prefix | Inserts | Where |\n| --- | --- | --- |\n"
-        ));
+        out.push_str(&format!("\n## {group}\n\n"));
+        if group == RELATION {
+            out.push_str("In a model, these prefixes expand to the relations your migrations suggest: `belongsTo` from the table's `*_id` columns, `hasMany` and `hasOne` from the tables that point at this one, `belongsToMany` from pivot tables, `morphTo` from `*_type` and `*_id` pairs, and `morphMany` and `morphOne` from `*able` columns, each with the real model and method name (relations the model already has are left out). When nothing fits, the snippet offers a choice of the project's models. The table shows the shape they take.\n\n");
+        }
+        out.push_str("| Prefix | Inserts | Where |\n| --- | --- | --- |\n");
         for s in SNIPPETS.iter().filter(|s| s.group == group) {
             let places = if s.places == CODE {
                 "file, code".to_owned()
@@ -1929,16 +1932,22 @@ mod tests {
 
     #[test]
     fn expands_by_context_and_adds_missing_imports() {
-        let text = "<?php\nnamespace App\\Models;\n\nuse Illuminate\\Database\\Eloquent\\Model;\n\nclass Post extends Model\n{\n    hasm\n}\n";
-        let cursor = text.find("hasm").unwrap() + 4;
+        let text = "<?php\nnamespace App\\Models;\n\nuse Illuminate\\Database\\Eloquent\\Model;\n\nclass Post extends Model\n{\n    scop\n}\n";
+        let cursor = text.find("scop").unwrap() + 4;
         let found = items(text, cursor, Range::default());
         let labels: Vec<&str> = found.iter().map(|i| i.label.as_str()).collect();
-        assert_eq!(labels, ["hasmany", "hasmanythrough"]);
+        assert_eq!(labels, ["scope", "scopeattr"]);
         assert!(found[0].snippet);
         assert_eq!(
             found[0].additional_edits[0].text,
-            "\nuse Illuminate\\Database\\Eloquent\\Relations\\HasMany;"
+            "\nuse Illuminate\\Database\\Eloquent\\Builder;"
         );
+        let relations = items(
+            text.replace("scop", "hasm").as_str(),
+            cursor,
+            Range::default(),
+        );
+        assert!(relations.is_empty(), "relations come from the migrations");
         let text = "<?php\nclass A\n{\n    pub\n}\n";
         let labels: Vec<String> = items(text, text.find("pub").unwrap() + 3, Range::default())
             .into_iter()

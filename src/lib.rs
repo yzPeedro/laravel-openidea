@@ -35,6 +35,7 @@ mod querysql;
 mod refs;
 mod relations;
 use relations::Shape;
+mod relsnips;
 mod renames;
 mod resources;
 mod runner;
@@ -1019,6 +1020,73 @@ impl Laravel {
             .into_iter()
             .next()?;
         Some(format!("{namespace}\\{model}"))
+    }
+
+    fn relation_snippets(
+        &mut self,
+        project: &Project,
+        root: &str,
+        class: &str,
+        text: &str,
+        cursor: usize,
+        at: Position,
+    ) -> Vec<CompletionItem> {
+        let Some(start) = snippets::word_at(text, cursor) else {
+            return Vec::new();
+        };
+        let table = self.model_table(project, root, class).unwrap_or_default();
+        let mut tables: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for e in self.cache.get(RefKind::Column, project, root).iter() {
+            if let Some((t, c)) = e.key.split_once('.') {
+                tables.entry(t.to_owned()).or_default().push(c.to_owned());
+            }
+        }
+        let composer = project.read_file("composer.json").unwrap_or_default();
+        let map = casts::psr4(&composer);
+        let mut models: Vec<(String, String)> = Vec::new();
+        let mut fqns: BTreeMap<String, String> = BTreeMap::new();
+        for e in self.cache.get(RefKind::Model, project, root).iter() {
+            if let Some(t) = e.detail.as_deref().and_then(|d| d.strip_prefix("table ")) {
+                models.push((e.key.clone(), t.to_owned()));
+            }
+            if let Some(ns) = namespaces::for_path(project::rel(root, &e.location.path), &map)
+                .into_iter()
+                .next()
+            {
+                fqns.insert(e.key.clone(), format!("{ns}\\{}", e.key));
+            }
+        }
+        let prefix = format!("{class}.");
+        let existing: Vec<String> = self
+            .cache
+            .get(RefKind::Relation, project, root)
+            .iter()
+            .filter_map(|e| e.key.strip_prefix(&prefix).map(str::to_owned))
+            .collect();
+        let namespace = text
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("namespace "))
+            .map(|n| n.trim_end_matches(';').trim().to_owned());
+        let import = |model: &str| {
+            fqns.get(model)
+                .filter(|fqn| fqn.rsplit_once('\\').map(|(ns, _)| ns) != namespace.as_deref())
+                .cloned()
+        };
+        relsnips::items(
+            &relsnips::Facts {
+                model: class,
+                table: &table,
+                tables: &tables,
+                models: &models,
+                existing: &existing,
+            },
+            &relsnips::Context {
+                typed: &text[start..cursor],
+                replace: Range::new(position(text, start), at),
+                text,
+                import: &import,
+            },
+        )
     }
 
     fn closure_items(
@@ -2007,6 +2075,7 @@ impl Providers for Laravel {
             if let (true, Some(class)) = (scope.model, scope.class.as_deref()) {
                 let mut out = self.member_items(&project, &root, class, &doc.text, &ctx, at);
                 out.extend(php_snippets(&doc.text, cursor, at));
+                out.extend(self.relation_snippets(&project, &root, class, &doc.text, cursor, at));
                 return out;
             }
         }
@@ -3751,6 +3820,49 @@ Blade::if('admin', fn () => true);
         let (label, insert, _) = first(&mut plugin, "<?php\nDB::transaction(function").unwrap();
         assert_eq!(label, "fn () =>");
         assert!(insert.starts_with("fn () =>"));
+    }
+
+    #[test]
+    fn relation_snippets_use_the_models_the_migrations_point_to() {
+        let host = setup();
+        host.add_file(
+            "app/Models/Order.php",
+            "<?php\nnamespace App\\Models;\n\nclass Order extends Model\n{\n}\n",
+        );
+        host.add_file(
+            "database/migrations/2024_02_01_000000_create_orders.php",
+            "<?php\nreturn new class extends Migration {\n    public function up(): void {\n        Schema::create('orders', function (Blueprint $table) {\n            $table->id();\n            $table->foreignId('user_id');\n        });\n    }\n};\n",
+        );
+        let mut plugin = Laravel::default();
+        let user =
+            "<?php\nnamespace App\\Models;\n\nclass User extends Authenticatable\n{\n    hasm\n}\n";
+        let items = plugin.completion(
+            &doc("app/Models/User.php", user),
+            at(user, "hasm\n", 4),
+            None,
+        );
+        let item = items
+            .iter()
+            .find(|i| i.label == "hasmany orders → Order")
+            .unwrap_or_else(|| panic!("{:?}", labels(&items)));
+        assert!(
+            item.insert_text
+                .contains("public function orders(): HasMany")
+        );
+        assert!(item.insert_text.contains("hasMany(Order::class)"));
+        assert!(!labels(&items).contains(&"hasmany"), "no placeholder model");
+        let order =
+            "<?php\nnamespace App\\Models;\n\nclass Order extends Model\n{\n    belongsto\n}\n";
+        let items = plugin.completion(
+            &doc("app/Models/Order.php", order),
+            at(order, "belongsto\n", 9),
+            None,
+        );
+        assert!(
+            labels(&items).contains(&"belongsto user → User"),
+            "{:?}",
+            labels(&items)
+        );
     }
 
     #[test]

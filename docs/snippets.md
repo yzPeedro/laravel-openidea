@@ -138,6 +138,8 @@ This file is generated from `src/snippets.rs` by `UPDATE_SNIPPETS=1 cargo test s
 
 ## Eloquent relations
 
+In a model, these prefixes expand to the relations your migrations suggest: `belongsTo` from the table's `*_id` columns, `hasMany` and `hasOne` from the tables that point at this one, `belongsToMany` from pivot tables, `morphTo` from `*_type` and `*_id` pairs, and `morphMany` and `morphOne` from `*able` columns, each with the real model and method name (relations the model already has are left out). When nothing fits, the snippet offers a choice of the project's models. The table shows the shape they take.
+
 | Prefix | Inserts | Where |
 | --- | --- | --- |
 | `hasone` | hasOne relation — `public function profile(): HasOne` | class |
