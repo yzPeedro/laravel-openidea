@@ -273,7 +273,51 @@ pub enum Shape {
     Model,
     Many,
     Query,
+    Factory,
 }
+
+const FACTORY_MODEL: &[&str] = &[
+    "create",
+    "make",
+    "createOne",
+    "makeOne",
+    "createQuietly",
+    "createOneQuietly",
+];
+
+const FACTORY_MANY: &[&str] = &["createMany", "makeMany", "createManyQuietly"];
+
+pub const FACTORY: &[Method] = &[
+    ("count", "(?int $count): static"),
+    ("state", "($state): static"),
+    ("sequence", "(...$sequence): static"),
+    (
+        "has",
+        "(Factory $factory, ?string $relationship = null): static",
+    ),
+    (
+        "hasAttached",
+        "($factory, $pivot = [], ?string $relationship = null): static",
+    ),
+    ("for", "($factory, ?string $relationship = null): static"),
+    ("recycle", "($model): static"),
+    ("afterMaking", "(Closure $callback): static"),
+    ("afterCreating", "(Closure $callback): static"),
+    ("trashed", "(): static"),
+    ("create", "($attributes = [], ?Model $parent = null): {T}"),
+    ("createOne", "($attributes = []): {T}"),
+    (
+        "createMany",
+        "(iterable|int|null $records = null): Collection<int, {T}>",
+    ),
+    (
+        "createQuietly",
+        "($attributes = [], ?Model $parent = null): {T}",
+    ),
+    ("make", "($attributes = [], ?Model $parent = null): {T}"),
+    ("makeOne", "($attributes = []): {T}"),
+    ("raw", "($attributes = [], ?Model $parent = null): array"),
+];
 
 const QUERY_ELEMENT: &[&str] = &[
     "first",
@@ -416,6 +460,10 @@ pub fn after_call(shape: Shape, call: &str) -> Option<Shape> {
         Shape::Query if chains_query(call) => Some(Shape::Query),
         Shape::Model if MODEL_SELF.contains(&call) => Some(Shape::Model),
         Shape::Model if chains_query(call) => Some(Shape::Query),
+        Shape::Query if call == "factory" => Some(Shape::Factory),
+        Shape::Factory if FACTORY_MODEL.contains(&call) => Some(Shape::Model),
+        Shape::Factory if FACTORY_MANY.contains(&call) => Some(Shape::Many),
+        Shape::Factory if call != "raw" => Some(Shape::Factory),
         _ => None,
     }
 }
@@ -449,6 +497,10 @@ pub fn merged(curated: &[Method], installed: &[Owned]) -> Vec<Owned> {
 
 pub fn collection_methods(framework: &Framework) -> Vec<Owned> {
     merged(COLLECTION, &framework.collection)
+}
+
+pub fn factory_methods(framework: &Framework) -> Vec<Owned> {
+    merged(FACTORY, &framework.factory)
 }
 
 pub fn query_methods(framework: &Framework) -> Vec<Owned> {

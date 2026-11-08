@@ -122,6 +122,7 @@ This file is generated from `src/snippets.rs` by `UPDATE_SNIPPETS=1 cargo test s
 | `with` | $with (always eager load) — `protected $with = ['relation'];` | class |
 | `table` | $table — `protected $table = 'table';` | class |
 | `primarykey` | $primaryKey and key type — `protected $primaryKey = 'uuid';` | class |
+| `hasfactory` | use HasFactory — `use HasFactory;` | class |
 | `timestamps` | Turn timestamps off — `public $timestamps = false;` | class |
 | `connection` | $connection — `protected $connection = 'mysql';` | class |
 | `perpage` | $perPage — `protected $perPage = 25;` | class |

@@ -50,6 +50,8 @@ pub struct Framework {
     pub collection: Vec<Method>,
     pub query: Vec<Method>,
     pub relations: BTreeMap<String, Vec<Method>>,
+    pub factory: Vec<Method>,
+    pub factory_method: Option<openidea_plugin::Location>,
     classes: BTreeMap<String, bool>,
     packages: BTreeSet<String>,
 }
@@ -125,6 +127,8 @@ pub fn load(read: &dyn Fn(&str) -> Option<String>, root: &str) -> Framework {
         collection: loader.methods("Illuminate\\Database\\Eloquent\\Collection"),
         query,
         relations,
+        factory: loader.methods("Illuminate\\Database\\Eloquent\\Factories\\Factory"),
+        factory_method: factory_method(&mut loader, root),
         classes: BTreeMap::new(),
         packages: BTreeSet::new(),
         psr4: Vec::new(),
@@ -440,6 +444,21 @@ fn blade_directives(loader: &mut Loader, root: &str) -> Vec<Entry> {
         }
     }
     out
+}
+
+fn factory_method(loader: &mut Loader, root: &str) -> Option<openidea_plugin::Location> {
+    let source = loader.source("Illuminate\\Database\\Eloquent\\Factories\\HasFactory")?;
+    let at = source
+        .members
+        .offsets
+        .iter()
+        .find(|(n, _)| n == "factory")
+        .map(|(_, at)| *at)?;
+    let lines = Lines::new(&source.text);
+    Some(openidea_plugin::Location {
+        path: join(root, &source.path),
+        range: lines.range(&source.text, at, at + "factory".len()),
+    })
 }
 
 fn casts(loader: &mut Loader) -> (Vec<String>, bool) {

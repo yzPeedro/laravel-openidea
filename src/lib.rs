@@ -3,6 +3,7 @@ mod audit;
 mod blade_syntax;
 mod casts;
 mod checks;
+mod closures;
 mod completions;
 mod configfiles;
 mod devtools;
@@ -10,6 +11,7 @@ mod directives;
 mod dotenv;
 mod eloquent;
 mod enums;
+mod factories;
 mod formrequest;
 mod framework;
 mod helpers;
@@ -619,7 +621,7 @@ impl Laravel {
         match self.chain_of(project, root, at, base, path, depth)? {
             (model, Shape::Model) => Some((model, false)),
             (model, Shape::Many) => Some((model, true)),
-            (_, Shape::Query) => None,
+            (_, Shape::Query | Shape::Factory) => None,
         }
     }
 
@@ -925,6 +927,32 @@ impl Laravel {
                     typed,
                     replace,
                 ));
+                if access.path.is_empty()
+                    && matches!(access.base, eloquent::Base::Static(_))
+                    && let Some(model_text) = self.model_text(project, root, &model)
+                    && factories::file(project, &model, &model_text).is_some()
+                {
+                    let factory = [("factory", "($count = null, $state = []): Factory<{T}>")];
+                    out.extend(relations::method_items(&factory, &model, typed, replace));
+                }
+                return Some(out);
+            }
+            Shape::Factory => {
+                let framework = self.cache.framework(root);
+                let model_text = self.model_text(project, root, &model).unwrap_or_default();
+                let states = factories::file(project, &model, &model_text)
+                    .map(|(_, text)| factories::states(&text))
+                    .unwrap_or_default();
+                let mut out = relations::method_items(&states, &model, typed, replace);
+                for item in &mut out {
+                    item.sort_text = item.sort_text.take().map(|s| format!("!{s}"));
+                }
+                out.extend(relations::method_items(
+                    &relations::factory_methods(&framework),
+                    &model,
+                    typed,
+                    replace,
+                ));
                 return Some(out);
             }
             Shape::Model => {}
@@ -975,6 +1003,142 @@ impl Laravel {
                 }),
         );
         Some(out)
+    }
+
+    fn model_fqn(&mut self, project: &Project, root: &str, model: &str) -> Option<String> {
+        let path = self
+            .cache
+            .get(RefKind::Model, project, root)
+            .iter()
+            .find(|e| e.key == model)?
+            .location
+            .path
+            .clone();
+        let composer = project.read_file("composer.json").unwrap_or_default();
+        let namespace = namespaces::for_path(project::rel(root, &path), &casts::psr4(&composer))
+            .into_iter()
+            .next()?;
+        Some(format!("{namespace}\\{model}"))
+    }
+
+    fn closure_items(
+        &mut self,
+        project: &Project,
+        root: &str,
+        doc: &Document,
+        cursor: usize,
+        at: Position,
+    ) -> Option<Vec<CompletionItem>> {
+        let site = closures::site(&doc.text, cursor)?;
+        let found = match &site.callee {
+            closures::Callee::Member { name_end, .. } => {
+                eloquent::access_at(&doc.text, *name_end, false).and_then(|access| {
+                    self.chain_of(
+                        project,
+                        root,
+                        (&doc.text, cursor),
+                        &access.base,
+                        &access.path,
+                        0,
+                    )
+                    .map(|(m, s)| (m, s, false))
+                })
+            }
+            closures::Callee::Static { class, .. } => {
+                let short = class.rsplit('\\').next().unwrap_or(class).to_owned();
+                let base = eloquent::Base::Static(short);
+                self.chain_of(project, root, (&doc.text, cursor), &base, &[], 0)
+                    .map(|(m, s)| (m, s, true))
+            }
+            closures::Callee::Function { .. } => None,
+        };
+        let fqn = found
+            .as_ref()
+            .and_then(|(model, _, _)| self.model_fqn(project, root, model));
+        let receiver = found
+            .as_ref()
+            .map(|(model, shape, is_static)| closures::Receiver {
+                model,
+                model_fqn: fqn.as_deref(),
+                shape: *shape,
+                is_static: *is_static,
+            });
+        let user_fqn = self.model_fqn(project, root, "User");
+        let user = user_fqn.as_deref().map(|fqn| ("User", fqn));
+        let params = closures::params(&site, receiver.as_ref(), user)?;
+        let namespace = doc
+            .text
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("namespace "))
+            .map(|n| n.trim_end_matches(';').trim().to_owned());
+        let imports: Vec<&str> = params
+            .iter()
+            .filter_map(|p| p.fqn.as_deref())
+            .filter(|fqn| fqn.rsplit_once('\\').map(|(ns, _)| ns) != namespace.as_deref())
+            .collect();
+        let edits = snippets::import_edits(&doc.text, &imports);
+        let (shown, escaped) = closures::signature(&params);
+        let replace = Range::new(position(&doc.text, site.start), at);
+        let item = |label: String, insert: String, filter: &str, rank: &str| CompletionItem {
+            detail: Some("typed closure".into()),
+            insert_text: insert,
+            snippet: true,
+            replace: Some(replace),
+            sort_text: Some(format!("!{rank}")),
+            filter_text: Some(filter.to_owned()),
+            additional_edits: edits.clone(),
+            ..CompletionItem::new(&label, openidea_plugin::providers::CompletionKind::Snippet)
+        };
+        Some(vec![
+            item(
+                format!("fn ({shown}) =>"),
+                format!("fn ({escaped}) => $0"),
+                "fn",
+                "0",
+            ),
+            item(
+                format!("function ({shown})"),
+                format!("function ({escaped}) {{\n\t$0\n}}"),
+                "function",
+                "1",
+            ),
+        ])
+    }
+
+    fn factory_definition(
+        &mut self,
+        project: &Project,
+        root: &str,
+        doc: &Document,
+        cursor: usize,
+    ) -> Option<Vec<Location>> {
+        let text = &doc.text;
+        let (start, end) = eloquent::word_span(text, cursor)?;
+        if &text[start..end] != "factory" || !text[end..].trim_start().starts_with('(') {
+            return None;
+        }
+        let class_end = text[..start].trim_end().strip_suffix("::")?;
+        let class_start = class_end
+            .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '\\'))
+            .map_or(0, |i| i + 1);
+        let class = class_end[class_start..].trim_start_matches('\\');
+        let model = class.rsplit('\\').next().unwrap_or(class);
+        let model = if matches!(model, "static" | "self") {
+            scope_of(text).class?
+        } else {
+            model.to_owned()
+        };
+        let model_text = self.model_text(project, root, &model)?;
+        if let Some((path, factory)) = factories::file(project, &model, &model_text) {
+            let at = factories::class_offset(&factory);
+            let lines = Lines::new(&factory);
+            return Some(vec![Location {
+                path: project::join(root, &path),
+                range: lines.range(&factory, at, at),
+            }]);
+        }
+        let framework = self.cache.framework(root);
+        Some(framework.factory_method.clone().into_iter().collect())
     }
 
     fn scope_call_definition(
@@ -1770,6 +1934,12 @@ impl Providers for Laravel {
             let replace = Range::new(position(&doc.text, start), at);
             return namespaces::items(&found, &doc.text, start, cursor, replace);
         }
+        if !blade
+            && let Some(found) = self.closure_items(&project, &root, doc, cursor, at)
+            && !found.is_empty()
+        {
+            return found;
+        }
         if php::open_arg_at(&doc.text, blade, cursor).is_none()
             && let Some(found) = self.eloquent_members(&project, &root, doc, cursor, at)
             && !found.is_empty()
@@ -1931,6 +2101,11 @@ impl Providers for Laravel {
             return renames::locations_matching(&project, &root, doc, |text, _| {
                 eloquent::scope_calls(text, &model, &name)
             });
+        }
+        if !is_blade(&doc.path)
+            && let Some(found) = self.factory_definition(&project, &root, doc, cursor)
+        {
+            return found;
         }
         if !is_blade(&doc.path)
             && let Some(found) = self.scope_call_definition(&project, &root, doc, cursor)
@@ -3511,6 +3686,71 @@ Blade::if('admin', fn () => true);
         typed.version = 3;
         plugin.code_actions(&typed, Range::default());
         assert_eq!(enum_problems(&host), 0, "goes away while typing");
+    }
+
+    #[test]
+    fn factories_complete_their_states_and_open_on_ctrl_click() {
+        let host = setup();
+        host.add_file(
+            "database/factories/UserFactory.php",
+            "<?php\nnamespace Database\\Factories;\n\nclass UserFactory extends Factory\n{\n    public function definition(): array { return []; }\n    public function unverified(): static { return $this; }\n}\n",
+        );
+        let mut plugin = Laravel::default();
+        let text =
+            "<?php\nUser::factory()->;\nUser::factory()->unverified()->create()->;\nUser::fac;\n";
+        let d = doc("app/X.php", text);
+        let states = plugin.completion(&d, at(text, "factory()->;", 11), None);
+        let names = labels(&states);
+        assert!(
+            names.contains(&"unverified") && names.contains(&"count") && names.contains(&"create"),
+            "{names:?}"
+        );
+        assert_eq!(names[0], "unverified");
+        let made = plugin.completion(&d, at(text, "create()->;", 10), None);
+        assert!(labels(&made).contains(&"email"), "{:?}", labels(&made));
+        let statics = plugin.completion(&d, at(text, "User::fac;", 9), None);
+        assert!(labels(&statics).contains(&"factory"));
+        let found = plugin.definition(&d, at(text, "factory()->;", 2));
+        assert_eq!(found[0].path, "/project/database/factories/UserFactory.php");
+        assert_eq!(found[0].range.start.line, 3);
+    }
+
+    #[test]
+    fn callbacks_complete_typed_closures_with_imports() {
+        let _host = setup();
+        let mut plugin = Laravel::default();
+        let first = |plugin: &mut Laravel, text: &str| {
+            let items =
+                plugin.completion(&doc("app/X.php", text), position(text, text.len()), None);
+            items
+                .into_iter()
+                .next()
+                .map(|i| (i.label, i.insert_text, i.additional_edits))
+        };
+        let (label, insert, edits) = first(
+            &mut plugin,
+            "<?php\nnamespace App\\Http;\n\nUser::factory()->afterCreating(fn",
+        )
+        .unwrap();
+        assert_eq!(label, "fn (User $user) =>");
+        assert_eq!(insert, "fn (User \\$user) => $0");
+        assert_eq!(edits[0].text, "\n\nuse App\\Models\\User;");
+        let (label, _, edits) =
+            first(&mut plugin, "<?php\nnamespace App\\Http;\n\nUser::where(fn").unwrap();
+        assert_eq!(label, "fn (Builder $query) =>");
+        assert!(
+            edits[0]
+                .text
+                .contains("use Illuminate\\Database\\Eloquent\\Builder;")
+        );
+        let (label, _, _) =
+            first(&mut plugin, "<?php\n$users = User::all();\n$users->map(f").unwrap();
+        assert_eq!(label, "fn (User $user) =>");
+        let (label, _, _) = first(&mut plugin, "<?php\nSchema::create('posts', fn").unwrap();
+        assert_eq!(label, "fn (Blueprint $table) =>");
+        let (label, insert, _) = first(&mut plugin, "<?php\nDB::transaction(function").unwrap();
+        assert_eq!(label, "fn () =>");
+        assert!(insert.starts_with("fn () =>"));
     }
 
     #[test]

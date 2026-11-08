@@ -487,6 +487,14 @@ pub const SNIPPETS: &[Snippet] = &[
         CLASS,
         "protected \\$primaryKey = '${1:uuid}';\n\nprotected \\$keyType = '${2:string}';\n\npublic \\$incrementing = false;$0",
     ),
+    u(
+        "hasfactory",
+        MODEL,
+        "use HasFactory",
+        CLASS,
+        &["Illuminate\\Database\\Eloquent\\Factories\\HasFactory"],
+        "use HasFactory;$0",
+    ),
     s(
         "timestamps",
         MODEL,
@@ -1716,7 +1724,7 @@ pub fn plain(body: &str) -> String {
     out.replace("TM_FILENAME_BASE", "ClassName")
 }
 
-fn import_edits(text: &str, imports: &[&str]) -> Vec<TextEdit> {
+pub(crate) fn import_edits(text: &str, imports: &[&str]) -> Vec<TextEdit> {
     let missing: Vec<&&str> = imports
         .iter()
         .filter(|fqn| {
