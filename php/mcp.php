@@ -54,42 +54,59 @@ if (($argv[1] ?? '') !== '--worker') {
             $send(['jsonrpc' => '2.0', 'method' => 'notifications/tools/list_changed']);
         }
         $seen = $now;
-        $proc = proc_open([PHP_BINARY, __FILE__, '--worker'], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $base);
-        if (! is_resource($proc)) {
-            $send(['jsonrpc' => '2.0', 'id' => $id, 'error' => ['code' => -32603, 'message' => 'Could not start PHP for this call']]);
-            continue;
-        }
-        fwrite($pipes[0], $line);
-        fclose($pipes[0]);
-        stream_set_blocking($pipes[1], false);
-        stream_set_blocking($pipes[2], false);
-        $out = '';
-        $err = '';
-        $code = null;
-        while (true) {
+        $skipped = [];
+        $reply = null;
+        $detail = '';
+        for ($attempt = 0; $attempt <= 10; $attempt++) {
+            $env = array_merge(getenv(), ['OPENIDEA_SKIP' => implode("\n", array_keys($skipped))]);
+            $proc = proc_open([PHP_BINARY, __FILE__, '--worker'], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $base, $env);
+            if (! is_resource($proc)) {
+                $detail = 'Could not start PHP for this call';
+                break;
+            }
+            fwrite($pipes[0], $line);
+            fclose($pipes[0]);
+            stream_set_blocking($pipes[1], false);
+            stream_set_blocking($pipes[2], false);
+            $out = '';
+            $err = '';
+            $code = null;
+            while (true) {
+                $out .= (string) stream_get_contents($pipes[1]);
+                $err .= (string) stream_get_contents($pipes[2]);
+                $status = proc_get_status($proc);
+                if (! $status['running']) {
+                    $code = $status['exitcode'];
+                    break;
+                }
+                usleep(5000);
+            }
             $out .= (string) stream_get_contents($pipes[1]);
             $err .= (string) stream_get_contents($pipes[2]);
-            $status = proc_get_status($proc);
-            if (! $status['running']) {
-                $code = $status['exitcode'];
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            proc_close($proc);
+            foreach (array_reverse(preg_split('/\R/', trim($out)) ?: []) as $candidate) {
+                $decoded = json_decode($candidate, true);
+                if (is_array($decoded) && ($decoded['jsonrpc'] ?? null) === '2.0') {
+                    $reply = $decoded;
+                    break;
+                }
+            }
+            $detail = trim($err) !== '' ? trim($err) : 'it exited with code ' . $code;
+            if ($reply !== null || ! preg_match('/PHP (?:Fatal|Parse) error:\s+(.+?) in (.+?) on line (\d+)/', $detail, $fatal)) {
                 break;
             }
-            usleep(5000);
-        }
-        $out .= (string) stream_get_contents($pipes[1]);
-        $err .= (string) stream_get_contents($pipes[2]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-        proc_close($proc);
-        $reply = null;
-        foreach (array_reverse(preg_split('/\R/', trim($out)) ?: []) as $candidate) {
-            $decoded = json_decode($candidate, true);
-            if (is_array($decoded) && ($decoded['jsonrpc'] ?? null) === '2.0') {
-                $reply = $decoded;
+            $file = str_replace('\\', '/', $fatal[2]);
+            $root = str_replace('\\', '/', $base) . '/';
+            if (! str_starts_with($file, $root) || str_starts_with($file, $root . 'vendor/') || isset($skipped[$file])) {
                 break;
             }
+            $skipped[$file] = substr($file, strlen($root)) . ':' . $fatal[3] . ' (' . $fatal[1] . ')';
         }
-        $detail = trim($err) !== '' ? trim($err) : 'it exited with code ' . $code;
+        if ($reply !== null && $skipped && isset($reply['result']['content']) && is_array($reply['result']['content'])) {
+            $reply['result']['content'][] = ['type' => 'text', 'text' => 'Left out because PHP cannot load them: ' . implode('; ', $skipped)];
+        }
         $send($reply ?? ['jsonrpc' => '2.0', 'id' => $id, 'error' => ['code' => -32603, 'message' => 'The call stopped before answering: ' . mb_substr($detail, -2000)]]);
     }
     exit(0);
@@ -106,7 +123,8 @@ $allows = static fn (string $needed): bool => $levels[$needed] <= $levels[$level
 $denied = static fn (string $needed, string $what): RuntimeException => new RuntimeException("$what needs $needed access, and the user allowed $level for this project. Only the user can change it, in OpenIDEA: Settings › Plugins › Laravel OpenIDEA › MCP access.");
 
 
-const OPENIDEA_SECRET = '/pass(word)?|secret|token|api[_-]?key|authorization|cookie|credential|private|signature|dsn|_key$/i';
+const OPENIDEA_SECRET = '/pass(word)?|secret|token|api[_-]?key|authorization|cookie|credential|private|signature|dsn|(^|[_.\-])key$/i';
+const OPENIDEA_CREDENTIALS_URL = '#^[a-z][a-z0-9+.\-]*://[^/\s:@]*:[^@\s]+@#i';
 
 $app = null;
 $boot = static function () use (&$app, $base) {
@@ -141,6 +159,9 @@ $mask = static function ($value, ?string $key = null, int $depth = 0) use (&$mas
     if (is_object($value)) {
         return $value instanceof Closure ? '{Closure}' : '{' . get_class($value) . '}';
     }
+    if (is_string($value) && preg_match(OPENIDEA_CREDENTIALS_URL, $value)) {
+        return preg_replace('#^([a-z][a-z0-9+.\-]*://[^/\s:@]*:)[^@\s]+@#i', '$1•••@', $value);
+    }
     return $value;
 };
 
@@ -174,9 +195,17 @@ $appClasses = static function (callable $keep, array $dirs = ['app']) use ($base
         }
         return false;
     };
+    $skip = array_filter(explode("\n", (string) getenv('OPENIDEA_SKIP')));
+    $loadable = static function (string $file) use ($skip): bool {
+        if (in_array(str_replace('\\', '/', (string) (realpath($file) ?: $file)), $skip, true) || in_array(str_replace('\\', '/', $file), $skip, true)) {
+            return false;
+        }
+        $head = (string) @file_get_contents($file, false, null, 0, 8192);
+        return str_starts_with($head, '<?php') || ! preg_match('/^\s*namespace\s/m', $head);
+    };
     $classes = [];
     foreach ($map as $class => $file) {
-        if ($under($file)) {
+        if ($under($file) && $loadable($file)) {
             $classes[$class] = true;
         }
     }
@@ -189,7 +218,7 @@ $appClasses = static function (callable $keep, array $dirs = ['app']) use ($base
                 continue;
             }
             $code = (string) file_get_contents($f->getPathname());
-            if (! preg_match('/^\s*(?:final\s+|abstract\s+|readonly\s+)*(?:class|interface|trait|enum)\s+(\w+)/m', $code, $cl)) {
+            if (! preg_match('/^\s*(?:final\s+|abstract\s+|readonly\s+)*(?:class|interface|trait|enum)\s+(\w+)/m', $code, $cl) || ! $loadable($f->getPathname())) {
                 continue;
             }
             $classes[(preg_match('/^namespace\s+([^;]+);/m', $code, $ns) ? $ns[1] . '\\' : '') . $cl[1]] = true;
@@ -214,6 +243,30 @@ $appClasses = static function (callable $keep, array $dirs = ['app']) use ($base
 
 $rel = static fn (?string $file): ?string => $file ? ltrim(str_replace([$base, '/var/www/html'], '', $file), '/') : null;
 
+$rawListeners = static function ($events): array {
+    if (method_exists($events, 'getRawListeners')) {
+        return $events->getRawListeners();
+    }
+    try {
+        $property = new ReflectionProperty($events, 'listeners');
+        $property->setAccessible(true);
+        $listeners = (array) $property->getValue($events);
+    } catch (Throwable) {
+        return [];
+    }
+    foreach ($listeners as $event => $list) {
+        foreach ((array) $list as $i => $listener) {
+            if ($listener instanceof Closure) {
+                $inner = (new ReflectionFunction($listener))->getStaticVariables()['listener'] ?? null;
+                if (is_string($inner) || is_array($inner)) {
+                    $listeners[$event][$i] = $inner;
+                }
+            }
+        }
+    }
+    return $listeners;
+};
+
 $tools = [];
 $tool = static function (string $name, string $level, string $description, array $properties, callable $run) use (&$tools) {
     $tools[$name] = ['level' => $level, 'description' => $description, 'properties' => $properties, 'run' => $run];
@@ -221,7 +274,7 @@ $tool = static function (string $name, string $level, string $description, array
 $str = static fn (string $d) => ['type' => 'string', 'description' => $d];
 $int = static fn (string $d) => ['type' => 'integer', 'description' => $d];
 
-$tool('app_overview', 'read', 'Laravel OpenIDEA hub overview: Laravel and PHP versions, environment, drivers (database, cache, queue, session, mail, broadcasting), first-party and popular packages installed, and counts of routes, models, events, listeners, commands and scheduled tasks. Start here.', [], function () use ($boot, $base) {
+$tool('app_overview', 'read', 'Laravel OpenIDEA hub overview: Laravel and PHP versions, environment, drivers (database, cache, queue, session, mail, broadcasting), first-party and popular packages installed, and counts of routes, models, events, listeners, commands and scheduled tasks. Start here.', [], function () use ($boot, $base, $rawListeners) {
     $app = $boot();
     $lock = is_file($base . '/composer.lock') ? json_decode((string) file_get_contents($base . '/composer.lock'), true) : [];
     $packages = [];
@@ -230,7 +283,7 @@ $tool('app_overview', 'read', 'Laravel OpenIDEA hub overview: Laravel and PHP ve
             $packages[$p['name']] = ltrim($p['version'], 'v');
         }
     }
-    $events = $app['events']->getRawListeners();
+    $events = $rawListeners($app['events']);
     return [
         'laravel' => $app->version(),
         'php' => PHP_VERSION,
@@ -287,10 +340,10 @@ $tool('list_routes', 'read', 'Routes with method, URI, name, action (Controller@
     return $out;
 });
 
-$tool('list_events_and_listeners', 'read', 'Every event the application listens to and its listeners, as registered at runtime (event discovery, Event::listen, subscribers, model observers as eloquent.* events, queued listeners).', ['filter' => $str('Text to match in the event or listener')], function (array $a) use ($boot, $like, $label) {
+$tool('list_events_and_listeners', 'read', 'Every event the application listens to and its listeners, as registered at runtime (event discovery, Event::listen, subscribers, model observers as eloquent.* events, queued listeners).', ['filter' => $str('Text to match in the event or listener')], function (array $a) use ($boot, $like, $label, $rawListeners) {
     $app = $boot();
     $out = [];
-    foreach ($app['events']->getRawListeners() as $event => $listeners) {
+    foreach ($rawListeners($app['events']) as $event => $listeners) {
         $names = array_map($label, $listeners);
         if (! $like($a['filter'] ?? null, $event, implode(' ', $names))) {
             continue;
@@ -301,10 +354,10 @@ $tool('list_events_and_listeners', 'read', 'Every event the application listens 
     return $out;
 });
 
-$tool('list_models', 'read', 'Eloquent models with table, connection, primary key, fillable, guarded, hidden, casts, relations (method → type and related model), local scopes, global scopes and observers.', ['filter' => $str('Model name to match')], function (array $a) use ($boot, $appClasses, $like, $rel, $label) {
+$tool('list_models', 'read', 'Eloquent models with table, connection, primary key, fillable, guarded, hidden, casts, relations (method → type and related model), local scopes, global scopes and observers.', ['filter' => $str('Model name to match')], function (array $a) use ($boot, $appClasses, $like, $rel, $label, $rawListeners) {
     $app = $boot();
     $models = $appClasses(static fn (ReflectionClass $r) => $r->isSubclassOf(Illuminate\Database\Eloquent\Model::class) && ! $r->isAbstract());
-    $raw = $app['events']->getRawListeners();
+    $raw = $rawListeners($app['events']);
     $out = [];
     foreach ($models as $r) {
         if (! $like($a['filter'] ?? null, $r->getName())) {
