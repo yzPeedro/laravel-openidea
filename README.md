@@ -17,9 +17,11 @@
   every resource of your app, live logs, a live audit of requests, queries and events, and an MCP server for AI agents.
 </p>
 
-https://github.com/user-attachments/assets/bc56e061-73f0-484d-8e1c-d9776cdc9692
+<p align="center">
+  <a href="docs/media/tour.mp4"><img src="docs/media/tour.webp" alt="Watch the Laravel OpenIDEA 0.14 tour" width="100%"></a>
+</p>
 
-<p align="center"><sub>Install in under a minute, then a tour of the features. <a href="docs/media/install.mp4">Download the MP4</a>.</sub></p>
+<p align="center"><sub>A 79-second tour of 0.14: Live Audit, SQL to Laravel and back, Copy Query as MySQL, Form Request extraction, inspections with quick fixes, Eloquent chains, casts, the Cache browser, Tinker, and composer.json and phpunit.xml completion. <a href="docs/media/tour.mp4">Watch or download the MP4</a>.</sub></p>
 
 ---
 
@@ -30,6 +32,7 @@ https://github.com/user-attachments/assets/bc56e061-73f0-484d-8e1c-d9776cdc9692
 - [Features](#features)
   - [Editor intelligence](#editor-intelligence)
   - [The Laravel OpenIDEA hub](#the-laravel-openidea-hub)
+  - [Cache](#cache)
   - [Tinker](#tinker)
   - [SQL to Laravel](#sql-to-laravel)
   - [Live Audit](#live-audit)
@@ -46,11 +49,14 @@ https://github.com/user-attachments/assets/bc56e061-73f0-484d-8e1c-d9776cdc9692
 | | |
 | --- | --- |
 | ⚡ **Completion everywhere** | Routes (with verb and URI), views, config, env, translations, validation rules, middleware, gates, Eloquent columns and relations, Blade components and directives, assets, OpenAPI refs, Sanctum abilities, Spatie roles and permissions, queues, disks, and more. |
+| 🧠 **Eloquent that follows the chain** | `$order->items->`, `$order->items()->`, `Product::published()->`, `->first()->`: each step completes what it returns (collection methods, relation methods, query methods and scopes, the model again), and enum or value-object casts complete their own members, traits included. |
 | 🧭 **Navigation** | Ctrl+click on a route name or URI opens the controller method; views, config keys, env keys and translations open where they are defined. Gutter icons link `route()` calls and views. |
 | 🧩 **A hub for your whole app** | 40+ sections: routes, controllers, requests, models, scopes, observers, events and listeners, jobs, schedule, translations, config, env, bindings and more. Every section has filters, and every row opens its file. |
 | 🐘 **Tinker in tabs** | Write PHP like in an editor, press Ctrl+Enter, get Tinker-style coloured output with dumps, SQL and timing. |
 | 🔄 **SQL to Laravel and back** | Type SQL in any dialect and watch it turn into Eloquent or query builder code as you type, or swap sides to see the MySQL your Laravel code runs; run it in Tinker, copy it or insert it at the cursor. Right-click a query in the editor to copy it as MySQL. |
 | 🔍 **Live Audit** | Requests, SQL with the line that ran it, events with payloads and listeners, jobs, cache, mail, HTTP client calls, gates, logs, exceptions and dumps, with N+1 and slow query insights. |
+| 🗄️ **Cache browser** | The keys, values, sizes and expiry of the file, database and redis stores, page by page, with *Forget* and *Flush store*. |
+| 🧾 **Config files too** | `composer.json` (packages and versions from `composer.lock`), `phpunit.xml` (attributes from your installed PHPUnit, env values from your config), `vite.config` entries and Laravel route names and translation keys in JavaScript and TypeScript. |
 | 🤖 **AI agents that know your app** | A live MCP server with the hub's runtime data, Artisan, PHPStan, Pint, tests and Tinker behind an access level you choose (read, write or full), connected in one click next to Laravel Boost. |
 | 🐳 **Docker-aware** | Artisan, Tinker and the recorder run with `php` or in a throwaway Docker Compose container, detected automatically. |
 
@@ -100,17 +106,25 @@ Completion and navigation come from cached indexes of your project files, built 
 
 - **Strings that mean something:** `route()`, `to_route()`, `redirect()->route()`, `view()`, `config()`, `env()`, `__()`, `trans()`, `@lang`, `Route::has`, `routeIs`, `Storage::disk`, `Cache::store`, `Queue`, `Log::channel`, `DB::connection`, `Mail::mailer`, `auth()->guard`, middleware, gates, policies and rate limiters.
 - **Model members:** after `$order->` the model's columns (with their types) and relations, and after `$order->user->` the related model's columns. The model comes from typed parameters, `Order::create/find/first…`, `new Order`, `foreach ($order->items as $item)`, `/** @var Order $x */`, `$this` in a model and `auth()->user()`. Relations are listed apart from columns with their kind and target (`belongsTo → User`), and cast columns show what they become (`string → OrderStatus`). Ctrl+click on a relation opens the related model; on a cast column, the enum, or the class (or interface) its cast's `get()` returns, falling back to the cast class; on any other column, its migration.
+- **Chains:** each step completes what it returns. `$order->items->` (hasMany, belongsToMany…) lists the collection's methods typed with the item model, `$order->items()->` the relation's own methods (`create`, `createMany`, `save` for hasMany and hasOne; `attach`, `sync`, `toggle`, `wherePivot` for belongsToMany; `associate`, `dissociate` for belongsTo) and the query ones, `Product::`, `Product::where(…)->`, `->latest()->` or a scope call the query methods with the model's local scopes first, and `->first()`, `->sole()`, `->find(…)` or `->get()` bring back the model or the collection. Calls with arguments, closures included, are followed.
+- **Cast members:** `$order->status->` on a column cast to an enum completes `name`, `value` (backed enums) and the enum's methods, including those of the traits it uses; a column cast to a class (a value object returned by a cast's `get()`) completes its public properties and methods.
+- **Model inheritance:** a model that extends another model (`class Ebook extends DigitalProduct`) inherits its parent's relations and scopes in completion and navigation.
 - **Eloquent:** columns and relations in `where`, `with`, `has`, `whereHas`, `orderBy`, `create`, `update`, `fill` and `pluck`, model attributes (`#[Fillable]`, `#[Hidden]`, `#[Table]`…), `casts()`, scopes, and member snippets for `$fillable`, `$casts` and relations. Untyped closure parameters get their model too: `whereHas('posts', fn ($q) => $q->where('…'))` and `with(['posts' => fn ($q) => …])` complete the related model, `where(fn ($q) => …)` and `when()` the same model, `each(fn ($post) => $post->…)` the items, and chains through relations such as `$user->posts()->where('…')` the related model.
 - **Gates:** Ctrl+click on the ability in `Gate::define('…')` lists where it is used: `Gate::allows`/`denies`/…, `authorize()`, `can()`/`cannot()`, `@can` and `can:` middleware.
+- **Scopes:** Ctrl+click on `scopePublished()` (or a `#[Scope]` method) lists where it is called, and Ctrl+click on a call such as `Product::published()` or `$query->published()` opens its declaration.
+- **Casts:** the values of `casts()` and `$casts` complete every cast Laravel ships (`boolean`, `datetime`, `decimal`, `encrypted:array`, `json:unicode`, `AsCollection`, `AsEnumCollection`…), and after the colon the arguments that fit: decimal places, date formats, `encrypted:` types and `AsBinary` formats.
 - **Validation:** rule names inside `'required|…'` strings and rule arrays, plus custom rules.
 - **Blade:** syntax highlighting, structure and folding, directives after `@` (including your own `Blade::directive` and `Blade::if`), `<x-…>` components, `<livewire:…>` tags, sections, stacks and assets.
 - **OpenAPI and packages:** swagger-php `$ref`s, tags and security schemes, Sanctum token abilities, Spatie roles and permissions, Socialite drivers, broadcast channels, Inertia pages and Livewire components.
 - **Types:** Laravel, package and project traits after `use`, interfaces after `implements` and base classes after `extends`, ranked by folder (models get `HasFactory` and `SoftDeletes` first, jobs get `ShouldQueue`, and so on).
-- **Inspections and quick fixes:** unknown views, routes, rules, middleware and OpenAPI refs; N+1 queries (a relation read on each item of a `foreach` over a query that doesn't eager load it, fixed by adding `with()`); columns that don't exist in the model's table in `where`, `orderBy`, `pluck` and similar calls, with the closest column as the fix; `env()` outside `config/`, replaced by the `config()` key that reads the same variable; `create()` keys that `$fillable` leaves out, added to the model's `$fillable`; keys missing between `.env` and `.env.example`, copied over (a new key goes to `.env.example` without its value); *Add translation*; *Generate @property PHPDoc* for models from migrations, casts and relations; *Laravel: Go to Related Class or View* for Livewire and Blade components.
-- **Refactorings (Alt+Enter):** change a route's name in its `->name('…')` or a translation key in a `lang/` file, and *Rename route* or *Rename translation* updates every usage across PHP and Blade, and for translations the same key in the other locales; it works before and after saving. A view that no longer exists (renamed or moved to another folder) offers the closest existing view, in that usage or in every usage. *Extract the validation into a Form Request* turns `$request->validate([…])`, `request()->validate(…)` or `$this->validate($request, …)` into `app/Http/Requests/<Method><Model>Request.php` with `rules()` (and `messages()`/`attributes()`), types the parameter with it, calls `validated()` and tidies the imports (needs `process:php` or `process:docker` to create the file).
+- **Inspections and quick fixes:** unknown views, routes, rules, middleware and OpenAPI refs; N+1 queries (a relation read on each item of a `foreach` over a query that doesn't eager load it, fixed by adding `with()`); columns that don't exist in the model's table in `where`, `orderBy`, `pluck` and similar calls, with the closest column as the fix; `env()` outside `config/`, replaced by the `config()` key that reads the same variable; `create()` keys that `$fillable` leaves out, added to the model's `$fillable`; keys repeated in the same array (PHP keeps the last one), with a fix that removes the overwritten entry; keys missing between `.env` and `.env.example`, copied over (a new key goes to `.env.example` without its value); *Add translation*; *Generate @property PHPDoc* for models from migrations, casts and relations; *Laravel: Go to Related Class or View* for Livewire and Blade components.
+- **Refactorings (Alt+Enter):** change a route's name in its `->name('…')` or a translation key in a `lang/` file, and *Rename route* or *Rename translation* updates every usage across PHP and Blade, and for translations the same key in the other locales; it works before and after saving. A view that no longer exists (renamed or moved to another folder) offers the closest existing view, in that usage or in every usage. *Extract the validation into a Form Request* turns `$request->validate([…])`, `request()->validate(…)` or `$this->validate($request, …)` into `app/Http/Requests/<Method><Model>Request.php` with `rules()` (and `messages()`/`attributes()`), types the parameter with it, calls `validated()` and tidies the imports (needs `process:php` or `process:docker` to create the file). From the right-click menu, *Laravel: Extract Form Request…* works with the cursor in the call or with the call selected, and asks for the class name first, filled in with the suggested one (a subfolder such as `Admin/StoreOrderRequest` sets the namespace).
 - **Tools on save (opt-in):** set `formatOnSave` to `pint` or `php-cs-fixer` and turn on `phpstanOnSave` to format and analyse each PHP file you save, using the project's own `vendor/bin` tools and config (Larastan works through `phpstan.neon`). PHPStan errors show as warnings on their lines. They run in the background with a progress item in the status bar and stop after 15 seconds; a tool that times out or fails is reported once.
 - **Tool configs:** completion for presets, rules and options in `pint.json`, rule sets and rules in `.php-cs-fixer.php`, and parameters, levels and includes (Larastan's too) in `phpstan.neon`, with NEON highlighting.
 - **Pest:** dataset names in `->with('…')` and groups in `->group('…')`, `->groups('…')` and `#[Group('…')]`.
+- **`composer.json`:** top-level keys, package names in `require`, `require-dev`, `conflict`… (installed packages from `composer.lock` with their description and version, the Laravel ecosystem and PHP extensions), version constraints from the installed version, `autoload` keys with PSR-4 namespaces and folders, script events and the usual Laravel script commands, `config` keys and values, `allow-plugins` from the installed Composer plugins and `extra.laravel` keys.
+- **`phpunit.xml`:** elements and every `<phpunit>` attribute read from your installed `vendor/phpunit/phpunit/phpunit.xsd` (booleans and `executionOrder` values included), `<env>` and `<server>` names from `.env`, `.env.example` and the config files with their values (connections, stores, drivers, booleans…), suite names and test folders and files in `<directory>` and `<file>`.
+- **Front-end:** files under `resources/` in the strings of `vite.config.js` or `.ts`, route names in `route('…')` (Ziggy) and translation keys in `__('…')`, `trans('…')`, `$t('…')`, `t('…')` and `trans_choice('…')` in JavaScript, TypeScript, JSX, TSX, Vue and Svelte files.
 - **File templates:** *New File* offers a Laravel model, controller, Form Request, policy, job, event, listener, middleware and Pest test.
 - **Helpers:** `auth()->` completes the guard methods and `auth()->user()` is your user model, without Intelephense's "Undefined method" (a stub the plugin keeps in `storage/openidea/ide-helpers.php`, ignored by git; turn it off with `ideHelpers`). Path helpers and `Storage` calls suggest the files and folders under their own folder or disk root; `logs()`, `app()`/`resolve()`, `url()`/`redirect()`, `old()`, `request()` and `$request->input()` complete channels, container ids, route URIs and validated fields.
 - **Folio:** pages under the Folio paths of `FolioServiceProvider` are routes: their `name()` completes in `route()`, Ctrl+click opens the page, and the hub's Routes section lists every page with its URI.
@@ -121,7 +135,7 @@ Completion and navigation come from cached indexes of your project files, built 
 
 ### The Laravel OpenIDEA hub
 
-One tool window for everything your app has. It refreshes from your files and opens every row in the editor.
+One tool window for everything your app has. It refreshes from your files and opens every row in the editor. Every table section, Logs and Live Audit show 100 rows per page (50 to 500) with a pager that stays at the bottom; searching, filtering or sorting goes back to the first page.
 
 <img src="docs/media/hub-overview.webp" alt="Hub overview">
 
@@ -141,7 +155,7 @@ One tool window for everything your app has. It refreshes from your files and op
 | Project | Overview, Ecosystem (starter kit, Sanctum, Wayfinder, Horizon, Reverb, Octane, Pulse, Telescope…), AI Agents |
 | Develop | Artisan, Tinker, SQL to Laravel |
 | HTTP | Routes, Controllers, Form Requests, API Resources, Middleware |
-| Data | Models, Scopes, Observers, Casts, Enums, Database, Factories & Seeders |
+| Data | Models, Scopes, Observers, Casts, Enums, Database, Cache, Factories & Seeders |
 | Views | Views, Components, Frontend (Vite assets, Inertia pages), Translations |
 | App | All Classes, Service Providers, Container Bindings, Validation Rules, Macros |
 | Configure | Config, Environment, Drivers & Connections, Auth & Policies |
@@ -157,6 +171,12 @@ One tool window for everything your app has. It refreshes from your files and op
 | <img src="docs/media/hub-schedule.webp" alt="Schedule"> | <img src="docs/media/hub-ecosystem.webp" alt="Ecosystem"> | <img src="docs/media/hub-artisan.webp" alt="Artisan"> |
 
 </details>
+
+### Cache
+
+Pick a store and see its keys with their type, value, size and expiry, page by page, with search; a click shows the whole value. *Forget* removes one key and *Flush store* empties the store after a second click. The file, database and redis stores are listed whatever their driver configuration; the file store keeps only a hash of each key, and stores that can't be listed (array, memcached, dynamodb…) say why. It runs your app with `php` or Docker Compose like Tinker.
+
+<img src="docs/media/hub-cache.webp" alt="Cache">
 
 ### Tinker
 
@@ -238,6 +258,7 @@ A tool above the level tells the agent to ask you, and connected clients get the
 | `fillableInspection` | on | Report `create()` keys that `$fillable` leaves out |
 | `nPlusOneInspection` | on | Report relations loaded once per item in a `foreach` |
 | `envKeysInspection` | on | Report keys missing between `.env` and `.env.example` |
+| `duplicateKeyInspection` | on | Report keys repeated in the same array |
 | `formatOnSave` | `off` | Format the saved PHP file with `pint` or `php-cs-fixer` from `vendor/bin` |
 | `ideHelpers` | on | Keep `storage/openidea/ide-helpers.php` so Intelephense types `auth()` and your user model |
 | `mcpAccess` | `read` | What AI agents may do through the MCP server: `read`, `write` or `full` (see [AI agents](#ai-agents)) |
