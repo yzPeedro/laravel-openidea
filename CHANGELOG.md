@@ -10,6 +10,11 @@ All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](h
 - Directives from Livewire, Volt, Inertia, Ziggy and Spatie Permission are only suggested when the package is installed.
 - Without `vendor/` (before `composer install`) the plugin falls back to the built-in lists.
 - On Windows the hub, Tinker, the Cache browser, Live Audit, the MCP sync and the other background PHP calls run through `php-win.exe` when the new optional `process:php-win` permission is allowed, so no console window flashes on screen. Without it the plugin keeps using `php`.
+- The hub's PHP calls (Tinker, the Cache browser, Live Audit, the hub tabs and the rest) work again on OpenIDEA 0.1.39, which accepts process arguments of at most 4096 bytes: long scripts now travel on stdin.
+- Picking a completion inside a string replaces the whole value (or the current rule or middleware), so a selected value is replaced instead of kept after the new one.
+- Inspections run while you type, so the enum value warning and the others appear and go away without saving or reopening the file.
+- The file cache store finds a key by its name when you search for the whole key, so Ctrl+click on a cache key shows its value and expiry there too.
+- Typing after an accented character no longer crashes the plugin.
 - A search box for the whole hub: it searches every table section at once, lists the first matches of each with a link to the file, the sections whose name matches, and *Show all* to open a section with the same search.
 - Hub sections, and the whole hub, open in editor tabs (*Open in editor* in the hub's header, or *Laravel: Open the Hub in an Editor Tab*), each with its own state, so two sections can sit side by side in an editor split. Ctrl+click on a cache key opens the Cache section in a tab, searched for the key and expanded to show its value and expiry.
 - About 200 PHP and Laravel snippets (class members, control flow, models and relations, queries, controllers, Form Requests, jobs, middleware, policies, migrations, routes, helpers, PHPUnit and Pest), offered only where they fit and adding the imports they need, plus Blade block directives with their closing tag. They are listed in `docs/snippets.md`, generated from the same table.

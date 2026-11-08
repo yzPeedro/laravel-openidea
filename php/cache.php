@@ -20,7 +20,8 @@ try {
 $action = (string) ($__openideaInput['action'] ?? 'list');
 $size = max(10, min(500, (int) ($__openideaInput['size'] ?? 50)));
 $page = max(0, (int) ($__openideaInput['page'] ?? 0));
-$search = strtolower(trim((string) ($__openideaInput['search'] ?? '')));
+$rawSearch = trim((string) ($__openideaInput['search'] ?? ''));
+$search = strtolower($rawSearch);
 $wanted = (string) ($__openideaInput['key'] ?? '');
 $limit = 20000;
 $preview = 300;
@@ -100,7 +101,8 @@ $note = null;
 try {
     if ($driver === 'file') {
         $path = (string) ($conf['path'] ?? storage_path('framework/cache/data'));
-        $note = 'The file store keeps only a hash of each key, so keys show as their hash.';
+        $note = 'The file store keeps only a hash of each key, so keys show as their hash unless you search for the whole key.';
+        $named = $rawSearch !== '' ? sha1($rawSearch) : null;
         $files = [];
         if (is_dir($path)) {
             $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS));
@@ -117,21 +119,23 @@ try {
         sort($files);
         $rows = [];
         foreach ($files as $file) {
-            $key = basename($file);
-            if ($search !== '' && ! str_contains(strtolower($key), $search)) {
+            $hash = basename($file);
+            $key = $hash === $named ? $rawSearch : $hash;
+            if ($search !== '' && $hash !== $named && ! str_contains(strtolower($hash), $search)) {
                 continue;
             }
-            $rows[] = [$key, $file];
+            $rows[] = [$key, $file, $hash];
         }
+        $isWanted = static fn (array $row): bool => $row[0] === $wanted || $row[2] === $wanted || $row[2] === sha1($wanted);
         if ($action === 'forget') {
-            foreach ($rows as [$key, $file]) {
-                if ($key === $wanted) {
-                    @unlink($file);
+            foreach ($rows as $row) {
+                if ($isWanted($row)) {
+                    @unlink($row[1]);
                 }
             }
         } else {
             $total = count($rows);
-            $slice = $action === 'value' ? array_values(array_filter($rows, fn ($r) => $r[0] === $wanted)) : array_slice($rows, $page * $size, $size);
+            $slice = $action === 'value' ? array_values(array_filter($rows, $isWanted)) : array_slice($rows, $page * $size, $size);
             foreach ($slice as [$key, $file]) {
                 $raw = (string) @file_get_contents($file);
                 $expires = (int) substr($raw, 0, 10);

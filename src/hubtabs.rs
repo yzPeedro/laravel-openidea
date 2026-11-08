@@ -3,7 +3,7 @@ use crate::audit;
 use crate::devtools;
 use crate::php::{CallKind, StringArg};
 use crate::runner;
-use openidea_plugin::{Project, host};
+use openidea_plugin::{Error, Project, host};
 use serde_json::{Value, json};
 use std::cell::RefCell;
 
@@ -161,19 +161,17 @@ pub fn navigate(section: &str, file: &str, search: Option<&str>) -> Value {
 }
 
 impl Laravel {
-    pub(crate) fn sync_hub_files(&mut self, project: &Project, force: bool) -> bool {
-        let Ok(root) = project.root() else {
-            return false;
-        };
+    pub(crate) fn sync_hub_files(&mut self, project: &Project, force: bool) -> Result<(), String> {
+        let root = project.root().map_err(|e| e.to_string())?;
         let wanted = wanted();
         if project
             .read_file(INDEX)
             .is_ok_and(|current| current == wanted)
         {
-            return true;
+            return Ok(());
         }
         if !self.hub_synced.insert(root) && !force {
-            return false;
+            return Err("already tried in this session".into());
         }
         let mode = runner::detect(project);
         let _task = host::begin_task("Laravel: preparing the hub tabs", false);
@@ -183,14 +181,18 @@ impl Laravel {
             "hub".into(),
         ]);
         match runner::run(project, &mode, &run, Some(&wanted)) {
-            Ok(out) if out.status == Some(0) => true,
+            Ok(out) if out.status == Some(0) => Ok(()),
             Ok(out) => {
-                audit::error("hub tabs", audit::output(&out));
-                false
+                let why = audit::output(&out);
+                audit::error("hub tabs", &why);
+                Err(why)
             }
+            Err(Error::Denied(cap)) => Err(format!(
+                "allow {cap} for Laravel OpenIDEA in Settings › Plugins"
+            )),
             Err(e) => {
                 audit::failed("hub tabs", &e);
-                false
+                Err(e.to_string())
             }
         }
     }

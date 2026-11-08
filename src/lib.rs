@@ -78,6 +78,8 @@ pub struct Laravel {
     hub_pending: Option<hubtabs::Pending>,
     hub_synced: BTreeSet<String>,
     hub_tables: Option<(String, HubTables)>,
+    facts_cache: Option<(String, std::rc::Rc<checks::Parts>)>,
+    live: BTreeMap<String, u64>,
 }
 
 fn kebab(name: &str) -> String {
@@ -375,7 +377,30 @@ impl Laravel {
         {
             let _task = host::begin_task("Indexing the Laravel project", false);
             self.cache.warm(&project, &root);
+            self.cached_facts(&project, &root);
         }
+    }
+
+    fn publish_live(&mut self, doc: &Document) {
+        if !doc.path.ends_with(".php") || is_blade(&doc.path) {
+            return;
+        }
+        if self.live.get(&doc.path) == Some(&doc.version) {
+            return;
+        }
+        let Some((_, root)) = self.laravel_project(&doc.path) else {
+            return;
+        };
+        if !self.facts_ready(&root) {
+            return;
+        }
+        self.live.insert(doc.path.clone(), doc.version);
+        let mut items = self.inspect(&doc.path, &doc.text);
+        if let Some(found) = self.analysis.get(&doc.path) {
+            items.extend(found.iter().cloned());
+        }
+        host::publish_diagnostics(&doc.path, &items)
+            .or_warn(&format!("publishing diagnostics for {}", doc.path));
     }
 
     fn model_table(&mut self, project: &Project, root: &str, model: &str) -> Option<String> {
@@ -1832,11 +1857,25 @@ impl Providers for Laravel {
         };
         let (kind, entries) = self.resolve(&seg.want, &project, &root, doc);
         let start = (arg.start + seg.start).min(cursor);
+        let quote = doc.text[..arg.start]
+            .chars()
+            .last()
+            .filter(|c| matches!(c, '\'' | '"'));
+        let segmented = matches!(
+            seg.want,
+            Want::Kind(RefKind::Rule | RefKind::Middleware) | Want::Columns { .. }
+        );
+        let end = cursor
+            + doc.text[cursor..]
+                .find(|c: char| {
+                    Some(c) == quote || c == '\n' || c == '|' || segmented && matches!(c, ',' | ':')
+                })
+                .unwrap_or(0);
         items(
             kind,
             &entries,
             &doc.text[start..cursor],
-            Range::new(position(&doc.text, start), at),
+            Range::new(position(&doc.text, start), position(&doc.text, end)),
         )
     }
 
@@ -1943,6 +1982,7 @@ impl Providers for Laravel {
     }
 
     fn line_markers(&mut self, doc: &Document) -> Vec<LineMarker> {
+        self.publish_live(doc);
         let Some((project, root, refs)) = self.references(doc) else {
             return Vec::new();
         };
@@ -1998,6 +2038,7 @@ impl Providers for Laravel {
     }
 
     fn code_actions(&mut self, doc: &Document, selection: Range) -> Vec<CodeAction> {
+        self.publish_live(doc);
         let Some((project, root)) = self.laravel_project(&doc.path) else {
             return Vec::new();
         };
@@ -2041,9 +2082,11 @@ impl Laravel {
             "open-hub-tab" => {
                 let project = ctx.project().ok_or("open a Laravel project first")?;
                 let root = project.root()?;
-                if !self.sync_hub_files(&project, true) {
-                    return Err("the hub tab files couldn't be written to storage/openidea/hub: allow process:php or process:docker for Laravel OpenIDEA in Settings › Plugins".into());
-                }
+                self.sync_hub_files(&project, true).map_err(|why| {
+                    Error::Failed(format!(
+                        "the hub tab files couldn't be written to storage/openidea/hub: {why}"
+                    ))
+                })?;
                 host::open_location(
                     &project::join(&root, &hubtabs::file_path(hubtabs::WHOLE)),
                     0,
@@ -2105,6 +2148,7 @@ impl openidea_plugin::Plugin for Laravel {
             {
                 let _task = host::begin_task("Indexing the Laravel project", false);
                 self.cache.warm(&project, &root);
+                self.cached_facts(&project, &root);
                 self.project_symbols(&project, &root);
                 self.sync_mcp(&project);
                 self.sync_helpers(&project);
@@ -2139,6 +2183,8 @@ impl openidea_plugin::Plugin for Laravel {
                             self.sync_helpers(&project);
                         }
                         self.hub_tables = None;
+                        self.facts_cache = None;
+                        self.live.remove(path);
                         let before = self.snapshot_keys(&project, &root, path);
                         self.cache.invalidate(&root, path);
                         let after = self.snapshot_keys(&project, &root, path);
@@ -2170,6 +2216,7 @@ impl openidea_plugin::Plugin for Laravel {
                 }
                 Event::VcsChanged(repo) => {
                     self.hub_tables = None;
+                    self.facts_cache = None;
                     self.cache.clear();
                     self.symbols.clear();
                     paths.insert(repo.clone());
@@ -2180,7 +2227,7 @@ impl openidea_plugin::Plugin for Laravel {
                     if let Some((project, _)) = self.laravel_project(path) {
                         self.sync_mcp(&project);
                         self.sync_helpers(&project);
-                        self.sync_hub_files(&project, false);
+                        let _ = self.sync_hub_files(&project, false);
                     }
                 }
                 _ => {}
@@ -3424,6 +3471,63 @@ Blade::if('admin', fn () => true);
         assert_eq!(labels(&values), ["pending", "paid"]);
         let columns = plugin.completion(&doc("app/Y.php", op), at(op, "'status'", 3), None);
         assert!(labels(&columns).contains(&"status"));
+    }
+
+    #[test]
+    fn enum_warnings_follow_the_text_as_it_is_typed() {
+        let host = setup();
+        host.add_file(
+            "app/Models/Order.php",
+            "<?php\nnamespace App\\Models;\n\nuse App\\Enums\\OrderStatus;\n\nclass Order extends Model\n{\n    protected $casts = ['status' => OrderStatus::class];\n}\n",
+        );
+        host.add_file(
+            "app/Enums/OrderStatus.php",
+            "<?php\nnamespace App\\Enums;\n\nenum OrderStatus: string\n{\n    case Paid = 'paid';\n}\n",
+        );
+        host.add_file(
+            "database/migrations/2024_02_01_000000_create_orders.php",
+            "<?php\nreturn new class extends Migration {\n    public function up(): void {\n        Schema::create('orders', function (Blueprint $table) {\n            $table->id();\n            $table->string('status');\n        });\n    }\n};\n",
+        );
+        let mut plugin = Laravel::default();
+        let path = "/project/app/X.php";
+        host.add_file("app/X.php", "<?php\nOrder::where('status', 'paid');\n");
+        plugin.handle_events(&[Event::FileOpened(path.into())], &host.invocation());
+        let enum_problems = |host: &MockHost| {
+            host.diagnostics()
+                .get(path)
+                .map(|d| {
+                    d.iter()
+                        .filter(|d| d.code.as_deref() == Some("laravel.unknown-enum-value"))
+                        .count()
+                })
+                .unwrap_or(0)
+        };
+        assert_eq!(enum_problems(&host), 0);
+        let mut typed = doc("app/X.php", "<?php\nOrder::where('status', 'pai');\n");
+        typed.version = 2;
+        plugin.line_markers(&typed);
+        assert_eq!(enum_problems(&host), 1, "shows up while typing");
+        typed.text = "<?php\nOrder::where('status', 'paid');\n".into();
+        typed.version = 3;
+        plugin.code_actions(&typed, Range::default());
+        assert_eq!(enum_problems(&host), 0, "goes away while typing");
+    }
+
+    #[test]
+    fn a_picked_value_replaces_the_whole_string() {
+        let _host = setup();
+        let mut plugin = Laravel::default();
+        let text = "<?php\nreturn redirect()->route('invalid-value');\n";
+        let items = plugin.completion(&doc("app/X.php", text), at(text, "invalid", 0), None);
+        assert!(!items.is_empty());
+        let range = items[0].replace.unwrap();
+        assert_eq!(range.start, at(text, "invalid", 0));
+        assert_eq!(range.end, at(text, "invalid-value'", 13));
+        let rules = "<?php\n$request->validate(['a' => 'required|strin|max:3']);\n";
+        let items = plugin.completion(&doc("app/X.php", rules), at(rules, "strin", 2), None);
+        let range = items[0].replace.unwrap();
+        assert_eq!(range.start, at(rules, "strin", 0));
+        assert_eq!(range.end, at(rules, "strin|", 5));
     }
 
     #[test]

@@ -1469,10 +1469,10 @@ impl Laravel {
         if id != crate::hubtabs::WHOLE && !crate::hubtabs::SECTIONS.contains(&id) {
             return Err(Error::Invalid(format!("unknown hub section {id}")));
         }
-        if !self.sync_hub_files(&project, true) {
+        if let Err(why) = self.sync_hub_files(&project, true) {
             post(
                 view,
-                json!({ "type": "error", "message": "The hub tab files couldn't be written to storage/openidea/hub: allow process:php (or process:docker) for Laravel OpenIDEA in Settings › Plugins." }),
+                json!({ "type": "error", "message": format!("The hub tab files couldn't be written to storage/openidea/hub: {why}") }),
             );
             return Ok(());
         }

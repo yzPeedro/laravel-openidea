@@ -1638,8 +1638,10 @@ pub fn place_at(text: &str, cursor: usize) -> Option<Place> {
 
 pub fn word_at(text: &str, cursor: usize) -> Option<usize> {
     let start = text[..cursor]
-        .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .map_or(0, |i| i + 1);
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_'))
+        .map_or(0, |(i, c)| i + c.len_utf8());
     if start == cursor || text[start..cursor].starts_with(|c: char| c.is_ascii_digit()) {
         return None;
     }
@@ -1913,6 +1915,8 @@ mod tests {
         assert_eq!(word_at("$pubf", 5), None);
         assert_eq!(word_at("public function pubf", 20), None);
         assert_eq!(word_at("x ", 2), None);
+        assert_eq!(word_at("// ação ç pubf", 17), Some(13));
+        assert_eq!(word_at("çpubf", 6), Some(2));
     }
 
     #[test]

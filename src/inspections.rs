@@ -36,6 +36,21 @@ fn setting(name: &str) -> bool {
 }
 
 impl Laravel {
+    pub(crate) fn cached_facts(&mut self, project: &Project, root: &str) -> std::rc::Rc<Parts> {
+        if let Some((cached_root, facts)) = &self.facts_cache
+            && cached_root == root
+        {
+            return facts.clone();
+        }
+        let facts = std::rc::Rc::new(self.check_facts(project, root));
+        self.facts_cache = Some((root.to_owned(), facts.clone()));
+        facts
+    }
+
+    pub(crate) fn facts_ready(&self, root: &str) -> bool {
+        self.facts_cache.as_ref().is_some_and(|(r, _)| r == root)
+    }
+
     fn check_facts(&mut self, project: &Project, root: &str) -> Parts {
         let relations: Vec<(String, String)> = self
             .cache
@@ -132,16 +147,17 @@ impl Laravel {
         {
             return Vec::new();
         }
-        let (models, columns, config_env) = self.check_facts(project, root);
+        let facts = self.cached_facts(project, root);
+        let (models, columns, config_env) = &*facts;
         let rel = crate::project::rel(root, path).replace('\\', "/");
         checks::php(
             text,
             &Facts {
                 path,
                 rel_path: &rel,
-                models: &models,
-                columns: &columns,
-                config_env: &config_env,
+                models,
+                columns,
+                config_env,
                 enabled,
             },
         )

@@ -86,19 +86,40 @@ fn unavailable(error: &Error) -> bool {
     }
 }
 
+const INLINE_CODE_BYTES: usize = 1024;
+
+pub const BOOT: &str = "$__oiN=(int)fgets(STDIN);$__oiC='';while(strlen($__oiC)<$__oiN&&!feof(STDIN)){$__oiC.=fread(STDIN,$__oiN-strlen($__oiC));}unset($__oiN);eval($__oiC);";
+
+pub fn pack(args: &[String], stdin: Option<&str>) -> (Vec<String>, Option<String>) {
+    let long = args
+        .iter()
+        .position(|a| a == "-r")
+        .filter(|&i| args.get(i + 1).is_some_and(|c| c.len() > INLINE_CODE_BYTES));
+    let Some(at) = long else {
+        return (args.to_vec(), stdin.map(str::to_owned));
+    };
+    let code = &args[at + 1];
+    let mut packed = args.to_vec();
+    packed[at + 1] = BOOT.to_owned();
+    let input = format!("{}\n{code}{}", code.len(), stdin.unwrap_or(""));
+    (packed, Some(input))
+}
+
 pub fn run(
     project: &Project,
     mode: &Mode,
     args: &[String],
     stdin: Option<&str>,
 ) -> Result<ProcessOutput, Error> {
+    let (args, stdin) = pack(args, stdin);
+    let stdin = stdin.as_deref();
     if *mode == Mode::Php && project.root().is_ok_and(|r| is_windows_root(&r)) {
-        match project.run_process(WINDOWLESS_PHP, args, stdin) {
+        match project.run_process(WINDOWLESS_PHP, &args, stdin) {
             Err(e) if unavailable(&e) => {}
             other => return other,
         }
     }
-    project.run_process(mode.program(), args, stdin)
+    project.run_process(mode.program(), &args, stdin)
 }
 
 impl Mode {
@@ -251,6 +272,43 @@ pub fn detect(project: &Project) -> Mode {
 mod tests {
     use super::*;
     use openidea_plugin::mock::MockHost;
+
+    #[test]
+    fn long_scripts_travel_on_stdin_and_still_read_their_input() {
+        let script = format!(
+            "$pad = '{}'; echo $argv[1], ':', strlen($pad), ':', stream_get_contents(STDIN);",
+            "x".repeat(5000)
+        );
+        let args = vec!["-r".to_owned(), script.clone(), "hub".to_owned()];
+        let (packed, stdin) = pack(&args, Some("payload ç"));
+        assert_eq!(packed, ["-r", BOOT, "hub"]);
+        assert!(packed.iter().all(|a| a.len() <= 4096));
+        assert!(
+            stdin
+                .as_deref()
+                .unwrap()
+                .starts_with(&format!("{}\n", script.len()))
+        );
+        let short = vec!["-r".to_owned(), "echo 1;".to_owned()];
+        assert_eq!(pack(&short, None), (short.clone(), None));
+        let Ok(mut child) = std::process::Command::new("php")
+            .args(&packed)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+        else {
+            return;
+        };
+        use std::io::Write;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.unwrap().as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "hub:5000:payload ç");
+    }
 
     fn ran(host: &MockHost) -> Vec<String> {
         host.process_runs().into_iter().map(|r| r.program).collect()
