@@ -27,6 +27,7 @@ pub struct Model<'a> {
     pub models: Vec<(String, String)>,
     pub foreign: Vec<(String, String)>,
     pub relations: Vec<String>,
+    pub casts_method: bool,
 }
 
 pub struct Context {
@@ -145,16 +146,44 @@ pub fn items(m: &Model, ctx: &Context, at: Position, start: Position) -> Vec<Com
         .filter(|c| SENSITIVE.contains(&c.as_str()))
         .cloned()
         .collect();
-    let casts: Vec<String> = m
+    let casts: Vec<(&String, &str)> = m
         .columns
         .iter()
         .filter(|(c, _)| !matches!(c.as_str(), "created_at" | "updated_at"))
-        .filter_map(|(c, k)| Some(format!("{i}        '{c}' => '{}',", cast_for(k)?)))
+        .filter_map(|(c, k)| Some((c, cast_for(k)?)))
         .collect();
-    let casts_body = if casts.is_empty() {
-        "return [];".to_owned()
+    let cast_rows = |pad: &str| {
+        casts
+            .iter()
+            .map(|(c, cast)| format!("{pad}'{c}' => '{cast}',"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let casts_member = if m.casts_method {
+        let body = if casts.is_empty() {
+            "return [];".to_owned()
+        } else {
+            format!(
+                "return [\n{}\n{i}    ];",
+                cast_rows(&format!("{i}        "))
+            )
+        };
+        (
+            "casts()".to_owned(),
+            format!("{} casts from the migrations", casts.len()),
+            method(i, "protected function casts(): array", &body),
+        )
     } else {
-        format!("return [\n{}\n{i}    ];", casts.join("\n"))
+        let list = if casts.is_empty() {
+            "[]".to_owned()
+        } else {
+            format!("[\n{}\n{i}]", cast_rows(&format!("{i}    ")))
+        };
+        (
+            "$casts".to_owned(),
+            format!("{} casts from the migrations", casts.len()),
+            format!("protected $casts = {list};"),
+        )
     };
     let mut out: Vec<(String, String, String)> = vec![
         (
@@ -172,11 +201,7 @@ pub fn items(m: &Model, ctx: &Context, at: Position, start: Position) -> Vec<Com
             "sensitive columns".into(),
             format!("protected $hidden = {};", list(i, &hidden)),
         ),
-        (
-            "casts()".into(),
-            format!("{} casts from the migrations", casts.len()),
-            method(i, "protected function casts(): array", &casts_body),
-        ),
+        casts_member,
         (
             "$table".into(),
             m.table.to_owned(),

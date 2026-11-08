@@ -10,6 +10,7 @@ mod directives;
 mod dotenv;
 mod eloquent;
 mod formrequest;
+mod framework;
 mod helpers;
 mod hierarchy;
 mod index;
@@ -359,6 +360,15 @@ impl Laravel {
         laravel.then_some((project, root))
     }
 
+    fn index_in_background(&mut self, path: &str) {
+        if let Some((project, root)) = self.laravel_project(path)
+            && !self.cache.has_framework(&root)
+        {
+            let _task = host::begin_task("Indexing the Laravel project", false);
+            self.cache.warm(&project, &root);
+        }
+    }
+
     fn model_table(&mut self, project: &Project, root: &str, model: &str) -> Option<String> {
         let models = self.cache.get(RefKind::Model, project, root);
         let entry = models.iter().find(|e| e.key == model)?;
@@ -405,12 +415,14 @@ impl Laravel {
             .iter()
             .filter_map(|e| e.key.strip_prefix(&prefix).map(str::to_owned))
             .collect();
+        let framework = self.cache.framework(root);
         let model = members::Model {
             table: &table,
             columns: members::columns_of(&column_entries, &table),
             models,
             foreign,
             relations,
+            casts_method: !framework.installed || framework.casts_method,
         };
         members::items(&model, ctx, at, position(text, ctx.start))
     }
@@ -823,8 +835,9 @@ impl Laravel {
             && let Some(target) = relation_target(Some(&detail))
         {
             let kind = detail.split('(').next().unwrap_or(&detail);
+            let framework = self.cache.framework(root);
             return Some(relations::method_items(
-                &relations::relation_methods(kind),
+                &relations::relation_methods(kind, &framework),
                 &target,
                 typed,
                 replace,
@@ -850,8 +863,9 @@ impl Laravel {
         )?;
         match shape {
             Shape::Many => {
+                let framework = self.cache.framework(root);
                 return Some(relations::method_items(
-                    relations::COLLECTION,
+                    &relations::collection_methods(&framework),
                     &model,
                     typed,
                     replace,
@@ -870,8 +884,9 @@ impl Laravel {
                 for item in &mut out {
                     item.sort_text = item.sort_text.take().map(|s| format!("!{s}"));
                 }
+                let framework = self.cache.framework(root);
                 out.extend(relations::method_items(
-                    relations::QUERY,
+                    &relations::query_methods(&framework),
                     &model,
                     typed,
                     replace,
@@ -1120,18 +1135,46 @@ impl Laravel {
                     .collect();
                 (RefKind::OpenApi, entries)
             }
-            Want::Static(values) => {
-                let entries = values
+            Want::Static(values) => (RefKind::Rule, fixed_entries(values)),
+            Want::Container => {
+                let framework = self.cache.framework(root);
+                if framework.container.is_empty() {
+                    (RefKind::Rule, fixed_entries(&refs::CONTAINER))
+                } else {
+                    let entries = framework
+                        .container
+                        .iter()
+                        .map(|(k, class)| Entry::new(k, Some(class.clone()), "", Range::default()))
+                        .collect();
+                    (RefKind::Rule, entries)
+                }
+            }
+            Want::CastTypes => {
+                let framework = self.cache.framework(root);
+                if framework.casts.is_empty() {
+                    return (RefKind::Rule, fixed_entries(&refs::CAST_TYPES));
+                }
+                let mut entries: Vec<Entry> = refs::CAST_TYPES
                     .iter()
-                    .map(|(k, d)| {
-                        Entry::new(
-                            *k,
-                            (!d.is_empty()).then(|| (*d).to_owned()),
+                    .filter(|(k, _)| {
+                        if k.contains('\\') {
+                            framework.has_class(k)
+                        } else {
+                            framework.casts.iter().any(|c| c == k)
+                        }
+                    })
+                    .map(|(k, d)| Entry::new(*k, Some((*d).to_owned()), "", Range::default()))
+                    .collect();
+                for cast in &framework.casts {
+                    if !entries.iter().any(|e| &e.key == cast) {
+                        entries.push(Entry::new(
+                            cast,
+                            Some("cast type".into()),
                             "",
                             Range::default(),
-                        )
-                    })
-                    .collect();
+                        ));
+                    }
+                }
                 (RefKind::Rule, entries)
             }
             Want::SchemaProperties(call_start) => {
@@ -1551,6 +1594,20 @@ impl Laravel {
     }
 }
 
+fn fixed_entries(values: &[(&str, &str)]) -> Vec<Entry> {
+    values
+        .iter()
+        .map(|(k, d)| {
+            Entry::new(
+                *k,
+                (!d.is_empty()).then(|| (*d).to_owned()),
+                "",
+                Range::default(),
+            )
+        })
+        .collect()
+}
+
 fn show_status(project: &Project) {
     let version = project::laravel_version(project);
     let text = version
@@ -1638,12 +1695,9 @@ impl Providers for Laravel {
             return found;
         }
         if blade && let Some(start) = directives::typed_at(&doc.text, cursor) {
-            let mut entries: Vec<Entry> = directives::BUILTIN
-                .iter()
-                .map(|(name, detail)| {
-                    Entry::new(*name, Some((*detail).to_owned()), "", Range::default())
-                })
-                .collect();
+            let framework = self.cache.framework(&root);
+            let mut entries =
+                directives::builtin(&framework, |package| framework.has_package(package));
             entries.extend(
                 self.cache
                     .get(RefKind::Directive, &project, &root)
@@ -1673,13 +1727,17 @@ impl Providers for Laravel {
         if !blade && let Some((slot, start)) = hierarchy::slot_at(&doc.text, cursor) {
             let symbols = self.project_symbols(&project, &root);
             let composer = project.read_file("composer.json").unwrap_or_default();
+            let framework = self.cache.framework(&root);
             return hierarchy::items(
                 slot,
                 &doc.text,
                 project::rel(&root, &doc.path),
                 start,
                 at,
-                &composer,
+                &hierarchy::Installed {
+                    composer: &composer,
+                    framework_has: &|fqn| framework.has_class(fqn),
+                },
                 &symbols,
             );
         }
@@ -1909,6 +1967,8 @@ impl Laravel {
                     return Err("this project is not a Laravel application".into());
                 }
                 show_status(&project);
+                let _task = host::begin_task("Indexing the Laravel project", false);
+                self.cache.load_framework(&project, &root);
                 let counts: Vec<String> = RefKind::ALL
                     .iter()
                     .map(|k| (self.cache.get(*k, &project, &root).len(), k.label()))
@@ -1950,6 +2010,7 @@ impl openidea_plugin::Plugin for Laravel {
             if let Ok(root) = project.root()
                 && let Some((project, root)) = self.laravel_project(&root)
             {
+                let _task = host::begin_task("Indexing the Laravel project", false);
                 self.cache.warm(&project, &root);
                 self.project_symbols(&project, &root);
                 self.sync_mcp(&project);
@@ -2004,6 +2065,7 @@ impl openidea_plugin::Plugin for Laravel {
                     paths.insert(path.clone());
                 }
                 Event::FileOpened(path) => {
+                    self.index_in_background(path);
                     if let Some(project) = project_of(path)
                         && let Ok(root) = project.root()
                         && let Ok(text) = project.read_file(path)
@@ -2018,6 +2080,7 @@ impl openidea_plugin::Plugin for Laravel {
                     paths.insert(repo.clone());
                 }
                 Event::EditorFocused(Some(path)) => {
+                    self.index_in_background(path);
                     if let Some((project, _)) = self.laravel_project(path) {
                         self.sync_mcp(&project);
                         self.sync_helpers(&project);
@@ -3174,6 +3237,81 @@ Blade::if('admin', fn () => true);
             labels(&custom),
             ["@admin", "@elseadmin", "@unlessadmin", "@endadmin"]
         );
+    }
+
+    fn install_laravel_10(host: &MockHost) {
+        let base = "vendor/laravel/framework/";
+        host.add_file(
+            &format!("{base}composer.json"),
+            r#"{"autoload": {"psr-4": {"Illuminate\\": "src/Illuminate/"}}}"#,
+        );
+        host.add_file(
+            &format!("{base}src/Illuminate/Validation/Concerns/ValidatesAttributes.php"),
+            "<?php\nnamespace Illuminate\\Validation\\Concerns;\n\ntrait ValidatesAttributes\n{\n    public function validateRequired($attribute, $value) {}\n    public function validateString($attribute, $value) {}\n    public function validateExists($attribute, $value, $parameters) {}\n}\n",
+        );
+        host.add_file(
+            &format!("{base}src/Illuminate/Database/Eloquent/Concerns/HasAttributes.php"),
+            "<?php\nnamespace Illuminate\\Database\\Eloquent\\Concerns;\n\ntrait HasAttributes\n{\n    protected static $primitiveCastTypes = ['array', 'datetime'];\n}\n",
+        );
+        host.add_file(
+            &format!("{base}src/Illuminate/View/Compilers/BladeCompiler.php"),
+            "<?php\nnamespace Illuminate\\View\\Compilers;\n\nclass BladeCompiler\n{\n    use Concerns\\CompilesLoops;\n}\n",
+        );
+        host.add_file(
+            &format!("{base}src/Illuminate/View/Compilers/Concerns/CompilesLoops.php"),
+            "<?php\nnamespace Illuminate\\View\\Compilers\\Concerns;\n\ntrait CompilesLoops\n{\n    protected function compileForeach($expression) {}\n    protected function compileEndforeach() {}\n}\n",
+        );
+    }
+
+    #[test]
+    fn follows_the_installed_framework_version() {
+        let host = setup();
+        install_laravel_10(&host);
+        let mut plugin = Laravel::default();
+        let text = "<?php\n$request->validate(['email' => 'required|hex_color', 'name' => 's']);\n";
+        let d = doc("app/X.php", text);
+        let before = plugin.completion(&d, at(text, "'s'", 2), None);
+        assert!(labels(&before).contains(&"sometimes"));
+        plugin.handle_events(
+            &[Event::FileOpened("/project/app/X.php".into())],
+            &host.invocation(),
+        );
+        let rules = plugin.completion(&d, at(text, "'s'", 2), None);
+        assert_eq!(labels(&rules), ["exists", "string"]);
+        let problems = plugin.inspect("/project/app/X.php", text);
+        let messages: Vec<&str> = problems.iter().map(|p| p.message.as_str()).collect();
+        assert!(messages.contains(&"Validation rule 'hex_color' not found"));
+        assert!(!messages.iter().any(|m| m.contains("'required'")));
+        let defs = plugin.definition(&d, at(text, "required|", 2));
+        assert!(
+            defs.iter()
+                .any(|l| l.path.ends_with("ValidatesAttributes.php")),
+            "{defs:?}"
+        );
+        let model = "<?php\nclass User extends Authenticatable\n{\n    protected $cas\n}\n";
+        let members = plugin.completion(
+            &doc("app/Models/User.php", model),
+            at(model, "$cas\n", 4),
+            None,
+        );
+        assert_eq!(labels(&members), ["$casts"]);
+        assert!(members[0].insert_text.starts_with("protected $casts = "));
+        let blade = "<div>\n    @fore\n</div>\n";
+        let directives = plugin.completion(
+            &doc("resources/views/home.blade.php", blade),
+            at(blade, "@fore", 5),
+            None,
+        );
+        assert_eq!(labels(&directives), ["@foreach", "@endforeach"]);
+        let casts = "<?php\nclass Post extends Model\n{\n    protected $casts = ['published_at' => ''];\n}\n";
+        let types = plugin.completion(
+            &doc("app/Models/Post.php", casts),
+            at(casts, "=> '", 4),
+            None,
+        );
+        let types = labels(&types);
+        assert!(types.contains(&"datetime") && types.contains(&"array"));
+        assert!(!types.contains(&"hashed") && !types.contains(&"encrypted"));
     }
 
     #[test]

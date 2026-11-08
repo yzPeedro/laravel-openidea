@@ -6,7 +6,7 @@
   <a href="https://github.com/yzPeedro/laravel-openidea/actions/workflows/ci.yml"><img src="https://github.com/yzPeedro/laravel-openidea/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/yzPeedro/laravel-openidea/releases/latest"><img src="https://img.shields.io/github/v/release/yzPeedro/laravel-openidea?color=ff2d20&label=release" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/OpenIDEA-0.1.38%2B-4f46e5" alt="OpenIDEA 0.1.38 and newer">
-  <img src="https://img.shields.io/badge/Laravel-10%2B-ff2d20?logo=laravel&logoColor=white" alt="Laravel 10 and newer">
+  <img src="https://img.shields.io/badge/Laravel-6%2B-ff2d20?logo=laravel&logoColor=white" alt="Laravel 6 and newer">
   <img src="https://img.shields.io/badge/built%20with-Rust%20%2B%20WebAssembly-orange?logo=rust" alt="Rust and WebAssembly">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
 </p>
@@ -60,7 +60,7 @@ https://github.com/user-attachments/assets/a653530b-f3d4-44e3-921e-bef9119cd659
 
 ## Installation
 
-**Requirements:** [OpenIDEA](https://github.com/l0ng-ai/openidea/releases/latest) 0.1.38 or newer and a Laravel 10 (or newer) project. PHP or Docker Compose is needed for the runtime features (Artisan, Tinker, Live Audit).
+**Requirements:** [OpenIDEA](https://github.com/l0ng-ai/openidea/releases/latest) 0.1.38 or newer and a Laravel project. Completion and inspections follow the Laravel version installed in `vendor/` (tested from Laravel 6 to 13); the runtime features are tested on Laravel 10 and newer. PHP or Docker Compose is needed for the runtime features (Artisan, Tinker, Live Audit).
 
 1. **Download** `laravel-openidea-<version>.zip` from the [latest release](https://github.com/yzPeedro/laravel-openidea/releases/latest).
 2. In OpenIDEA open **Settings › Plugins › ⚙ › Install Plugin from Package File…** and pick the zip.
@@ -278,6 +278,7 @@ Live Audit reads two environment variables from your app: `OPENIDEA_AUDIT=false`
 ```
 OpenIDEA ── WIT (openidea:plugin@1.0) ──► laravel-openidea.wasm (Rust)
   │                                         ├─ index/      cached indexes of routes, config, views, models, migrations…
+  │                                         ├─ framework.rs rules, directives, casts and methods of the installed laravel/framework
   │  completion, definitions, gutter,       ├─ refs.rs     which helper, facade or directive points to which index
   │  code actions, Blade syntax             ├─ php.rs      PHP and Blade tokenizer with call context
   │                                         ├─ panels.rs   the hub (HTML view) and its sections

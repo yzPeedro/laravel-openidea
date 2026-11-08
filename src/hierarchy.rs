@@ -810,15 +810,24 @@ pub fn project_symbols(scan: &Scan) -> Vec<ProjectSymbol> {
         .collect()
 }
 
+pub struct Installed<'a> {
+    pub composer: &'a str,
+    pub framework_has: &'a dyn Fn(&str) -> bool,
+}
+
 pub fn items(
     slot: Slot,
     text: &str,
     path: &str,
     start: usize,
     at: Position,
-    composer: &str,
+    installed: &Installed,
     project: &[ProjectSymbol],
 ) -> Vec<CompletionItem> {
+    let Installed {
+        composer,
+        framework_has,
+    } = installed;
     let cursor = openidea_plugin::text::offset(text, at)
         .unwrap_or(start)
         .clamp(start, text.len());
@@ -875,6 +884,12 @@ pub fn items(
             continue;
         }
         if known.fqn == "Tests\\TestCase" && !path.contains("tests/") {
+            continue;
+        }
+        if known.package.is_none_or(|p| p == "laravel/framework")
+            && known.fqn.starts_with("Illuminate\\")
+            && !framework_has(known.fqn)
+        {
             continue;
         }
         let kind = match slot {
@@ -981,7 +996,10 @@ mod tests {
             "app/Models/User.php",
             text.len(),
             at,
-            "\"laravel/sanctum\"",
+            &Installed {
+                composer: "\"laravel/sanctum\"",
+                framework_has: &|_| true,
+            },
             &project,
         );
         let first = items.iter().min_by_key(|i| i.sort_text.clone()).unwrap();
@@ -1000,5 +1018,19 @@ mod tests {
         );
         assert!(!items.iter().any(|i| i.insert_text.contains("Passport")));
         assert!(items.iter().any(|i| i.label == "HasAvatar"));
+        let older = super::items(
+            Slot::Trait,
+            text,
+            "app/Models/User.php",
+            text.len(),
+            at,
+            &Installed {
+                composer: "",
+                framework_has: &|fqn| !fqn.ends_with("HasUlids"),
+            },
+            &project,
+        );
+        assert!(older.iter().any(|i| i.label == "SoftDeletes"));
+        assert!(!older.iter().any(|i| i.label == "HasUlids"));
     }
 }

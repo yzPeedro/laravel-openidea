@@ -11,6 +11,9 @@ pub struct Members {
     pub methods: Vec<(String, String, bool)>,
     pub properties: Vec<(String, String)>,
     pub traits: Vec<String>,
+    pub extends: Option<String>,
+    pub hidden: Vec<(String, String)>,
+    pub offsets: Vec<(String, usize)>,
 }
 
 fn ident(tokens: &[Token], i: usize) -> Option<&str> {
@@ -40,6 +43,10 @@ pub fn read(text: &str) -> Option<Members> {
         ..Members::default()
     };
     let open = (at..tokens.len()).find(|&i| tokens[i].kind == Kind::Open('{'))?;
+    m.extends = (at + 2..open)
+        .find(|&i| ident(&tokens, i).is_some_and(|w| w.eq_ignore_ascii_case("extends")))
+        .and_then(|i| ident(&tokens, i + 1))
+        .map(str::to_owned);
     if m.kind == "enum" && tokens.get(at + 2).map(|t| &t.kind) == Some(&Kind::Colon) {
         m.backed = ident(&tokens, at + 3).map(str::to_owned);
     }
@@ -103,12 +110,16 @@ pub fn read(text: &str) -> Option<Members> {
                         j += 1;
                     }
                     let sig_end = tokens.get(j).map_or(text.len(), |t| t.start);
+                    m.offsets.push((name.to_owned(), tokens[i + 1].start));
                     if public && name != "__construct" && !name.starts_with("__") {
                         m.methods.push((
                             name.to_owned(),
                             collapse(&text[sig_start..sig_end]),
                             is_static,
                         ));
+                    } else if !public {
+                        m.hidden
+                            .push((name.to_owned(), collapse(&text[sig_start..sig_end])));
                     }
                     if name == "__construct" {
                         let mut p = i + 2;

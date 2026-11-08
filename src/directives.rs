@@ -1,4 +1,8 @@
-pub const BUILTIN: &[(&str, &str)] = &[
+use crate::framework::Framework;
+use crate::index::Entry;
+use openidea_plugin::Range;
+
+pub const BUILTIN: &[Directive] = &[
     ("if", "@if(condition) … @endif"),
     ("elseif", "@elseif(condition)"),
     ("else", "@else"),
@@ -109,34 +113,81 @@ pub const BUILTIN: &[(&str, &str)] = &[
     ("inject", "@inject('name', 'Class')"),
     ("fragment", "@fragment('name') … @endfragment"),
     ("endfragment", "closes @fragment"),
-    ("inertia", "Inertia root element"),
-    ("inertiaHead", "Inertia head"),
-    ("routes", "Ziggy routes"),
-    ("livewire", "@livewire('component', [params])"),
-    ("livewireStyles", "Livewire styles"),
-    ("livewireScripts", "Livewire scripts"),
-    ("livewireScriptConfig", "Livewire script config"),
-    ("persist", "@persist('key') … @endpersist"),
-    ("endpersist", "closes @persist"),
-    ("teleport", "@teleport('#target') … @endteleport"),
-    ("endteleport", "closes @teleport"),
-    ("volt", "@volt('name') … @endvolt"),
-    ("endvolt", "closes @volt"),
-    ("role", "@role('admin') … @endrole (Spatie)"),
-    ("endrole", "closes @role"),
-    ("hasrole", "@hasrole('admin') … @endhasrole (Spatie)"),
-    ("endhasrole", "closes @hasrole"),
-    (
-        "hasanyrole",
-        "@hasanyrole(['a', 'b']) … @endhasanyrole (Spatie)",
-    ),
-    ("endhasanyrole", "closes @hasanyrole"),
-    (
-        "unlessrole",
-        "@unlessrole('admin') … @endunlessrole (Spatie)",
-    ),
-    ("endunlessrole", "closes @unlessrole"),
 ];
+
+pub const SYNTAX: [&str; 3] = ["endphp", "verbatim", "endverbatim"];
+
+pub type Directive = (&'static str, &'static str);
+
+pub const PACKAGES: &[(&[&str], &[Directive])] = &[
+    (
+        &["inertiajs/inertia-laravel"],
+        &[
+            ("inertia", "Inertia root element"),
+            ("inertiaHead", "Inertia head"),
+        ],
+    ),
+    (
+        &["tightenco/ziggy", "tighten/ziggy"],
+        &[("routes", "Ziggy routes")],
+    ),
+    (
+        &["livewire/livewire"],
+        &[
+            ("livewire", "@livewire('component', [params])"),
+            ("livewireStyles", "Livewire styles"),
+            ("livewireScripts", "Livewire scripts"),
+            ("livewireScriptConfig", "Livewire script config"),
+            ("persist", "@persist('key') … @endpersist"),
+            ("endpersist", "closes @persist"),
+            ("teleport", "@teleport('#target') … @endteleport"),
+            ("endteleport", "closes @teleport"),
+        ],
+    ),
+    (
+        &["livewire/volt"],
+        &[
+            ("volt", "@volt('name') … @endvolt"),
+            ("endvolt", "closes @volt"),
+        ],
+    ),
+    (
+        &["spatie/laravel-permission"],
+        &[
+            ("role", "@role('admin') … @endrole (Spatie)"),
+            ("endrole", "closes @role"),
+            ("hasrole", "@hasrole('admin') … @endhasrole (Spatie)"),
+            ("endhasrole", "closes @hasrole"),
+            (
+                "hasanyrole",
+                "@hasanyrole(['a', 'b']) … @endhasanyrole (Spatie)",
+            ),
+            ("endhasanyrole", "closes @hasanyrole"),
+            (
+                "unlessrole",
+                "@unlessrole('admin') … @endunlessrole (Spatie)",
+            ),
+            ("endunlessrole", "closes @unlessrole"),
+        ],
+    ),
+];
+
+pub fn builtin(framework: &Framework, installed: impl Fn(&str) -> bool) -> Vec<Entry> {
+    let fixed = |(name, detail): &Directive| {
+        Entry::new(*name, Some((*detail).to_owned()), "", Range::default())
+    };
+    let mut out: Vec<Entry> = if framework.directives.is_empty() {
+        BUILTIN.iter().map(fixed).collect()
+    } else {
+        framework.directives.clone()
+    };
+    for (packages, directives) in PACKAGES {
+        if !framework.installed || packages.iter().any(|p| installed(p)) {
+            out.extend(directives.iter().map(fixed));
+        }
+    }
+    out
+}
 
 pub fn typed_at(text: &str, cursor: usize) -> Option<usize> {
     let before = &text[..cursor];

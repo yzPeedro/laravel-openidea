@@ -2,6 +2,14 @@
 
 All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+- Completion and inspections follow the Laravel version the project has installed, read from `vendor/laravel/framework`, instead of a fixed list written for Laravel 10 and newer. Validation rules, Blade directives, cast types, the built-in middleware aliases, container ids, the methods after collection, query and relation chains, and the Laravel classes, interfaces and traits after `extends`, `implements` and `use` are the ones that version has, so a rule or directive added in a later version is not suggested, and is reported as unknown, in an older project. Tested with Laravel 6, 8, 9, 10, 11, 12 and 13.
+- Ctrl+click on a validation rule opens its `validate…` method in the framework.
+- The model member snippet for casts writes the `protected $casts` property on Laravel versions without the `casts()` method.
+- Directives from Livewire, Volt, Inertia, Ziggy and Spatie Permission are only suggested when the package is installed.
+- Without `vendor/` (before `composer install`) the plugin falls back to the built-in lists.
+
 ## 0.14.1
 
 - Listed in the OpenIDEA marketplace (Settings › Plugins › Available): the plugin has its own icon, the Frameworks, Tools and AI categories and a fuller description.

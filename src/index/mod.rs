@@ -22,6 +22,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Instant;
 
+use crate::framework::Framework;
 pub use classes::{Class, parse_class};
 
 const SLOW_INDEX_MS: u128 = 2000;
@@ -230,7 +231,13 @@ impl RefKind {
                 Self::View | Self::Section | Self::Stack => has(&["resources/views/"]),
                 Self::Env => has(&[".env"]),
                 Self::Translation => has(&["lang/", "resources/lang/"]),
-                Self::Middleware => has(&["bootstrap/app.php", "app/Http/Kernel.php"]),
+                Self::Middleware => has(&[
+                    "bootstrap/app.php",
+                    "app/Http/Kernel.php",
+                    "composer.lock",
+                    "vendor/composer/installed.json",
+                ]),
+                Self::Rule => is_framework_manifest(&p),
                 Self::Ability | Self::RateLimiter => has(&["app/"]),
                 Self::Table | Self::Column => has(&["database/migrations/", "app/Models/"]),
                 Self::Model | Self::Relation | Self::Scope | Self::Pivot => {
@@ -282,10 +289,50 @@ impl Entry {
 #[derive(Default)]
 pub struct Cache {
     built: BTreeMap<(String, RefKind), Rc<Vec<Entry>>>,
+    frameworks: BTreeMap<String, Rc<Framework>>,
     pub locale: String,
 }
 
 impl Cache {
+    pub fn framework(&self, root: &str) -> Rc<Framework> {
+        self.frameworks.get(root).cloned().unwrap_or_default()
+    }
+
+    pub fn has_framework(&self, root: &str) -> bool {
+        self.frameworks.contains_key(root)
+    }
+
+    pub fn load_framework(&mut self, project: &Project, root: &str) {
+        if self.has_framework(root) {
+            return;
+        }
+        let started = Instant::now();
+        let read = |path: &str| project.read_file(path).ok();
+        let mut framework = crate::framework::load(&read, root);
+        let classes = crate::hierarchy::BASES
+            .iter()
+            .chain(crate::hierarchy::INTERFACES)
+            .chain(crate::hierarchy::TRAITS)
+            .map(|known| known.fqn)
+            .chain(crate::refs::CAST_TYPES.iter().map(|(name, _)| *name))
+            .filter(|fqn| fqn.starts_with("Illuminate\\"));
+        let packages = crate::directives::PACKAGES
+            .iter()
+            .flat_map(|(names, _)| names.iter().copied());
+        framework.check(&read, classes, packages);
+        let took = started.elapsed().as_millis();
+        if took > SLOW_INDEX_MS {
+            crate::audit::warn(
+                "index",
+                format!("reading vendor/laravel/framework took {took} ms"),
+            );
+        }
+        self.frameworks.insert(root.to_owned(), Rc::new(framework));
+        for kind in [RefKind::Rule, RefKind::Middleware] {
+            self.built.remove(&(root.to_owned(), kind));
+        }
+    }
+
     pub fn get(&mut self, kind: RefKind, project: &Project, root: &str) -> Rc<Vec<Entry>> {
         let key = (root.to_owned(), kind);
         if let Some(entries) = self.built.get(&key) {
@@ -317,6 +364,10 @@ impl Cache {
             None if kind == RefKind::SocialiteDriver => {
                 packages::socialite(&self.get(RefKind::Config, project, root))
             }
+            None if kind == RefKind::Rule => rules::entries(&self.framework(root)),
+            None if kind == RefKind::Middleware => {
+                middleware::index(project, root, &self.framework(root))
+            }
             None => build(kind, project, root, &self.locale),
         });
         let took = started.elapsed().as_millis();
@@ -335,12 +386,16 @@ impl Cache {
     }
 
     pub fn warm(&mut self, project: &Project, root: &str) {
+        self.load_framework(project, root);
         for kind in RefKind::ALL {
             self.get(kind, project, root);
         }
     }
 
     pub fn invalidate(&mut self, root: &str, path: &str) -> bool {
+        if is_framework_manifest(rel(root, path)) {
+            self.frameworks.remove(root);
+        }
         let kinds = RefKind::affected_by(rel(root, path));
         for kind in &kinds {
             self.built.remove(&(root.to_owned(), *kind));
@@ -350,7 +405,15 @@ impl Cache {
 
     pub fn clear(&mut self) {
         self.built.clear();
+        self.frameworks.clear();
     }
+}
+
+fn is_framework_manifest(rel_path: &str) -> bool {
+    matches!(
+        rel_path.replace('\\', "/").as_str(),
+        "composer.lock" | "vendor/composer/installed.json"
+    )
 }
 
 fn derived(config: &[Entry], prefix: &str) -> Vec<Entry> {
@@ -375,7 +438,6 @@ fn build(kind: RefKind, project: &Project, root: &str, locale: &str) -> Vec<Entr
         RefKind::View => views::index(project, root),
         RefKind::Env => env::index(project, root),
         RefKind::Translation => lang::index(project, root, locale),
-        RefKind::Middleware => middleware::index(project, root),
         RefKind::Ability => auth::abilities(project, root),
         RefKind::RateLimiter => auth::rate_limiters(project, root),
         RefKind::Table => database::tables(project, root),
@@ -390,7 +452,6 @@ fn build(kind: RefKind, project: &Project, root: &str, locale: &str) -> Vec<Entr
         RefKind::Section => blade::sections(project, root),
         RefKind::Stack => blade::stacks(project, root),
         RefKind::Asset => assets::assets(project, root),
-        RefKind::Rule => rules::entries(),
         RefKind::OpenApi => openapi::index(project, root),
         RefKind::TokenAbility => packages::token_abilities(project, root),
         RefKind::Channel => packages::channels(project, root),
