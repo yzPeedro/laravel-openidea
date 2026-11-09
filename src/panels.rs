@@ -1426,6 +1426,9 @@ impl Views for Laravel {
     }
 
     fn handle(&mut self, view: &str, event: ViewEvent, ctx: &Invocation) -> Result<(), Error> {
+        if let Some(root) = ctx.project().and_then(|p| p.root().ok()) {
+            self.status_for(&root);
+        }
         let result = self.handle_request(view, event, ctx);
         if let Err(e) = &result {
             audit::failed(&format!("hub request on {view}"), e);

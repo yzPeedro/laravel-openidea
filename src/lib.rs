@@ -128,6 +128,7 @@ pub struct Laravel {
 const EVENT_SLICE: std::time::Duration = std::time::Duration::from_millis(250);
 const WARM_SLICE: std::time::Duration = std::time::Duration::from_millis(1500);
 const REFRESH_BUDGET: std::time::Duration = std::time::Duration::from_millis(3500);
+const COLD_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 const PROVIDER_SLICE: std::time::Duration = std::time::Duration::from_millis(60);
 pub(crate) const VIEW_SLICE: std::time::Duration = std::time::Duration::from_millis(2500);
 
@@ -426,6 +427,10 @@ impl Laravel {
                 known
             }
         };
+        if laravel && !self.cache.has_framework(&root) {
+            let _task = host::begin_task("Indexing the Laravel project", false);
+            self.warm_up(&project, &root, COLD_BUDGET);
+        }
         laravel.then_some((project, root))
     }
 
@@ -443,6 +448,8 @@ impl Laravel {
     }
 
     fn warm_up(&mut self, project: &Project, root: &str, budget: std::time::Duration) -> bool {
+        let _task = (!self.cache.has_framework(root))
+            .then(|| host::begin_task("Indexing the Laravel project", false));
         let deadline = std::time::Instant::now() + budget;
         if !self.cache.warm_until(project, root, deadline) || std::time::Instant::now() >= deadline
         {
@@ -489,8 +496,12 @@ impl Laravel {
             tooltip: Some("Laravel OpenIdea — click to refresh the index".into()),
             command: Some("refresh-index".into()),
         };
-        if host::set_window_status_item(STATUS_ID, &item).is_err() {
-            host::set_status_item(STATUS_ID, &item);
+        let _ = host::set_window_status_item(STATUS_ID, &item);
+    }
+
+    pub(crate) fn status_for(&mut self, path: &str) {
+        if let Some((project, root)) = self.laravel_project(path) {
+            self.show_status(&project, &root);
         }
     }
 
@@ -2754,6 +2765,7 @@ impl openidea_plugin::Plugin for Laravel {
                 }
                 Event::FileOpened(path) => {
                     self.index_in_background(path);
+                    self.status_for(path);
                     if let Some(project) = project_of(path)
                         && let Ok(root) = project.root()
                         && let Ok(text) = project.read_file(path)
@@ -4735,8 +4747,8 @@ Blade::if('admin', fn () => true);
         let mut plugin = Laravel::default();
         let text = "<?php\n$request->validate(['email' => 'required|hex_color', 'name' => 's']);\n";
         let d = doc("app/X.php", text);
-        let before = plugin.completion(&d, at(text, "'s'", 2), None);
-        assert!(labels(&before).contains(&"sometimes"));
+        let first = plugin.completion(&d, at(text, "'s'", 2), None);
+        assert_eq!(labels(&first), ["exists", "string"]);
         plugin.handle_events(
             &[Event::FileOpened("/project/app/X.php".into())],
             &host.invocation(),
