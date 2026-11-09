@@ -37,18 +37,16 @@ fn setting(name: &str) -> bool {
 
 impl Laravel {
     pub(crate) fn cached_facts(&mut self, project: &Project, root: &str) -> std::rc::Rc<Parts> {
-        if let Some((cached_root, facts)) = &self.facts_cache
-            && cached_root == root
-        {
+        if let Some(facts) = self.facts_cache.get(root) {
             return facts.clone();
         }
         let facts = std::rc::Rc::new(self.check_facts(project, root));
-        self.facts_cache = Some((root.to_owned(), facts.clone()));
+        self.facts_cache.insert(root.to_owned(), facts.clone());
         facts
     }
 
     pub(crate) fn facts_ready(&self, root: &str) -> bool {
-        self.facts_cache.as_ref().is_some_and(|(r, _)| r == root)
+        self.facts_cache.contains_key(root)
     }
 
     fn check_facts(&mut self, project: &Project, root: &str) -> Parts {

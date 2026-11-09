@@ -319,7 +319,8 @@ impl Cache {
         let packages = crate::directives::PACKAGES
             .iter()
             .flat_map(|(names, _)| names.iter().copied());
-        framework.check(&read, classes, packages);
+        let exists = |path: &str| project.exists(path).unwrap_or(false);
+        framework.check(&exists, classes, packages);
         let took = started.elapsed().as_millis();
         if took > SLOW_INDEX_MS {
             crate::audit::warn(
@@ -385,11 +386,15 @@ impl Cache {
         entries
     }
 
-    pub fn warm(&mut self, project: &Project, root: &str) {
+    pub fn warm_until(&mut self, project: &Project, root: &str, deadline: Instant) -> bool {
         self.load_framework(project, root);
         for kind in RefKind::ALL {
+            if Instant::now() >= deadline {
+                return false;
+            }
             self.get(kind, project, root);
         }
+        true
     }
 
     pub fn invalidate(&mut self, root: &str, path: &str) -> bool {
@@ -401,6 +406,12 @@ impl Cache {
             self.built.remove(&(root.to_owned(), *kind));
         }
         !kinds.is_empty()
+    }
+
+    pub fn built_len(&self, root: &str, kind: RefKind) -> Option<usize> {
+        self.built
+            .get(&(root.to_owned(), kind))
+            .map(|entries| entries.len())
     }
 
     pub fn clear(&mut self) {

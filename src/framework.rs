@@ -60,7 +60,7 @@ pub struct Framework {
 impl Framework {
     pub fn check<'a>(
         &mut self,
-        read: &dyn Fn(&str) -> Option<String>,
+        exists: &dyn Fn(&str) -> bool,
         classes: impl IntoIterator<Item = &'a str>,
         packages: impl IntoIterator<Item = &'a str>,
     ) {
@@ -69,13 +69,11 @@ impl Framework {
             if self.classes.contains_key(fqn) {
                 continue;
             }
-            let found = candidates(&self.psr4, fqn)
-                .iter()
-                .any(|path| read(path).is_some());
+            let found = candidates(&self.psr4, fqn).iter().any(|path| exists(path));
             self.classes.insert(fqn.to_owned(), found);
         }
         for package in packages {
-            if read(&format!("vendor/{package}/composer.json")).is_some() {
+            if exists(&format!("vendor/{package}/composer.json")) {
                 self.packages.insert(package.to_owned());
             }
         }
@@ -769,7 +767,7 @@ mod tests {
         let mut fw = fw;
         let stringable = "Illuminate\\Database\\Eloquent\\Casts\\AsStringable";
         fw.check(
-            &read,
+            &|path: &str| read(path).is_some(),
             ["Illuminate\\Foundation\\Application", stringable],
             ["livewire/livewire"],
         );

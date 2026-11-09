@@ -118,13 +118,16 @@ pub struct Laravel {
     hub_pending: Option<hubtabs::Pending>,
     hub_synced: BTreeSet<String>,
     hub_tables: Option<(String, HubTables)>,
-    facts_cache: Option<(String, std::rc::Rc<checks::Parts>)>,
+    facts_cache: BTreeMap<String, std::rc::Rc<checks::Parts>>,
     live: BTreeMap<String, u64>,
     files: BTreeMap<String, projectfiles::Store>,
     stamps: BTreeMap<String, Option<(u64, Option<u64>)>>,
+    statuses: BTreeMap<String, String>,
 }
 
 const EVENT_SLICE: std::time::Duration = std::time::Duration::from_millis(250);
+const WARM_SLICE: std::time::Duration = std::time::Duration::from_millis(1500);
+const REFRESH_BUDGET: std::time::Duration = std::time::Duration::from_millis(3500);
 const PROVIDER_SLICE: std::time::Duration = std::time::Duration::from_millis(60);
 pub(crate) const VIEW_SLICE: std::time::Duration = std::time::Duration::from_millis(2500);
 
@@ -418,7 +421,7 @@ impl Laravel {
                 let known = project::is_laravel(&project);
                 self.projects.insert(root.clone(), known);
                 if known {
-                    show_status(&project);
+                    self.show_status(&project, &root);
                 }
                 known
             }
@@ -433,12 +436,20 @@ impl Laravel {
                 || !self.usages_ready(&root))
         {
             let _task = host::begin_task("Indexing the Laravel project", false);
-            if !self.cache.has_framework(&root) || !self.facts_ready(&root) {
-                self.cache.warm(&project, &root);
-                self.cached_facts(&project, &root);
+            if self.warm_up(&project, &root, WARM_SLICE) {
+                self.read_project(&project, &root, EVENT_SLICE);
             }
-            self.read_project(&project, &root, EVENT_SLICE);
         }
+    }
+
+    fn warm_up(&mut self, project: &Project, root: &str, budget: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + budget;
+        if !self.cache.warm_until(project, root, deadline) || std::time::Instant::now() >= deadline
+        {
+            return false;
+        }
+        self.cached_facts(project, root);
+        std::time::Instant::now() < deadline
     }
 
     fn unreported_changes(&mut self, project: &Project, root: &str) -> Vec<String> {
@@ -464,9 +475,28 @@ impl Laravel {
         changed
     }
 
+    fn show_status(&mut self, project: &Project, root: &str) {
+        let text = self
+            .statuses
+            .entry(root.to_owned())
+            .or_insert_with(|| {
+                project::laravel_version(project)
+                    .map_or("Laravel".to_owned(), |v| format!("Laravel {v}"))
+            })
+            .clone();
+        let item = StatusItem {
+            text,
+            tooltip: Some("Laravel OpenIdea — click to refresh the index".into()),
+            command: Some("refresh-index".into()),
+        };
+        if host::set_window_status_item(STATUS_ID, &item).is_err() {
+            host::set_status_item(STATUS_ID, &item);
+        }
+    }
+
     fn forget_everything(&mut self) {
         self.hub_tables = None;
-        self.facts_cache = None;
+        self.facts_cache.clear();
         self.files.clear();
         self.originals.clear();
         self.live.clear();
@@ -493,9 +523,14 @@ impl Laravel {
             return false;
         };
         self.hub_tables = None;
-        self.facts_cache = None;
+        self.facts_cache.clear();
         self.live.remove(path);
         self.stamps.remove(path);
+        if path.replace('\\', "/").ends_with("/composer.lock")
+            && self.statuses.remove(&root).is_some()
+        {
+            self.show_status(&project, &root);
+        }
         self.reindex_usages(&project, &root, path);
         self.cache.invalidate(&root, path);
         if path.replace('\\', "/").contains("/tests/") {
@@ -2149,21 +2184,6 @@ fn fixed_entries(values: &[(&str, &str)]) -> Vec<Entry> {
         .collect()
 }
 
-fn show_status(project: &Project) {
-    let version = project::laravel_version(project);
-    let text = version
-        .as_deref()
-        .map_or("Laravel".to_owned(), |v| format!("Laravel {v}"));
-    host::set_status_item(
-        STATUS_ID,
-        &StatusItem {
-            text,
-            tooltip: Some("Laravel OpenIdea — click to refresh the index".into()),
-            command: Some("refresh-index".into()),
-        },
-    );
-}
-
 fn items(kind: RefKind, entries: &[Entry], typed: &str, replace: Range) -> Vec<CompletionItem> {
     let typed = typed.to_lowercase();
     let mut seen = BTreeSet::new();
@@ -2610,26 +2630,38 @@ impl Laravel {
                 if !project::is_laravel(&project) {
                     return Err("this project is not a Laravel application".into());
                 }
-                show_status(&project);
+                self.statuses.remove(&root);
+                self.show_status(&project, &root);
                 let _task = host::begin_task("Indexing the Laravel project", false);
-                self.cache.load_framework(&project, &root);
+                let deadline = std::time::Instant::now() + REFRESH_BUDGET;
+                let mut complete = self.cache.warm_until(&project, &root, deadline);
                 self.files.remove(&root);
-                self.read_project(&project, &root, VIEW_SLICE);
+                let left = deadline
+                    .saturating_duration_since(std::time::Instant::now())
+                    .min(VIEW_SLICE);
+                complete &= !left.is_zero() && self.read_project(&project, &root, left);
                 let mut counts: Vec<String> = RefKind::ALL
                     .iter()
-                    .map(|k| (self.cache.get(*k, &project, &root).len(), k.label()))
+                    .filter_map(|k| Some((self.cache.built_len(&root, *k)?, k.label())))
                     .filter(|(n, _)| *n > 0)
                     .map(|(n, label)| format!("{n} {label}"))
                     .collect();
-                let statics = self.static_candidates(&project, &root);
-                let facades = statics
-                    .iter()
-                    .filter(|c| c.detail.starts_with("Laravel"))
-                    .count();
-                if facades > 0 {
-                    counts.push(format!("{facades} facades and helpers"));
+                if complete {
+                    let statics = self.static_candidates(&project, &root);
+                    let facades = statics
+                        .iter()
+                        .filter(|c| c.detail.starts_with("Laravel"))
+                        .count();
+                    if facades > 0 {
+                        counts.push(format!("{facades} facades and helpers"));
+                    }
                 }
-                Ok(Some(format!("Indexed {}", counts.join(", "))))
+                let rest = if complete {
+                    ""
+                } else {
+                    "; the rest keeps indexing in the background"
+                };
+                Ok(Some(format!("Indexed {}{rest}", counts.join(", "))))
             }
             "related-file" => self.related_file(ctx),
             "artisan-optimize-clear" => self.artisan_terminal(ctx, "optimize:clear"),
@@ -2667,10 +2699,7 @@ impl openidea_plugin::Plugin for Laravel {
             if let Ok(root) = project.root()
                 && let Some((project, root)) = self.laravel_project(&root)
             {
-                let _task = host::begin_task("Indexing the Laravel project", false);
                 self.unreported_changes(&project, &root);
-                self.cache.warm(&project, &root);
-                self.cached_facts(&project, &root);
                 self.sync_mcp(&project);
                 self.sync_helpers(&project);
             }
@@ -2704,7 +2733,7 @@ impl openidea_plugin::Plugin for Laravel {
                             self.sync_helpers(&project);
                         }
                         self.hub_tables = None;
-                        self.facts_cache = None;
+                        self.facts_cache.clear();
                         self.live.remove(path);
                         self.reindex_usages(&project, &root, path);
                         let before = self.snapshot_keys(&project, &root, path);
@@ -2758,7 +2787,8 @@ impl openidea_plugin::Plugin for Laravel {
                 Event::EditorFocused(Some(path)) => {
                     self.index_in_background(path);
                     self.hub_tab_focused(path);
-                    if let Some((project, _)) = self.laravel_project(path) {
+                    if let Some((project, root)) = self.laravel_project(path) {
+                        self.show_status(&project, &root);
                         self.sync_mcp(&project);
                         self.sync_helpers(&project);
                         let _ = self.sync_hub_files(&project, false);
@@ -2778,10 +2808,13 @@ impl openidea_plugin::Plugin for Laravel {
                 paths.extend(self.unreported_changes(&project, &root));
             }
         }
+        let started = std::time::Instant::now();
         for path in paths {
-            if let Some((project, root)) = self.laravel_project(&path) {
-                self.cache.warm(&project, &root);
-                self.cached_facts(&project, &root);
+            let budget = WARM_SLICE.saturating_sub(started.elapsed());
+            if !budget.is_zero()
+                && let Some((project, root)) = self.laravel_project(&path)
+            {
+                self.warm_up(&project, &root, budget);
             }
             self.publish(&path);
         }
@@ -4461,6 +4494,45 @@ Blade::if('admin', fn () => true);
         );
         let again = plugin.completion(&d, at(text, "('", 2), None);
         assert!(labels(&again).contains(&"brand.new"));
+    }
+
+    #[test]
+    fn each_window_shows_its_own_laravel_version() {
+        let host = setup();
+        let mut plugin = Laravel::default();
+        let focus = [Event::EditorFocused(Some("/project/routes/web.php".into()))];
+        plugin.handle_events(&focus, &host.invocation());
+        assert_eq!(host.status_items()[STATUS_ID].text, "Laravel 12.3.0");
+        host.add_file(
+            "composer.lock",
+            "{\"packages\": [{\n  \"name\": \"laravel/framework\",\n  \"version\": \"v13.10.2\"\n}]}",
+        );
+        plugin.handle_events(&focus, &host.invocation());
+        assert_eq!(host.status_items()[STATUS_ID].text, "Laravel 13.10.2");
+    }
+
+    #[test]
+    fn warming_up_stops_at_the_deadline_and_resumes_later() {
+        let _host = setup();
+        let mut plugin = Laravel::default();
+        let project = crate::project::project_of("/project/routes/web.php").unwrap();
+        let spent = std::time::Instant::now();
+        assert!(!plugin.cache.warm_until(&project, "/project", spent));
+        assert!(plugin.cache.has_framework("/project"));
+        assert!(
+            RefKind::ALL
+                .iter()
+                .all(|k| plugin.cache.built_len("/project", *k).is_none())
+        );
+        assert!(!plugin.warm_up(&project, "/project", std::time::Duration::ZERO));
+        assert!(!plugin.facts_ready("/project"));
+        assert!(plugin.warm_up(&project, "/project", std::time::Duration::from_secs(60)));
+        assert!(plugin.facts_ready("/project"));
+        assert!(
+            RefKind::ALL
+                .iter()
+                .all(|k| plugin.cache.built_len("/project", *k).is_some())
+        );
     }
 
     #[test]
