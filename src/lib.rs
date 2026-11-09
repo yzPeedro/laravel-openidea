@@ -3,38 +3,51 @@ mod audit;
 mod blade_syntax;
 mod casts;
 mod checks;
+mod closures;
 mod completions;
 mod configfiles;
 mod devtools;
 mod directives;
 mod dotenv;
 mod eloquent;
+mod enums;
+mod factories;
 mod formrequest;
+mod framework;
 mod helpers;
 mod hierarchy;
+mod hubtabs;
 mod index;
+mod indexer;
 mod inspect;
 mod inspections;
 mod logs;
 mod mcp;
 mod members;
 mod modeldoc;
+mod modelmap;
+mod namespaces;
 mod objects;
 mod panels;
 mod pest;
 mod php;
 mod project;
+mod projectfiles;
 mod queries;
 mod querysql;
 mod refs;
 mod relations;
 use relations::Shape;
+mod relsnips;
 mod renames;
 mod resources;
 mod runner;
 mod sections;
+mod snippets;
+mod statics;
 mod toolconfig;
 mod tools;
+mod usages;
 
 use audit::Logged;
 use index::{Cache, Entry, RefKind, is_model, parse_class};
@@ -51,15 +64,49 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_COMPLETIONS: usize = 500;
 const STATUS_ID: &str = "laravel";
+const USAGE_FILES: usize = 300;
+const MANY_CHANGES: usize = 200;
+const WATCHED: [&str; 14] = [
+    "app/**",
+    "routes/**",
+    "config/**",
+    "database/**",
+    "resources/**",
+    "lang/**",
+    "tests/**",
+    "bootstrap/app.php",
+    "bootstrap/providers.php",
+    "bootstrap/cache/routes-v7.php",
+    "composer.lock",
+    "vendor/composer/installed.json",
+    ".env",
+    ".env.example",
+];
+
+pub(crate) fn scope_name(method: &resources::Method) -> Option<String> {
+    if let Some(rest) = method.name.strip_prefix("scope")
+        && rest.chars().next().is_some_and(char::is_uppercase)
+    {
+        let mut chars = rest.chars();
+        let first = chars.next()?;
+        return Some(first.to_lowercase().chain(chars).collect());
+    }
+    method
+        .attributes
+        .iter()
+        .any(|a| resources::short(&a.name) == "Scope")
+        .then(|| method.name.clone())
+}
 
 type References = Vec<(Segment, StringArg)>;
+
+type HubTables = std::rc::Rc<Vec<(&'static str, sections::Table)>>;
 
 #[derive(Default)]
 pub struct Laravel {
     cache: Cache,
     projects: BTreeMap<String, bool>,
     commands: BTreeMap<String, std::rc::Rc<Vec<artisan::Command>>>,
-    symbols: BTreeMap<String, std::rc::Rc<Vec<hierarchy::ProjectSymbol>>>,
     saved: Vec<renames::Saved>,
     originals: BTreeMap<String, String>,
     analysis: BTreeMap<String, Vec<Diagnostic>>,
@@ -68,7 +115,22 @@ pub struct Laravel {
     mcp_synced: BTreeMap<String, String>,
     helpers_synced: BTreeMap<String, String>,
     listed: BTreeMap<String, (u64, Vec<String>)>,
+    hub_pending: Option<hubtabs::Pending>,
+    hub_synced: BTreeSet<String>,
+    hub_tables: Option<(String, HubTables)>,
+    facts_cache: BTreeMap<String, std::rc::Rc<checks::Parts>>,
+    live: BTreeMap<String, u64>,
+    files: BTreeMap<String, projectfiles::Store>,
+    stamps: BTreeMap<String, Option<(u64, Option<u64>)>>,
+    statuses: BTreeMap<String, String>,
 }
+
+const EVENT_SLICE: std::time::Duration = std::time::Duration::from_millis(250);
+const WARM_SLICE: std::time::Duration = std::time::Duration::from_millis(1500);
+const REFRESH_BUDGET: std::time::Duration = std::time::Duration::from_millis(3500);
+const COLD_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
+const PROVIDER_SLICE: std::time::Duration = std::time::Duration::from_millis(60);
+pub(crate) const VIEW_SLICE: std::time::Duration = std::time::Duration::from_millis(2500);
 
 fn kebab(name: &str) -> String {
     let mut out = String::new();
@@ -329,17 +391,26 @@ const TAGS: [(&str, RefKind); 2] = [
 ];
 
 impl Laravel {
-    fn project_symbols(
+    fn project_symbols(&mut self, root: &str) -> std::rc::Rc<Vec<hierarchy::ProjectSymbol>> {
+        self.store(root).symbols()
+    }
+
+    pub(crate) fn store(&mut self, root: &str) -> &mut projectfiles::Store {
+        self.files.entry(root.to_owned()).or_default()
+    }
+
+    pub(crate) fn read_project(
         &mut self,
         project: &Project,
         root: &str,
-    ) -> std::rc::Rc<Vec<hierarchy::ProjectSymbol>> {
-        self.symbols
-            .entry(root.to_owned())
-            .or_insert_with(|| {
-                std::rc::Rc::new(hierarchy::project_symbols(&resources::scan(project, root)))
-            })
-            .clone()
+        budget: std::time::Duration,
+    ) -> bool {
+        let store = self.store(root);
+        store.ready() || store.advance(project, root, budget)
+    }
+
+    fn usages_ready(&self, root: &str) -> bool {
+        self.files.get(root).is_some_and(projectfiles::Store::ready)
     }
 
     fn laravel_project(&mut self, path: &str) -> Option<(Project, String)> {
@@ -351,12 +422,169 @@ impl Laravel {
                 let known = project::is_laravel(&project);
                 self.projects.insert(root.clone(), known);
                 if known {
-                    show_status(&project);
+                    self.show_status(&project, &root);
                 }
                 known
             }
         };
+        if laravel && !self.cache.has_framework(&root) {
+            let _task = host::begin_task("Indexing the Laravel project", false);
+            self.warm_up(&project, &root, COLD_BUDGET);
+        }
         laravel.then_some((project, root))
+    }
+
+    fn index_in_background(&mut self, path: &str) {
+        if let Some((project, root)) = self.laravel_project(path)
+            && (!self.cache.has_framework(&root)
+                || !self.facts_ready(&root)
+                || !self.usages_ready(&root))
+        {
+            let _task = host::begin_task("Indexing the Laravel project", false);
+            if self.warm_up(&project, &root, WARM_SLICE) {
+                self.read_project(&project, &root, EVENT_SLICE);
+            }
+        }
+    }
+
+    fn warm_up(&mut self, project: &Project, root: &str, budget: std::time::Duration) -> bool {
+        let _task = (!self.cache.has_framework(root))
+            .then(|| host::begin_task("Indexing the Laravel project", false));
+        let deadline = std::time::Instant::now() + budget;
+        if !self.cache.warm_until(project, root, deadline) || std::time::Instant::now() >= deadline
+        {
+            return false;
+        }
+        self.cached_facts(project, root);
+        std::time::Instant::now() < deadline
+    }
+
+    fn unreported_changes(&mut self, project: &Project, root: &str) -> Vec<String> {
+        let mut changed = Vec::new();
+        for relative in WATCHED.iter().filter(|glob| !glob.contains('*')) {
+            let path = join(root, relative);
+            let stamp = project.stat(&path).ok().map(|s| (s.size, s.modified));
+            if self
+                .stamps
+                .insert(path.clone(), stamp)
+                .is_some_and(|before| before != stamp)
+            {
+                changed.push(path);
+            }
+        }
+        for path in &changed {
+            self.disk_changed(path);
+            self.stamps.insert(
+                path.clone(),
+                project.stat(path).ok().map(|s| (s.size, s.modified)),
+            );
+        }
+        changed
+    }
+
+    fn show_status(&mut self, project: &Project, root: &str) {
+        let text = self
+            .statuses
+            .entry(root.to_owned())
+            .or_insert_with(|| {
+                project::laravel_version(project)
+                    .map_or("Laravel".to_owned(), |v| format!("Laravel {v}"))
+            })
+            .clone();
+        let item = StatusItem {
+            text,
+            tooltip: Some("Laravel OpenIdea — click to refresh the index".into()),
+            command: Some("refresh-index".into()),
+        };
+        let _ = host::set_window_status_item(STATUS_ID, &item);
+    }
+
+    pub(crate) fn status_for(&mut self, path: &str) {
+        if let Some((project, root)) = self.laravel_project(path) {
+            self.show_status(&project, &root);
+        }
+    }
+
+    fn forget_everything(&mut self) {
+        self.hub_tables = None;
+        self.facts_cache.clear();
+        self.files.clear();
+        self.originals.clear();
+        self.live.clear();
+        self.cache.clear();
+    }
+
+    fn absolute(&self, path: &str) -> String {
+        if runner::is_windows_root(path) || path.starts_with('/') {
+            return path.to_owned();
+        }
+        self.projects
+            .iter()
+            .filter(|(_, laravel)| **laravel)
+            .map(|(root, _)| join(root, path))
+            .find(|p| project_of(p).is_some())
+            .unwrap_or_else(|| path.to_owned())
+    }
+
+    fn disk_changed(&mut self, path: &str) -> bool {
+        let Some(project) = project_of(path) else {
+            return false;
+        };
+        let Ok(root) = project.root() else {
+            return false;
+        };
+        self.hub_tables = None;
+        self.facts_cache.clear();
+        self.live.remove(path);
+        self.stamps.remove(path);
+        if path.replace('\\', "/").ends_with("/composer.lock")
+            && self.statuses.remove(&root).is_some()
+        {
+            self.show_status(&project, &root);
+        }
+        self.reindex_usages(&project, &root, path);
+        self.cache.invalidate(&root, path);
+        if path.replace('\\', "/").contains("/tests/") {
+            self.pest.remove(&root);
+        }
+        match project.read_file(path) {
+            Ok(text) => {
+                self.remember_original(&root, path, &text, true);
+                true
+            }
+            Err(_) => {
+                self.originals.remove(path);
+                false
+            }
+        }
+    }
+
+    fn reindex_usages(&mut self, project: &Project, root: &str, path: &str) {
+        if let Some(store) = self.files.get_mut(root) {
+            store.update(project, root, path);
+        }
+    }
+
+    fn publish_live(&mut self, doc: &Document) {
+        if !doc.path.ends_with(".php") || is_blade(&doc.path) {
+            return;
+        }
+        if self.live.get(&doc.path) == Some(&doc.version) {
+            return;
+        }
+        let Some((_, root)) = self.laravel_project(&doc.path) else {
+            return;
+        };
+        if !self.facts_ready(&root) {
+            return;
+        }
+        self.live.insert(doc.path.clone(), doc.version);
+        let mut items = self.inspect(&doc.path, &doc.text);
+        if let Some(found) = self.analysis.get(&doc.path) {
+            items.extend(found.iter().cloned());
+        }
+        host::publish_diagnostics(&doc.path, &items)
+            .or_warn(&format!("publishing diagnostics for {}", doc.path));
     }
 
     fn model_table(&mut self, project: &Project, root: &str, model: &str) -> Option<String> {
@@ -405,12 +633,14 @@ impl Laravel {
             .iter()
             .filter_map(|e| e.key.strip_prefix(&prefix).map(str::to_owned))
             .collect();
+        let framework = self.cache.framework(root);
         let model = members::Model {
             table: &table,
             columns: members::columns_of(&column_entries, &table),
             models,
             foreign,
             relations,
+            casts_method: !framework.installed || framework.casts_method,
         };
         members::items(&model, ctx, at, position(text, ctx.start))
     }
@@ -573,7 +803,7 @@ impl Laravel {
         match self.chain_of(project, root, at, base, path, depth)? {
             (model, Shape::Model) => Some((model, false)),
             (model, Shape::Many) => Some((model, true)),
-            (_, Shape::Query) => None,
+            (_, Shape::Query | Shape::Factory) => None,
         }
     }
 
@@ -823,8 +1053,9 @@ impl Laravel {
             && let Some(target) = relation_target(Some(&detail))
         {
             let kind = detail.split('(').next().unwrap_or(&detail);
+            let framework = self.cache.framework(root);
             return Some(relations::method_items(
-                &relations::relation_methods(kind),
+                &relations::relation_methods(kind, &framework),
                 &target,
                 typed,
                 replace,
@@ -850,8 +1081,9 @@ impl Laravel {
         )?;
         match shape {
             Shape::Many => {
+                let framework = self.cache.framework(root);
                 return Some(relations::method_items(
-                    relations::COLLECTION,
+                    &relations::collection_methods(&framework),
                     &model,
                     typed,
                     replace,
@@ -870,8 +1102,35 @@ impl Laravel {
                 for item in &mut out {
                     item.sort_text = item.sort_text.take().map(|s| format!("!{s}"));
                 }
+                let framework = self.cache.framework(root);
                 out.extend(relations::method_items(
-                    relations::QUERY,
+                    &relations::query_methods(&framework),
+                    &model,
+                    typed,
+                    replace,
+                ));
+                if access.path.is_empty()
+                    && matches!(access.base, eloquent::Base::Static(_))
+                    && let Some(model_text) = self.model_text(project, root, &model)
+                    && factories::file(project, &model, &model_text).is_some()
+                {
+                    let factory = [("factory", "($count = null, $state = []): Factory<{T}>")];
+                    out.extend(relations::method_items(&factory, &model, typed, replace));
+                }
+                return Some(out);
+            }
+            Shape::Factory => {
+                let framework = self.cache.framework(root);
+                let model_text = self.model_text(project, root, &model).unwrap_or_default();
+                let states = factories::file(project, &model, &model_text)
+                    .map(|(_, text)| factories::states(&text))
+                    .unwrap_or_default();
+                let mut out = relations::method_items(&states, &model, typed, replace);
+                for item in &mut out {
+                    item.sort_text = item.sort_text.take().map(|s| format!("!{s}"));
+                }
+                out.extend(relations::method_items(
+                    &relations::factory_methods(&framework),
                     &model,
                     typed,
                     replace,
@@ -926,6 +1185,329 @@ impl Laravel {
                 }),
         );
         Some(out)
+    }
+
+    fn model_fqn(&mut self, project: &Project, root: &str, model: &str) -> Option<String> {
+        let path = self
+            .cache
+            .get(RefKind::Model, project, root)
+            .iter()
+            .find(|e| e.key == model)?
+            .location
+            .path
+            .clone();
+        let composer = project.read_file("composer.json").unwrap_or_default();
+        let namespace = namespaces::for_path(project::rel(root, &path), &casts::psr4(&composer))
+            .into_iter()
+            .next()?;
+        Some(format!("{namespace}\\{model}"))
+    }
+
+    fn static_candidates(&mut self, project: &Project, root: &str) -> Vec<statics::Candidate> {
+        let framework = self.cache.framework(root);
+        let mut facades = framework.facades.clone();
+        if facades.is_empty() {
+            facades =
+                statics::config_aliases(&project.read_file("config/app.php").unwrap_or_default());
+        }
+        let symbols = self.project_symbols(root);
+        let mut out: Vec<statics::Candidate> = symbols
+            .iter()
+            .filter(|s| s.statically || s.cast)
+            .map(|s| statics::Candidate {
+                fqn: s.fqn.clone(),
+                detail: match s.keyword.as_str() {
+                    "enum" => "enum".to_owned(),
+                    _ if s.statically => "static class".to_owned(),
+                    _ => "cast".to_owned(),
+                },
+                cast: s.cast,
+                statically: s.statically,
+            })
+            .collect();
+        out.extend(facades.into_iter().map(|(alias, fqn)| statics::Candidate {
+            detail: if fqn.contains("\\Facades\\") {
+                "Laravel facade".to_owned()
+            } else {
+                format!("Laravel {alias}")
+            },
+            fqn,
+            cast: false,
+            statically: true,
+        }));
+        out
+    }
+
+    fn model_of_file(&mut self, project: &Project, root: &str, path: &str) -> Option<String> {
+        self.cache
+            .get(RefKind::Model, project, root)
+            .iter()
+            .find(|e| project::same_path(&e.location.path, path))
+            .map(|e| e.key.clone())
+    }
+
+    fn declaration_usages(
+        &mut self,
+        project: &Project,
+        root: &str,
+        doc: &Document,
+        cursor: usize,
+    ) -> Option<Vec<Location>> {
+        let own = project::rel(root, &doc.path).replace('\\', "/");
+        if !(own.starts_with("app/") || own.starts_with("database/")) || is_blade(&doc.path) {
+            return None;
+        }
+        let text = &doc.text;
+        let (start, end) = eloquent::word_span(text, cursor)?;
+        let before = text[..start].trim_end();
+        let keyword = before
+            .rsplit(|c: char| !c.is_ascii_alphabetic())
+            .next()
+            .unwrap_or_default();
+        if !matches!(keyword, "class" | "enum" | "interface" | "trait") {
+            return None;
+        }
+        let name = &text[start..end];
+        if !self.usages_ready(root) {
+            return None;
+        }
+        let files = self.store(root).files_using(name, &own);
+        let mut out = Vec::new();
+        for (path, _) in files.into_iter().take(USAGE_FILES) {
+            let full = project::join(root, &path);
+            let Ok(source) = project.read_file(&full) else {
+                continue;
+            };
+            let cleaned = usages::clean(&source, path.ends_with(".blade.php"));
+            let lines = Lines::new(&source);
+            for at in usages::occurrences(&cleaned, name) {
+                out.push(Location {
+                    path: full.clone(),
+                    range: lines.range(&source, at, at + name.len()),
+                });
+            }
+        }
+        (!out.is_empty()).then_some(out)
+    }
+
+    fn relation_snippets(
+        &mut self,
+        project: &Project,
+        root: &str,
+        class: &str,
+        text: &str,
+        cursor: usize,
+        at: Position,
+    ) -> Vec<CompletionItem> {
+        let Some(start) = snippets::word_at(text, cursor) else {
+            return Vec::new();
+        };
+        let table = self.model_table(project, root, class).unwrap_or_default();
+        let mut tables: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for e in self.cache.get(RefKind::Column, project, root).iter() {
+            if let Some((t, c)) = e.key.split_once('.') {
+                tables.entry(t.to_owned()).or_default().push(c.to_owned());
+            }
+        }
+        let composer = project.read_file("composer.json").unwrap_or_default();
+        let map = casts::psr4(&composer);
+        let mut models: Vec<(String, String)> = Vec::new();
+        let mut fqns: BTreeMap<String, String> = BTreeMap::new();
+        for e in self.cache.get(RefKind::Model, project, root).iter() {
+            if let Some(t) = e.detail.as_deref().and_then(|d| d.strip_prefix("table ")) {
+                models.push((e.key.clone(), t.to_owned()));
+            }
+            if let Some(ns) = namespaces::for_path(project::rel(root, &e.location.path), &map)
+                .into_iter()
+                .next()
+            {
+                fqns.insert(e.key.clone(), format!("{ns}\\{}", e.key));
+            }
+        }
+        let prefix = format!("{class}.");
+        let existing: Vec<String> = self
+            .cache
+            .get(RefKind::Relation, project, root)
+            .iter()
+            .filter_map(|e| e.key.strip_prefix(&prefix).map(str::to_owned))
+            .collect();
+        let namespace = text
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("namespace "))
+            .map(|n| n.trim_end_matches(';').trim().to_owned());
+        let import = |model: &str| {
+            fqns.get(model)
+                .filter(|fqn| fqn.rsplit_once('\\').map(|(ns, _)| ns) != namespace.as_deref())
+                .cloned()
+        };
+        relsnips::items(
+            &relsnips::Facts {
+                model: class,
+                table: &table,
+                tables: &tables,
+                models: &models,
+                existing: &existing,
+            },
+            &relsnips::Context {
+                typed: &text[start..cursor],
+                replace: Range::new(position(text, start), at),
+                text,
+                import: &import,
+            },
+        )
+    }
+
+    fn closure_items(
+        &mut self,
+        project: &Project,
+        root: &str,
+        doc: &Document,
+        cursor: usize,
+        at: Position,
+    ) -> Option<Vec<CompletionItem>> {
+        let site = closures::site(&doc.text, cursor)?;
+        let found = match &site.callee {
+            closures::Callee::Member { name_end, .. } => {
+                eloquent::access_at(&doc.text, *name_end, false).and_then(|access| {
+                    self.chain_of(
+                        project,
+                        root,
+                        (&doc.text, cursor),
+                        &access.base,
+                        &access.path,
+                        0,
+                    )
+                    .map(|(m, s)| (m, s, false))
+                })
+            }
+            closures::Callee::Static { class, .. } => {
+                let short = class.rsplit('\\').next().unwrap_or(class).to_owned();
+                let base = eloquent::Base::Static(short);
+                self.chain_of(project, root, (&doc.text, cursor), &base, &[], 0)
+                    .map(|(m, s)| (m, s, true))
+            }
+            closures::Callee::Function { .. } => None,
+        };
+        let fqn = found
+            .as_ref()
+            .and_then(|(model, _, _)| self.model_fqn(project, root, model));
+        let receiver = found
+            .as_ref()
+            .map(|(model, shape, is_static)| closures::Receiver {
+                model,
+                model_fqn: fqn.as_deref(),
+                shape: *shape,
+                is_static: *is_static,
+            });
+        let user_fqn = self.model_fqn(project, root, "User");
+        let user = user_fqn.as_deref().map(|fqn| ("User", fqn));
+        let params = closures::params(&site, receiver.as_ref(), user)?;
+        let namespace = doc
+            .text
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("namespace "))
+            .map(|n| n.trim_end_matches(';').trim().to_owned());
+        let imports: Vec<&str> = params
+            .iter()
+            .filter_map(|p| p.fqn.as_deref())
+            .filter(|fqn| fqn.rsplit_once('\\').map(|(ns, _)| ns) != namespace.as_deref())
+            .collect();
+        let edits = snippets::import_edits(&doc.text, &imports);
+        let (shown, escaped) = closures::signature(&params);
+        let replace = Range::new(position(&doc.text, site.start), at);
+        let item = |label: String, insert: String, filter: &str, rank: &str| CompletionItem {
+            detail: Some("typed closure".into()),
+            insert_text: insert,
+            snippet: true,
+            replace: Some(replace),
+            sort_text: Some(format!("!{rank}")),
+            filter_text: Some(filter.to_owned()),
+            additional_edits: edits.clone(),
+            ..CompletionItem::new(&label, openidea_plugin::providers::CompletionKind::Snippet)
+        };
+        Some(vec![
+            item(
+                format!("fn ({shown}) =>"),
+                format!("fn ({escaped}) => $0"),
+                "fn",
+                "0",
+            ),
+            item(
+                format!("function ({shown})"),
+                format!("function ({escaped}) {{\n\t$0\n}}"),
+                "function",
+                "1",
+            ),
+        ])
+    }
+
+    fn factory_definition(
+        &mut self,
+        project: &Project,
+        root: &str,
+        doc: &Document,
+        cursor: usize,
+    ) -> Option<Vec<Location>> {
+        let text = &doc.text;
+        let (start, end) = eloquent::word_span(text, cursor)?;
+        if &text[start..end] == "HasFactory" {
+            return self.has_factory_definition(project, root, text);
+        }
+        if &text[start..end] != "factory" || !text[end..].trim_start().starts_with('(') {
+            return None;
+        }
+        let class_end = text[..start].trim_end().strip_suffix("::")?;
+        let class_start = class_end
+            .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '\\'))
+            .map_or(0, |i| i + 1);
+        let class = class_end[class_start..].trim_start_matches('\\');
+        let model = class.rsplit('\\').next().unwrap_or(class);
+        let model = if matches!(model, "static" | "self") {
+            scope_of(text).class?
+        } else {
+            model.to_owned()
+        };
+        let model_text = self.model_text(project, root, &model)?;
+        if let Some((path, factory)) = factories::file(project, &model, &model_text) {
+            let at = factories::class_offset(&factory);
+            let lines = Lines::new(&factory);
+            return Some(vec![Location {
+                path: project::join(root, &path),
+                range: lines.range(&factory, at, at),
+            }]);
+        }
+        let framework = self.cache.framework(root);
+        Some(framework.factory_method.clone().into_iter().collect())
+    }
+
+    fn has_factory_definition(
+        &mut self,
+        project: &Project,
+        root: &str,
+        text: &str,
+    ) -> Option<Vec<Location>> {
+        let model = scope_of(text).class?;
+        let model_text = self.model_text(project, root, &model)?;
+        if let Some((path, factory)) = factories::file(project, &model, &model_text) {
+            let at = factories::class_offset(&factory);
+            return Some(vec![Location {
+                path: project::join(root, &path),
+                range: Lines::new(&factory).range(&factory, at, at),
+            }]);
+        }
+        let method = self.cache.framework(root).factory_method.clone()?;
+        let trait_file = project
+            .read_file(project::rel(root, &method.path))
+            .ok()
+            .and_then(|source| {
+                let at = modelmap::first_offset(&source, "trait HasFactory")?;
+                let at = at + "trait ".len();
+                Some(Location {
+                    path: method.path.clone(),
+                    range: Lines::new(&source).range(&source, at, at + "HasFactory".len()),
+                })
+            });
+        Some(vec![trait_file.unwrap_or(method)])
     }
 
     fn scope_call_definition(
@@ -1120,18 +1702,46 @@ impl Laravel {
                     .collect();
                 (RefKind::OpenApi, entries)
             }
-            Want::Static(values) => {
-                let entries = values
+            Want::Static(values) => (RefKind::Rule, fixed_entries(values)),
+            Want::Container => {
+                let framework = self.cache.framework(root);
+                if framework.container.is_empty() {
+                    (RefKind::Rule, fixed_entries(&refs::CONTAINER))
+                } else {
+                    let entries = framework
+                        .container
+                        .iter()
+                        .map(|(k, class)| Entry::new(k, Some(class.clone()), "", Range::default()))
+                        .collect();
+                    (RefKind::Rule, entries)
+                }
+            }
+            Want::CastTypes => {
+                let framework = self.cache.framework(root);
+                if framework.casts.is_empty() {
+                    return (RefKind::Rule, fixed_entries(&refs::CAST_TYPES));
+                }
+                let mut entries: Vec<Entry> = refs::CAST_TYPES
                     .iter()
-                    .map(|(k, d)| {
-                        Entry::new(
-                            *k,
-                            (!d.is_empty()).then(|| (*d).to_owned()),
+                    .filter(|(k, _)| {
+                        if k.contains('\\') {
+                            framework.has_class(k)
+                        } else {
+                            framework.casts.iter().any(|c| c == k)
+                        }
+                    })
+                    .map(|(k, d)| Entry::new(*k, Some((*d).to_owned()), "", Range::default()))
+                    .collect();
+                for cast in &framework.casts {
+                    if !entries.iter().any(|e| &e.key == cast) {
+                        entries.push(Entry::new(
+                            cast,
+                            Some("cast type".into()),
                             "",
                             Range::default(),
-                        )
-                    })
-                    .collect();
+                        ));
+                    }
+                }
                 (RefKind::Rule, entries)
             }
             Want::SchemaProperties(call_start) => {
@@ -1174,6 +1784,37 @@ impl Laravel {
                     }
                 }
                 (RefKind::Route, entries)
+            }
+            Want::EnumValues {
+                model,
+                call_start,
+                index,
+            } => {
+                let args = enums::call_args(&doc.text, *call_start);
+                let column = enums::value_column(&args, *index).map(str::to_owned);
+                let entries = column
+                    .zip(self.model_text(project, root, model))
+                    .and_then(|(column, model_text)| {
+                        let composer = project.read_file("composer.json").unwrap_or_default();
+                        enums::of_model(project, &casts::psr4(&composer), &model_text)
+                            .into_iter()
+                            .find(|e| e.column == column)
+                    })
+                    .map(|cast| {
+                        cast.values
+                            .iter()
+                            .map(|(case, value)| {
+                                Entry::new(
+                                    value,
+                                    Some(format!("{}::{case}", cast.name)),
+                                    "",
+                                    Range::default(),
+                                )
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (RefKind::Env, entries)
             }
             Want::Columns { model, table } => {
                 let table = table
@@ -1333,29 +1974,6 @@ impl Laravel {
         Ok(None)
     }
 
-    fn artisan(&self, ctx: &Invocation, args: &[&str]) -> Result<Option<String>, Error> {
-        let project = ctx.project().ok_or("open a Laravel project first")?;
-        let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
-        let mode = runner::detect(&project);
-        let out = project.run_process(mode.program(), &mode.args(&args[1..], false), None)?;
-        let text = if out.stdout.trim().is_empty() {
-            out.stderr
-        } else {
-            out.stdout
-        };
-        if out.status != Some(0) {
-            let status = out.status.map_or("a signal".to_owned(), |s| s.to_string());
-            return Err(Error::Failed(format!(
-                "artisan {} exited with {status}: {}",
-                args[1],
-                text.trim()
-            )));
-        }
-        Ok(Some(
-            text.trim().lines().last().unwrap_or("done").to_owned(),
-        ))
-    }
-
     fn controller_markers(
         &mut self,
         doc: &Document,
@@ -1494,39 +2112,44 @@ impl Laravel {
             self.cache.locale.clone()
         };
         let mut out = Vec::new();
+        let existing = |name: String| {
+            ["lang", "resources/lang"].iter().find_map(|dir| {
+                let relative = format!("{dir}/{name}");
+                project
+                    .read_file(&relative)
+                    .ok()
+                    .map(|text| (relative, text))
+            })
+        };
         if let Some((file, rest)) = key.split_once('.')
             && !key.contains(' ')
+            && let Some((relative, text)) = existing(format!("{locale}/{file}.php"))
+            && let Some(close) = text.rfind(']')
         {
-            let relative = format!("lang/{locale}/{file}.php");
-            if let Ok(text) = project.read_file(&relative)
-                && let Some(close) = text.rfind(']')
-            {
-                let before = text[..close].trim_end();
-                let comma = if before.ends_with('[') || before.ends_with(',') {
-                    ""
-                } else {
-                    ","
-                };
-                let insert_at = before.len();
-                let escaped = rest.replace('\'', "\\'");
-                let pos = position(&text, insert_at);
-                out.push(CodeAction {
-                    title: format!("Add '{key}' to {relative}"),
-                    kind: Some("quickfix".into()),
-                    preferred: true,
-                    data: None,
-                    edits: vec![(
-                        join(root, &relative),
-                        vec![TextEdit {
-                            range: Range::new(pos, pos),
-                            text: format!("{comma}\n    '{escaped}' => '{escaped}',"),
-                        }],
-                    )],
-                });
-            }
+            let before = text[..close].trim_end();
+            let comma = if before.ends_with('[') || before.ends_with(',') {
+                ""
+            } else {
+                ","
+            };
+            let insert_at = before.len();
+            let escaped = rest.replace('\'', "\\'");
+            let pos = position(&text, insert_at);
+            out.push(CodeAction {
+                title: format!("Add '{key}' to {relative}"),
+                kind: Some("quickfix".into()),
+                preferred: true,
+                data: None,
+                edits: vec![(
+                    join(root, &relative),
+                    vec![TextEdit {
+                        range: Range::new(pos, pos),
+                        text: format!("{comma}\n    '{escaped}' => '{escaped}',"),
+                    }],
+                )],
+            });
         }
-        let relative = format!("lang/{locale}.json");
-        if let Ok(text) = project.read_file(&relative)
+        if let Some((relative, text)) = existing(format!("{locale}.json"))
             && let Some(close) = text.rfind('}')
         {
             let before = text[..close].trim_end();
@@ -1551,19 +2174,25 @@ impl Laravel {
     }
 }
 
-fn show_status(project: &Project) {
-    let version = project::laravel_version(project);
-    let text = version
-        .as_deref()
-        .map_or("Laravel".to_owned(), |v| format!("Laravel {v}"));
-    host::set_status_item(
-        STATUS_ID,
-        &StatusItem {
-            text,
-            tooltip: Some("Laravel OpenIdea — click to refresh the index".into()),
-            command: Some("refresh-index".into()),
-        },
-    );
+fn php_snippets(text: &str, cursor: usize, at: Position) -> Vec<CompletionItem> {
+    let Some(start) = snippets::word_at(text, cursor) else {
+        return Vec::new();
+    };
+    snippets::items(text, cursor, Range::new(position(text, start), at))
+}
+
+fn fixed_entries(values: &[(&str, &str)]) -> Vec<Entry> {
+    values
+        .iter()
+        .map(|(k, d)| {
+            Entry::new(
+                *k,
+                (!d.is_empty()).then(|| (*d).to_owned()),
+                "",
+                Range::default(),
+            )
+        })
+        .collect()
 }
 
 fn items(kind: RefKind, entries: &[Entry], typed: &str, replace: Range) -> Vec<CompletionItem> {
@@ -1599,6 +2228,7 @@ impl Providers for Laravel {
         let Some((project, root)) = self.laravel_project(&doc.path) else {
             return Vec::new();
         };
+        self.unreported_changes(&project, &root);
         let Some(cursor) = offset(&doc.text, at) else {
             return Vec::new();
         };
@@ -1631,6 +2261,40 @@ impl Providers for Laravel {
             }
         }
         let blade = is_blade(&doc.path);
+        if !blade
+            && doc.path.ends_with(".php")
+            && let Some(start) = namespaces::typed_at(&doc.text, cursor)
+        {
+            let composer = project.read_file("composer.json").unwrap_or_default();
+            let found =
+                namespaces::for_path(project::rel(&root, &doc.path), &casts::psr4(&composer));
+            let replace = Range::new(position(&doc.text, start), at);
+            return namespaces::items(&found, &doc.text, start, cursor, replace);
+        }
+        if !blade
+            && let Some(found) = self.closure_items(&project, &root, doc, cursor, at)
+            && !found.is_empty()
+        {
+            return found;
+        }
+        let mut static_items = Vec::new();
+        if !blade
+            && doc.path.ends_with(".php")
+            && let Some((slot, start)) = statics::slot_at(&doc.text, cursor)
+        {
+            let candidates = self.static_candidates(&project, &root);
+            let found = statics::items(
+                slot,
+                &doc.text,
+                &doc.text[start..cursor],
+                Range::new(position(&doc.text, start), at),
+                &candidates,
+            );
+            if slot == statics::Slot::CastValue {
+                return found;
+            }
+            static_items = found;
+        }
         if php::open_arg_at(&doc.text, blade, cursor).is_none()
             && let Some(found) = self.eloquent_members(&project, &root, doc, cursor, at)
             && !found.is_empty()
@@ -1638,12 +2302,9 @@ impl Providers for Laravel {
             return found;
         }
         if blade && let Some(start) = directives::typed_at(&doc.text, cursor) {
-            let mut entries: Vec<Entry> = directives::BUILTIN
-                .iter()
-                .map(|(name, detail)| {
-                    Entry::new(*name, Some((*detail).to_owned()), "", Range::default())
-                })
-                .collect();
+            let framework = self.cache.framework(&root);
+            let mut entries =
+                directives::builtin(&framework, |package| framework.has_package(package));
             entries.extend(
                 self.cache
                     .get(RefKind::Directive, &project, &root)
@@ -1652,7 +2313,7 @@ impl Providers for Laravel {
             );
             let typed = &doc.text[start + 1..cursor];
             let replace = Range::new(position(&doc.text, start), at);
-            return items(RefKind::Directive, &entries, typed, replace)
+            let mut out: Vec<CompletionItem> = items(RefKind::Directive, &entries, typed, replace)
                 .into_iter()
                 .map(|mut item| {
                     item.label = format!("@{}", item.label);
@@ -1660,6 +2321,12 @@ impl Providers for Laravel {
                     item
                 })
                 .collect();
+            out.extend(snippets::blade_items(typed, replace, |directive| {
+                entries
+                    .iter()
+                    .any(|e| e.key.eq_ignore_ascii_case(directive))
+            }));
+            return out;
         }
         if blade && let Some((kind, start, _)) = tag_at(&doc.text, cursor, &TAGS) {
             let entries = self.cache.get(kind, &project, &root);
@@ -1671,15 +2338,19 @@ impl Providers for Laravel {
             );
         }
         if !blade && let Some((slot, start)) = hierarchy::slot_at(&doc.text, cursor) {
-            let symbols = self.project_symbols(&project, &root);
+            let symbols = self.project_symbols(&root);
             let composer = project.read_file("composer.json").unwrap_or_default();
+            let framework = self.cache.framework(&root);
             return hierarchy::items(
                 slot,
                 &doc.text,
                 project::rel(&root, &doc.path),
                 start,
                 at,
-                &composer,
+                &hierarchy::Installed {
+                    composer: &composer,
+                    framework_has: &|fqn| framework.has_class(fqn),
+                },
                 &symbols,
             );
         }
@@ -1689,11 +2360,21 @@ impl Providers for Laravel {
         {
             let scope = scope_of(&doc.text);
             if let (true, Some(class)) = (scope.model, scope.class.as_deref()) {
-                return self.member_items(&project, &root, class, &doc.text, &ctx, at);
+                let mut out = self.member_items(&project, &root, class, &doc.text, &ctx, at);
+                out.extend(php_snippets(&doc.text, cursor, at));
+                out.extend(self.relation_snippets(&project, &root, class, &doc.text, cursor, at));
+                out.extend(static_items);
+                return out;
             }
         }
         let Some(mut arg) = php::open_arg_at(&doc.text, blade, cursor) else {
-            return Vec::new();
+            return if blade {
+                Vec::new()
+            } else {
+                let mut out = php_snippets(&doc.text, cursor, at);
+                out.extend(static_items);
+                out
+            };
         };
         if !blade {
             self.infer_head(&project, &root, &doc.text, &mut arg);
@@ -1705,11 +2386,25 @@ impl Providers for Laravel {
         };
         let (kind, entries) = self.resolve(&seg.want, &project, &root, doc);
         let start = (arg.start + seg.start).min(cursor);
+        let quote = doc.text[..arg.start]
+            .chars()
+            .last()
+            .filter(|c| matches!(c, '\'' | '"'));
+        let segmented = matches!(
+            seg.want,
+            Want::Kind(RefKind::Rule | RefKind::Middleware) | Want::Columns { .. }
+        );
+        let end = cursor
+            + doc.text[cursor..]
+                .find(|c: char| {
+                    Some(c) == quote || c == '\n' || c == '|' || segmented && matches!(c, ',' | ':')
+                })
+                .unwrap_or(0);
         items(
             kind,
             &entries,
             &doc.text[start..cursor],
-            Range::new(position(&doc.text, start), at),
+            Range::new(position(&doc.text, start), position(&doc.text, end)),
         )
     }
 
@@ -1717,6 +2412,7 @@ impl Providers for Laravel {
         let Some((project, root)) = self.laravel_project(&doc.path) else {
             return Vec::new();
         };
+        self.unreported_changes(&project, &root);
         let Some(cursor) = offset(&doc.text, at) else {
             return Vec::new();
         };
@@ -1739,6 +2435,17 @@ impl Providers for Laravel {
         }
         if !is_blade(&doc.path)
             && let Some(arg) = php::arg_at(&doc.text, false, cursor)
+            && let Some(key) = hubtabs::cache_key(&arg)
+            && project.read_file(&hubtabs::file_path("cache")).is_ok()
+        {
+            self.remember_hub_filter("cache", key);
+            return vec![Location {
+                path: project::join(&root, &hubtabs::file_path("cache")),
+                range: Range::default(),
+            }];
+        }
+        if !is_blade(&doc.path)
+            && let Some(arg) = php::arg_at(&doc.text, false, cursor)
             && arg.arg == 0
             && arg.callee.kind == php::CallKind::Static
             && arg.callee.class.as_deref() == Some("gate")
@@ -1751,9 +2458,17 @@ impl Providers for Laravel {
             && let Some(name) = eloquent::scope_at(&doc.text, cursor)
             && let Some(model) = scope_of(&doc.text).class
         {
-            return renames::locations_matching(&project, &root, doc, |text, _| {
-                eloquent::scope_calls(text, &model, &name)
+            return renames::locations_matching(&project, &root, doc, |text, blade| {
+                eloquent::scope_calls(&usages::clean(text, blade), &model, &name)
             });
+        }
+        if let Some(found) = self.declaration_usages(&project, &root, doc, cursor) {
+            return found;
+        }
+        if !is_blade(&doc.path)
+            && let Some(found) = self.factory_definition(&project, &root, doc, cursor)
+        {
+            return found;
         }
         if !is_blade(&doc.path)
             && let Some(found) = self.scope_call_definition(&project, &root, doc, cursor)
@@ -1805,10 +2520,12 @@ impl Providers for Laravel {
     }
 
     fn line_markers(&mut self, doc: &Document) -> Vec<LineMarker> {
+        self.publish_live(doc);
         let Some((project, root, refs)) = self.references(doc) else {
             return Vec::new();
         };
         self.remember_original(&root, &doc.path, &doc.text, false);
+        self.read_project(&project, &root, PROVIDER_SLICE);
         let lines = Lines::new(&doc.text);
         let mut out = Vec::new();
         for (seg, arg) in refs {
@@ -1860,6 +2577,7 @@ impl Providers for Laravel {
     }
 
     fn code_actions(&mut self, doc: &Document, selection: Range) -> Vec<CodeAction> {
+        self.publish_live(doc);
         let Some((project, root)) = self.laravel_project(&doc.path) else {
             return Vec::new();
         };
@@ -1900,6 +2618,21 @@ impl Providers for Laravel {
 impl Laravel {
     fn command(&mut self, id: &str, ctx: &Invocation) -> Result<Option<String>, Error> {
         match id {
+            "open-hub-tab" => {
+                let project = ctx.project().ok_or("open a Laravel project first")?;
+                let root = project.root()?;
+                self.sync_hub_files(&project, true).map_err(|why| {
+                    Error::Failed(format!(
+                        "the hub tab files couldn't be written to storage/openidea/hub: {why}"
+                    ))
+                })?;
+                host::open_location(
+                    &project::join(&root, &hubtabs::file_path(hubtabs::WHOLE)),
+                    0,
+                    0,
+                )?;
+                Ok(None)
+            }
             "refresh-index" => {
                 self.cache.clear();
                 self.projects.clear();
@@ -1908,18 +2641,42 @@ impl Laravel {
                 if !project::is_laravel(&project) {
                     return Err("this project is not a Laravel application".into());
                 }
-                show_status(&project);
-                let counts: Vec<String> = RefKind::ALL
+                self.statuses.remove(&root);
+                self.show_status(&project, &root);
+                let _task = host::begin_task("Indexing the Laravel project", false);
+                let deadline = std::time::Instant::now() + REFRESH_BUDGET;
+                let mut complete = self.cache.warm_until(&project, &root, deadline);
+                self.files.remove(&root);
+                let left = deadline
+                    .saturating_duration_since(std::time::Instant::now())
+                    .min(VIEW_SLICE);
+                complete &= !left.is_zero() && self.read_project(&project, &root, left);
+                let mut counts: Vec<String> = RefKind::ALL
                     .iter()
-                    .map(|k| (self.cache.get(*k, &project, &root).len(), k.label()))
+                    .filter_map(|k| Some((self.cache.built_len(&root, *k)?, k.label())))
                     .filter(|(n, _)| *n > 0)
                     .map(|(n, label)| format!("{n} {label}"))
                     .collect();
-                Ok(Some(format!("Indexed {}", counts.join(", "))))
+                if complete {
+                    let statics = self.static_candidates(&project, &root);
+                    let facades = statics
+                        .iter()
+                        .filter(|c| c.detail.starts_with("Laravel"))
+                        .count();
+                    if facades > 0 {
+                        counts.push(format!("{facades} facades and helpers"));
+                    }
+                }
+                let rest = if complete {
+                    ""
+                } else {
+                    "; the rest keeps indexing in the background"
+                };
+                Ok(Some(format!("Indexed {}{rest}", counts.join(", "))))
             }
             "related-file" => self.related_file(ctx),
-            "artisan-optimize-clear" => self.artisan(ctx, &["artisan", "optimize:clear"]),
-            "artisan-migrate" => self.artisan(ctx, &["artisan", "migrate"]),
+            "artisan-optimize-clear" => self.artisan_terminal(ctx, "optimize:clear"),
+            "artisan-migrate" => self.artisan_terminal(ctx, "migrate"),
             "artisan-tinker" => self.artisan_terminal(ctx, "tinker"),
             "copy-query-sql" => self.copy_query_sql(ctx),
             "run-in-tinker" => self.run_selection_in_tinker(ctx),
@@ -1943,6 +2700,9 @@ impl openidea_plugin::Plugin for Laravel {
         ] {
             host::subscribe(kind).or_error(&format!("subscribing to {kind:?}"));
         }
+        host::subscribe(EventKind::FilesChanged).or_error("subscribing to FilesChanged");
+        host::subscribe_paths(EventKind::FilesChanged.name(), &WATCHED)
+            .or_error("filtering FilesChanged");
         for project in host::projects()
             .or_error("listing the open projects")
             .unwrap_or_default()
@@ -1950,8 +2710,7 @@ impl openidea_plugin::Plugin for Laravel {
             if let Ok(root) = project.root()
                 && let Some((project, root)) = self.laravel_project(&root)
             {
-                self.cache.warm(&project, &root);
-                self.project_symbols(&project, &root);
+                self.unreported_changes(&project, &root);
                 self.sync_mcp(&project);
                 self.sync_helpers(&project);
             }
@@ -1984,6 +2743,10 @@ impl openidea_plugin::Plugin for Laravel {
                             self.helpers_synced.remove(&root);
                             self.sync_helpers(&project);
                         }
+                        self.hub_tables = None;
+                        self.facts_cache.clear();
+                        self.live.remove(path);
+                        self.reindex_usages(&project, &root, path);
                         let before = self.snapshot_keys(&project, &root, path);
                         self.cache.invalidate(&root, path);
                         let after = self.snapshot_keys(&project, &root, path);
@@ -1997,13 +2760,12 @@ impl openidea_plugin::Plugin for Laravel {
                         if self.laravel_project(path).is_some() {
                             self.tools_on_save(&project, &root, path);
                         }
-                        if path.ends_with(".php") {
-                            self.symbols.remove(&root);
-                        }
                     }
                     paths.insert(path.clone());
                 }
                 Event::FileOpened(path) => {
+                    self.index_in_background(path);
+                    self.status_for(path);
                     if let Some(project) = project_of(path)
                         && let Ok(root) = project.root()
                         && let Ok(text) = project.read_file(path)
@@ -2012,23 +2774,59 @@ impl openidea_plugin::Plugin for Laravel {
                     }
                     paths.insert(path.clone());
                 }
+                Event::FilesChanged(changed) => {
+                    let all: Vec<&String> = changed
+                        .created
+                        .iter()
+                        .chain(&changed.modified)
+                        .chain(&changed.removed)
+                        .collect();
+                    if all.len() > MANY_CHANGES {
+                        self.forget_everything();
+                    } else {
+                        for path in all {
+                            let path = self.absolute(path);
+                            if self.disk_changed(&path) {
+                                paths.insert(path);
+                            }
+                        }
+                    }
+                }
                 Event::VcsChanged(repo) => {
-                    self.cache.clear();
-                    self.symbols.clear();
+                    self.forget_everything();
                     paths.insert(repo.clone());
                 }
                 Event::EditorFocused(Some(path)) => {
-                    if let Some((project, _)) = self.laravel_project(path) {
+                    self.index_in_background(path);
+                    self.hub_tab_focused(path);
+                    if let Some((project, root)) = self.laravel_project(path) {
+                        self.show_status(&project, &root);
                         self.sync_mcp(&project);
                         self.sync_helpers(&project);
+                        let _ = self.sync_hub_files(&project, false);
                     }
                 }
                 _ => {}
             }
         }
+        let roots: Vec<String> = self
+            .projects
+            .iter()
+            .filter(|(_, laravel)| **laravel)
+            .map(|(root, _)| root.clone())
+            .collect();
+        for root in roots {
+            if let Some((project, root)) = self.laravel_project(&root) {
+                paths.extend(self.unreported_changes(&project, &root));
+            }
+        }
+        let started = std::time::Instant::now();
         for path in paths {
-            if let Some((project, root)) = self.laravel_project(&path) {
-                self.cache.warm(&project, &root);
+            let budget = WARM_SLICE.saturating_sub(started.elapsed());
+            if !budget.is_zero()
+                && let Some((project, root)) = self.laravel_project(&path)
+            {
+                self.warm_up(&project, &root, budget);
             }
             self.publish(&path);
         }
@@ -2060,6 +2858,7 @@ const _: () = {
     openidea_plugin::__plugin_exports!(Laravel, Component, openidea_plugin::bindings);
     openidea_plugin::__providers_exports!(Laravel, Component);
     openidea_plugin::__views_exports!(Laravel, Component);
+    openidea_plugin::__indexing_exports!(Laravel, Component);
 
     impl syntax::Guest for Component {
         fn highlights(language: String, text: String) -> Vec<syntax::Token> {
@@ -2423,6 +3222,14 @@ mod tests {
 
     fn labels(items: &[CompletionItem]) -> Vec<&str> {
         items.iter().map(|i| i.label.as_str()).collect()
+    }
+
+    fn members_only(items: &[CompletionItem]) -> Vec<&str> {
+        items
+            .iter()
+            .filter(|i| i.kind != Some(openidea_plugin::providers::CompletionKind::Snippet))
+            .map(|i| i.label.as_str())
+            .collect()
     }
 
     #[test]
@@ -3047,6 +3854,25 @@ mod tests {
     }
 
     #[test]
+    fn adds_missing_translations_to_resources_lang_on_older_laravel() {
+        let host = setup();
+        host.add_file(
+            "resources/lang/en/messages.php",
+            "<?php\n\nreturn [\n    'welcome' => 'Welcome',\n];\n",
+        );
+        let text = "<?php\n__('messages.brand_new');\n";
+        let actions = Laravel::default().code_actions(
+            &doc("app/X.php", text),
+            Range::new(at(text, "brand", 1), at(text, "brand", 1)),
+        );
+        let titles: Vec<&str> = actions.iter().map(|a| a.title.as_str()).collect();
+        assert!(
+            titles.contains(&"Add 'messages.brand_new' to resources/lang/en/messages.php"),
+            "{titles:?}"
+        );
+    }
+
+    #[test]
     fn reports_unknown_views_when_files_open() {
         let host = setup();
         let mut plugin = Laravel::default();
@@ -3122,7 +3948,7 @@ mod tests {
             at(post, "aut\n", 3),
             None,
         );
-        assert!(labels(&rel).is_empty(), "author() already exists");
+        assert!(members_only(&rel).is_empty(), "author() already exists");
         let user = "<?php\nclass User extends Authenticatable\n{\n    pos\n}\n";
         let has_many = plugin.completion(
             &doc("app/Models/User.php", user),
@@ -3166,7 +3992,18 @@ Blade::if('admin', fn () => true);
         let items = plugin.completion(&d, at(text, "@fore", 5), None);
         assert_eq!(
             labels(&items),
-            ["@foreach", "@endforeach", "@forelse", "@endforelse"]
+            [
+                "@foreach",
+                "@endforeach",
+                "@forelse",
+                "@endforelse",
+                "@foreach … @end",
+                "@forelse … @end"
+            ]
+        );
+        assert_eq!(
+            items[4].insert_text,
+            "@foreach (${1:\\$items} as ${2:\\$item})\n\t$0\n@endforeach"
         );
         assert_eq!(items[0].replace.unwrap().start, at(text, "@fore", 0));
         let custom = plugin.completion(&d, at(text, "@adm", 4), None);
@@ -3174,6 +4011,787 @@ Blade::if('admin', fn () => true);
             labels(&custom),
             ["@admin", "@elseadmin", "@unlessadmin", "@endadmin"]
         );
+    }
+
+    #[test]
+    fn completes_the_psr4_namespace_of_the_file() {
+        let host = setup();
+        host.add_file(
+            "composer.json",
+            r#"{"require": {"laravel/framework": "^12.0"}, "autoload": {"psr-4": {"App\\": "app/"}}, "autoload-dev": {"psr-4": {"Tests\\": "tests/"}}}"#,
+        );
+        let mut plugin = Laravel::default();
+        let text = "<?php\n\nnamespace \n";
+        let items = plugin.completion(
+            &doc("app/Http/Controllers/Admin/UserController.php", text),
+            at(text, "namespace ", 10),
+            None,
+        );
+        assert_eq!(labels(&items), ["App\\Http\\Controllers\\Admin"]);
+        assert_eq!(items[0].insert_text, "App\\Http\\Controllers\\Admin;");
+        let test = "<?php\nnamespace Tests\\F";
+        let items = plugin.completion(
+            &doc("tests/Feature/OrderTest.php", test),
+            position(test, test.len()),
+            None,
+        );
+        assert_eq!(labels(&items), ["Tests\\Feature"]);
+    }
+
+    #[test]
+    fn checks_and_completes_enum_values_in_where_clauses() {
+        let host = setup();
+        host.add_file(
+            "app/Models/Order.php",
+            "<?php\nnamespace App\\Models;\n\nuse App\\Enums\\OrderStatus;\n\nclass Order extends Model\n{\n    protected function casts(): array\n    {\n        return ['status' => OrderStatus::class];\n    }\n}\n",
+        );
+        host.add_file(
+            "app/Enums/OrderStatus.php",
+            "<?php\nnamespace App\\Enums;\n\nenum OrderStatus: string\n{\n    case Pending = 'pending';\n    case Paid = 'paid';\n    case Refunded = 'refunded';\n}\n",
+        );
+        host.add_file(
+            "database/migrations/2024_02_01_000000_create_orders.php",
+            "<?php\nreturn new class extends Migration {\n    public function up(): void {\n        Schema::create('orders', function (Blueprint $table) {\n            $table->id();\n            $table->string('status');\n        });\n    }\n};\n",
+        );
+        let mut plugin = Laravel::default();
+        let text = "<?php\nOrder::where('status', 'refused')->get();\nOrder::query()->where('status', '!=', 'paid')->orWhereIn('status', ['pending', 'lost'])->get();\nOrder::where('status', '');\n";
+        let problems = plugin.inspect("/project/app/X.php", text);
+        let messages: Vec<&str> = problems
+            .iter()
+            .filter(|p| p.code.as_deref() == Some("laravel.unknown-enum-value"))
+            .map(|p| p.message.as_str())
+            .collect();
+        assert_eq!(
+            messages,
+            [
+                "Column 'status' can never be 'refused': it is cast to OrderStatus ('pending', 'paid', 'refunded')",
+                "Column 'status' can never be 'lost': it is cast to OrderStatus ('pending', 'paid', 'refunded')",
+            ]
+        );
+        let d = doc("app/X.php", text);
+        let actions = plugin.code_actions(
+            &d,
+            Range::new(at(text, "refused", 2), at(text, "refused", 2)),
+        );
+        assert!(actions.iter().any(|a| a.title == "Change to 'refunded'"));
+        let values = plugin.completion(&d, at(text, "'status', '')", 11), None);
+        assert_eq!(labels(&values), ["pending", "paid", "refunded"]);
+        assert_eq!(values[0].detail.as_deref(), Some("OrderStatus::Pending"));
+        let op = "<?php\nOrder::where('status', '<>', 'p');\n";
+        let values = plugin.completion(&doc("app/Y.php", op), at(op, "'p')", 2), None);
+        assert_eq!(labels(&values), ["pending", "paid"]);
+        let columns = plugin.completion(&doc("app/Y.php", op), at(op, "'status'", 3), None);
+        assert!(labels(&columns).contains(&"status"));
+    }
+
+    #[test]
+    fn enum_warnings_follow_the_text_as_it_is_typed() {
+        let host = setup();
+        host.add_file(
+            "app/Models/Order.php",
+            "<?php\nnamespace App\\Models;\n\nuse App\\Enums\\OrderStatus;\n\nclass Order extends Model\n{\n    protected $casts = ['status' => OrderStatus::class];\n}\n",
+        );
+        host.add_file(
+            "app/Enums/OrderStatus.php",
+            "<?php\nnamespace App\\Enums;\n\nenum OrderStatus: string\n{\n    case Paid = 'paid';\n}\n",
+        );
+        host.add_file(
+            "database/migrations/2024_02_01_000000_create_orders.php",
+            "<?php\nreturn new class extends Migration {\n    public function up(): void {\n        Schema::create('orders', function (Blueprint $table) {\n            $table->id();\n            $table->string('status');\n        });\n    }\n};\n",
+        );
+        let mut plugin = Laravel::default();
+        let path = "/project/app/X.php";
+        host.add_file("app/X.php", "<?php\nOrder::where('status', 'paid');\n");
+        plugin.handle_events(&[Event::FileOpened(path.into())], &host.invocation());
+        let enum_problems = |host: &MockHost| {
+            host.diagnostics()
+                .get(path)
+                .map(|d| {
+                    d.iter()
+                        .filter(|d| d.code.as_deref() == Some("laravel.unknown-enum-value"))
+                        .count()
+                })
+                .unwrap_or(0)
+        };
+        assert_eq!(enum_problems(&host), 0);
+        let mut typed = doc("app/X.php", "<?php\nOrder::where('status', 'pai');\n");
+        typed.version = 2;
+        plugin.line_markers(&typed);
+        assert_eq!(enum_problems(&host), 1, "shows up while typing");
+        typed.text = "<?php\nOrder::where('status', 'paid');\n".into();
+        typed.version = 3;
+        plugin.code_actions(&typed, Range::default());
+        assert_eq!(enum_problems(&host), 0, "goes away while typing");
+    }
+
+    #[test]
+    fn factories_complete_their_states_and_open_on_ctrl_click() {
+        let host = setup();
+        host.add_file(
+            "database/factories/UserFactory.php",
+            "<?php\nnamespace Database\\Factories;\n\nclass UserFactory extends Factory\n{\n    public function definition(): array { return []; }\n    public function unverified(): static { return $this; }\n}\n",
+        );
+        let mut plugin = Laravel::default();
+        let text =
+            "<?php\nUser::factory()->;\nUser::factory()->unverified()->create()->;\nUser::fac;\n";
+        let d = doc("app/X.php", text);
+        let states = plugin.completion(&d, at(text, "factory()->;", 11), None);
+        let names = labels(&states);
+        assert!(
+            names.contains(&"unverified") && names.contains(&"count") && names.contains(&"create"),
+            "{names:?}"
+        );
+        assert_eq!(names[0], "unverified");
+        let made = plugin.completion(&d, at(text, "create()->;", 10), None);
+        assert!(labels(&made).contains(&"email"), "{:?}", labels(&made));
+        let statics = plugin.completion(&d, at(text, "User::fac;", 9), None);
+        assert!(labels(&statics).contains(&"factory"));
+        let found = plugin.definition(&d, at(text, "factory()->;", 2));
+        assert_eq!(found[0].path, "/project/database/factories/UserFactory.php");
+        assert_eq!(found[0].range.start.line, 3);
+        let model = "<?php\nnamespace App\\Models;\n\nclass User extends Authenticatable\n{\n    use HasFactory;\n}\n";
+        let found = plugin.definition(
+            &doc("app/Models/User.php", model),
+            at(model, "HasFactory;", 3),
+        );
+        assert_eq!(found[0].path, "/project/database/factories/UserFactory.php");
+        assert_eq!(found[0].range.start.line, 3);
+    }
+
+    #[test]
+    fn callbacks_complete_typed_closures_with_imports() {
+        let _host = setup();
+        let mut plugin = Laravel::default();
+        let first = |plugin: &mut Laravel, text: &str| {
+            let items =
+                plugin.completion(&doc("app/X.php", text), position(text, text.len()), None);
+            items
+                .into_iter()
+                .next()
+                .map(|i| (i.label, i.insert_text, i.additional_edits))
+        };
+        let (label, insert, edits) = first(
+            &mut plugin,
+            "<?php\nnamespace App\\Http;\n\nUser::factory()->afterCreating(fn",
+        )
+        .unwrap();
+        assert_eq!(label, "fn (User $user) =>");
+        assert_eq!(insert, "fn (User \\$user) => $0");
+        assert_eq!(edits[0].text, "\n\nuse App\\Models\\User;");
+        let (label, _, edits) =
+            first(&mut plugin, "<?php\nnamespace App\\Http;\n\nUser::where(fn").unwrap();
+        assert_eq!(label, "fn (Builder $query) =>");
+        assert!(
+            edits[0]
+                .text
+                .contains("use Illuminate\\Database\\Eloquent\\Builder;")
+        );
+        let (label, _, _) =
+            first(&mut plugin, "<?php\n$users = User::all();\n$users->map(f").unwrap();
+        assert_eq!(label, "fn (User $user) =>");
+        let (label, _, _) = first(&mut plugin, "<?php\nSchema::create('posts', fn").unwrap();
+        assert_eq!(label, "fn (Blueprint $table) =>");
+        let (label, insert, _) = first(&mut plugin, "<?php\nDB::transaction(function").unwrap();
+        assert_eq!(label, "fn () =>");
+        assert!(insert.starts_with("fn () =>"));
+    }
+
+    #[test]
+    fn relation_snippets_use_the_models_the_migrations_point_to() {
+        let host = setup();
+        host.add_file(
+            "app/Models/Order.php",
+            "<?php\nnamespace App\\Models;\n\nclass Order extends Model\n{\n}\n",
+        );
+        host.add_file(
+            "database/migrations/2024_02_01_000000_create_orders.php",
+            "<?php\nreturn new class extends Migration {\n    public function up(): void {\n        Schema::create('orders', function (Blueprint $table) {\n            $table->id();\n            $table->foreignId('user_id');\n        });\n    }\n};\n",
+        );
+        let mut plugin = Laravel::default();
+        let user =
+            "<?php\nnamespace App\\Models;\n\nclass User extends Authenticatable\n{\n    hasm\n}\n";
+        let items = plugin.completion(
+            &doc("app/Models/User.php", user),
+            at(user, "hasm\n", 4),
+            None,
+        );
+        let item = items
+            .iter()
+            .find(|i| i.label == "hasmany orders → Order")
+            .unwrap_or_else(|| panic!("{:?}", labels(&items)));
+        assert!(
+            item.insert_text
+                .contains("public function orders(): HasMany")
+        );
+        assert!(item.insert_text.contains("hasMany(Order::class)"));
+        assert!(!labels(&items).contains(&"hasmany"), "no placeholder model");
+        let order =
+            "<?php\nnamespace App\\Models;\n\nclass Order extends Model\n{\n    belongsto\n}\n";
+        let items = plugin.completion(
+            &doc("app/Models/Order.php", order),
+            at(order, "belongsto\n", 9),
+            None,
+        );
+        assert!(
+            labels(&items).contains(&"belongsto user → User"),
+            "{:?}",
+            labels(&items)
+        );
+    }
+
+    #[test]
+    fn the_gutter_leads_to_the_usages_of_classes_and_scopes() {
+        use openidea_plugin::views::{ViewEvent, Views};
+        let host = setup();
+        let controller = "<?php\nnamespace App\\Http\\Controllers;\n\nuse App\\Models\\User;\n\nclass ProfileController\n{\n    public function show(User $user) { return UserResource::make(User::active()->first()); }\n}\n";
+        host.add_file("app/Http/Controllers/ProfileController.php", controller);
+        let prune = "<?php\nnamespace App\\Jobs;\n\nuse App\\Models\\User;\n\nclass Prune\n{\n    // User::active()->delete();\n    public function handle() {}\n}\n";
+        host.add_file("app/Jobs/Prune.php", prune);
+        host.add_file(
+            "app/Http/Resources/UserResource.php",
+            "<?php\nnamespace App\\Http\\Resources;\n\nclass UserResource extends JsonResource\n{\n}\n",
+        );
+        host.add_file(
+            "tests/Feature/UserTest.php",
+            "<?php\nit('works', fn () => User::factory()->create());\n",
+        );
+        let model_text = "<?php\nnamespace App\\Models;\n\nclass User extends Authenticatable\n{\n    protected $fillable = ['name', ''];\n\n    public function scopeActive($query) { return $query; }\n\n    public function posts(): HasMany\n    {\n        return $this->hasMany(Post::class);\n    }\n}\n";
+        host.add_file("app/Models/User.php", model_text);
+        let mut plugin = Laravel::default();
+        let model = doc("app/Models/User.php", model_text);
+        plugin.handle_events(
+            &[Event::FileOpened("/project/app/Models/User.php".into())],
+            &host.invocation(),
+        );
+        assert!(
+            !plugin
+                .line_markers(&model)
+                .iter()
+                .any(|m| m.tooltip.contains("is used in")),
+            "usages come from the document indexer now"
+        );
+        let edges = plugin.usage_edges("/project/app/Models/User.php", model_text);
+        let markers: Vec<(&str, u32)> = edges
+            .markers
+            .iter()
+            .map(|a| (a.key.as_str(), a.range.start.line))
+            .collect();
+        assert!(
+            markers.contains(&("laravel-usages#App\\Models\\User", 3)),
+            "{markers:?}"
+        );
+        assert!(
+            markers.contains(&("laravel-usages#scope:User.active", 7)),
+            "{markers:?}"
+        );
+        let edges = plugin.usage_edges(
+            "/project/app/Http/Controllers/ProfileController.php",
+            controller,
+        );
+        let definitions: Vec<(&str, u32)> = edges
+            .definitions
+            .iter()
+            .map(|a| (a.key.as_str(), a.range.start.line))
+            .collect();
+        assert_eq!(
+            definitions
+                .iter()
+                .filter(|(k, _)| *k == "laravel-usages#App\\Models\\User")
+                .count(),
+            2,
+            "{definitions:?}"
+        );
+        assert!(
+            definitions.iter().all(|(_, line)| *line == 7),
+            "{definitions:?}"
+        );
+        assert!(definitions.contains(&("laravel-usages#scope:User.active", 7)));
+        assert!(
+            edges.markers.is_empty()
+                || edges
+                    .markers
+                    .iter()
+                    .all(|a| a.key.ends_with("ProfileController"))
+        );
+        let edges = plugin.usage_edges("/project/app/Jobs/Prune.php", prune);
+        assert!(
+            !edges
+                .definitions
+                .iter()
+                .any(|a| a.key == "laravel-usages#App\\Models\\User"),
+            "comments and imports are not usages"
+        );
+        let found = plugin.definition(&model, at(model_text, "User extends", 1));
+        assert!(
+            found.iter().all(|l| !l.path.ends_with("Prune.php")),
+            "{found:?}"
+        );
+        assert!(
+            found
+                .iter()
+                .any(|l| l.path.ends_with("ProfileController.php") && l.range.start.line == 7)
+        );
+        assert!(
+            !found
+                .iter()
+                .any(|l| l.path.ends_with("ProfileController.php") && l.range.start.line == 3),
+            "imports are not usages"
+        );
+        plugin
+            .handle(
+                "hub",
+                ViewEvent::Message(r#"{"type":"model","name":"User","instance":"t"}"#.into()),
+                &host.invocation(),
+            )
+            .unwrap();
+        let (_, message) = host.view_messages().pop().unwrap();
+        let message: serde_json::Value = serde_json::from_str(&message).unwrap();
+        assert_eq!(message["type"], "modelresources");
+        let titles: Vec<&str> = message["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|g| g["title"].as_str())
+            .collect();
+        assert_eq!(
+            titles,
+            [
+                "Model",
+                "Migrations",
+                "Relations",
+                "Scopes",
+                "Controllers",
+                "Models",
+                "Tests"
+            ]
+        );
+    }
+
+    #[test]
+    fn enums_and_static_classes_complete_with_their_double_colon() {
+        let host = setup();
+        host.add_file(
+            "app/Enums/OrderStatus.php",
+            "<?php\nnamespace App\\Enums;\n\nenum OrderStatus: string\n{\n    case Paid = 'paid';\n}\n",
+        );
+        host.add_file(
+            "app/Support/Money.php",
+            "<?php\nnamespace App\\Support;\n\nclass Money\n{\n    public static function format(int $cents): string { return ''; }\n}\n",
+        );
+        host.add_file(
+            "app/Services/Billing.php",
+            "<?php\nnamespace App\\Services;\n\nclass Billing\n{\n    public function charge() {}\n}\n",
+        );
+        let mut plugin = Laravel::default();
+        plugin.handle_events(
+            &[Event::FileOpened(
+                "/project/app/Enums/OrderStatus.php".into(),
+            )],
+            &host.invocation(),
+        );
+        let text = "<?php\nnamespace App\\Http\\Controllers;\n\nclass OrdersController\n{\n    public function index()\n    {\n        $status = Ord\n        $total = Mon\n        $b = Bil\n    }\n}\n";
+        let d = doc("app/Http/Controllers/OrdersController.php", text);
+        let items = plugin.completion(&d, at(text, "Ord\n", 3), None);
+        let item = items.iter().find(|i| i.label == "OrderStatus::").unwrap();
+        assert_eq!(item.insert_text, "OrderStatus::");
+        assert_eq!(
+            item.additional_edits[0].text,
+            "\n\nuse App\\Enums\\OrderStatus;"
+        );
+        let items = plugin.completion(&d, at(text, "Mon\n", 3), None);
+        assert!(labels(&items).contains(&"Money::"), "{:?}", labels(&items));
+        let items = plugin.completion(&d, at(text, "Bil\n", 3), None);
+        assert!(
+            !labels(&items).contains(&"Billing::"),
+            "{:?}",
+            labels(&items)
+        );
+        let imported = "<?php\nnamespace App\\Http\\Controllers;\n\nuse App\\Enums\\OrderStatus;\n\nclass OrdersController\n{\n    public function index()\n    {\n        Ord\n    }\n}\n";
+        let d = doc("app/Http/Controllers/OrdersController.php", imported);
+        let items = plugin.completion(&d, at(imported, "Ord\n", 3), None);
+        let item = items.iter().find(|i| i.label == "OrderStatus::");
+        assert!(item.is_some(), "{:?}", labels(&items));
+        assert!(item.unwrap().additional_edits.is_empty());
+        host.add_file(
+            "config/app.php",
+            "<?php\nreturn [\n    'name' => 'x',\n    'aliases' => [\n        'Cache' => Illuminate\\Support\\Facades\\Cache::class,\n    ],\n];\n",
+        );
+        let facade = "<?php\nnamespace App\\Http\\Controllers;\n\nuse Illuminate\\Support\\Facades\\Cache;\n\nclass OrdersController\n{\n    public function index()\n    {\n        Cac\n    }\n}\n";
+        let d = doc("app/Http/Controllers/OrdersController.php", facade);
+        let items = plugin.completion(&d, at(facade, "Cac\n", 3), None);
+        assert!(labels(&items).contains(&"Cache::"), "{:?}", labels(&items));
+        let model = "<?php\nnamespace App\\Models;\n\nclass Order extends Model\n{\n    protected $casts = [\n        'status' => Ord\n    ];\n}\n";
+        let items = plugin.completion(
+            &doc("app/Models/Order.php", model),
+            at(model, "Ord\n", 3),
+            None,
+        );
+        assert_eq!(labels(&items), ["OrderStatus::class"]);
+        assert_eq!(items[0].insert_text, "OrderStatus::class");
+    }
+
+    #[test]
+    fn ctrl_click_on_a_cast_column_opens_its_enum_or_value_class() {
+        let host = setup();
+        host.add_file(
+            "app/Enums/OrderStatus.php",
+            "<?php\nnamespace App\\Enums;\n\nenum OrderStatus: string\n{\n    case Paid = 'paid';\n}\n",
+        );
+        host.add_file(
+            "app/Support/Money.php",
+            "<?php\nnamespace App\\Support;\n\nclass Money\n{\n    public function __construct(public int $cents) {}\n}\n",
+        );
+        host.add_file(
+            "app/Casts/MoneyCast.php",
+            "<?php\nnamespace App\\Casts;\n\nuse App\\Support\\Money;\n\nclass MoneyCast implements CastsAttributes\n{\n    public function get($model, $key, $value, $attributes): Money\n    {\n        return new Money((int) $value);\n    }\n}\n",
+        );
+        host.add_file(
+            "app/Models/Order.php",
+            "<?php\nnamespace App\\Models;\n\nuse App\\Casts\\MoneyCast;\nuse App\\Enums\\OrderStatus;\nuse Illuminate\\Database\\Eloquent\\Model;\n\nclass Order extends Model\n{\n    protected $casts = [\n        'status' => OrderStatus::class,\n        'total' => MoneyCast::class,\n    ];\n}\n",
+        );
+        host.add_file(
+            "database/migrations/2024_01_02_000000_create_orders_table.php",
+            "<?php\nSchema::create('orders', function (Blueprint $table) {\n    $table->id();\n    $table->string('status');\n    $table->integer('total');\n});\n",
+        );
+        let mut plugin = Laravel::default();
+        let text = "<?php\nnamespace App\\Http\\Controllers;\n\nuse App\\Models\\Order;\n\nclass A\n{\n    public function b(Order $order)\n    {\n        $order->status;\n        $order->total;\n    }\n}\n";
+        let d = doc("app/Http/Controllers/A.php", text);
+        let found = plugin.definition(&d, at(text, ">status", 2));
+        assert_eq!(
+            found[0].path, "/project/app/Enums/OrderStatus.php",
+            "{found:?}"
+        );
+        let found = plugin.definition(&d, at(text, ">total", 2));
+        assert_eq!(found[0].path, "/project/app/Support/Money.php", "{found:?}");
+    }
+
+    #[test]
+    fn files_changed_outside_the_editor_refresh_the_index() {
+        let host = setup();
+        let mut plugin = Laravel::default();
+        let text = "<?php\nroute('');\n";
+        let d = doc("app/X.php", text);
+        let before = plugin.completion(&d, at(text, "('", 2), None);
+        assert!(!labels(&before).contains(&"brand.new"));
+        host.add_file(
+            "routes/web.php",
+            &format!("{ROUTES}Route::get('/new', fn () => 1)->name('brand.new');\n"),
+        );
+        let stale = plugin.completion(&d, at(text, "('", 2), None);
+        assert!(!labels(&stale).contains(&"brand.new"));
+        plugin.handle_events(
+            &[Event::FilesChanged(openidea_plugin::FilesChanged {
+                created: Vec::new(),
+                modified: vec!["/project/routes/web.php".into()],
+                removed: Vec::new(),
+            })],
+            &host.invocation(),
+        );
+        let after = plugin.completion(&d, at(text, "('", 2), None);
+        assert!(
+            labels(&after).contains(&"brand.new"),
+            "{:?}",
+            labels(&after)
+        );
+        let many: Vec<String> = (0..MANY_CHANGES + 1)
+            .map(|i| format!("/project/app/F{i}.php"))
+            .collect();
+        plugin.handle_events(
+            &[Event::FilesChanged(openidea_plugin::FilesChanged {
+                created: many,
+                modified: Vec::new(),
+                removed: Vec::new(),
+            })],
+            &host.invocation(),
+        );
+        let again = plugin.completion(&d, at(text, "('", 2), None);
+        assert!(labels(&again).contains(&"brand.new"));
+    }
+
+    #[test]
+    fn each_window_shows_its_own_laravel_version() {
+        let host = setup();
+        let mut plugin = Laravel::default();
+        let focus = [Event::EditorFocused(Some("/project/routes/web.php".into()))];
+        plugin.handle_events(&focus, &host.invocation());
+        assert_eq!(host.status_items()[STATUS_ID].text, "Laravel 12.3.0");
+        host.add_file(
+            "composer.lock",
+            "{\"packages\": [{\n  \"name\": \"laravel/framework\",\n  \"version\": \"v13.10.2\"\n}]}",
+        );
+        plugin.handle_events(&focus, &host.invocation());
+        assert_eq!(host.status_items()[STATUS_ID].text, "Laravel 13.10.2");
+    }
+
+    #[test]
+    fn warming_up_stops_at_the_deadline_and_resumes_later() {
+        let _host = setup();
+        let mut plugin = Laravel::default();
+        let project = crate::project::project_of("/project/routes/web.php").unwrap();
+        let spent = std::time::Instant::now();
+        assert!(!plugin.cache.warm_until(&project, "/project", spent));
+        assert!(plugin.cache.has_framework("/project"));
+        assert!(
+            RefKind::ALL
+                .iter()
+                .all(|k| plugin.cache.built_len("/project", *k).is_none())
+        );
+        assert!(!plugin.warm_up(&project, "/project", std::time::Duration::ZERO));
+        assert!(!plugin.facts_ready("/project"));
+        assert!(plugin.warm_up(&project, "/project", std::time::Duration::from_secs(60)));
+        assert!(plugin.facts_ready("/project"));
+        assert!(
+            RefKind::ALL
+                .iter()
+                .all(|k| plugin.cache.built_len("/project", *k).is_some())
+        );
+    }
+
+    #[test]
+    fn slow_artisan_commands_run_in_the_terminal() {
+        let host = setup().with_capabilities(&["project.read", "process:php"]);
+        let mut plugin = Laravel::default();
+        for (id, command) in [
+            ("artisan-optimize-clear", "optimize:clear"),
+            ("artisan-migrate", "migrate"),
+        ] {
+            let result =
+                openidea_plugin::Plugin::run_command(&mut plugin, id, &host.invocation(), None);
+            assert_eq!(result.unwrap(), None);
+            let terminals = host.terminals();
+            let terminal = terminals.last().unwrap();
+            assert_eq!(terminal.title, format!("artisan {command}"));
+            assert_eq!(terminal.program, "php");
+            assert_eq!(terminal.args, ["artisan", command]);
+        }
+        assert!(host.process_runs().is_empty());
+    }
+
+    #[test]
+    fn ignored_files_changed_outside_the_editor_refresh_without_an_event() {
+        let host = setup();
+        host.add_file(".env", "APP_NAME=Shop\n");
+        let mut plugin = Laravel::default();
+        let text = "<?php\nenv('');\n";
+        let d = doc("app/X.php", text);
+        let before = plugin.completion(&d, at(text, "('", 2), None);
+        assert!(!labels(&before).contains(&"BRAND_NEW_KEY"));
+        host.add_file(".env", "APP_NAME=Shop\nBRAND_NEW_KEY=1\n");
+        let after = plugin.completion(&d, at(text, "('", 2), None);
+        assert!(
+            labels(&after).contains(&"BRAND_NEW_KEY"),
+            "{:?}",
+            labels(&after)
+        );
+        host.add_file(".env", "APP_NAME=Shop\nBRAND_NEW_KEY=1\nOTHER_NEW_KEY=2\n");
+        plugin.handle_events(
+            &[Event::EditorFocused(Some("/project/app/X.php".into()))],
+            &host.invocation(),
+        );
+        let cached = plugin.completion(&d, at(text, "('", 2), None);
+        assert!(labels(&cached).contains(&"OTHER_NEW_KEY"));
+    }
+
+    #[test]
+    fn a_picked_value_replaces_the_whole_string() {
+        let _host = setup();
+        let mut plugin = Laravel::default();
+        let text = "<?php\nreturn redirect()->route('invalid-value');\n";
+        let items = plugin.completion(&doc("app/X.php", text), at(text, "invalid", 0), None);
+        assert!(!items.is_empty());
+        let range = items[0].replace.unwrap();
+        assert_eq!(range.start, at(text, "invalid", 0));
+        assert_eq!(range.end, at(text, "invalid-value'", 13));
+        let rules = "<?php\n$request->validate(['a' => 'required|strin|max:3']);\n";
+        let items = plugin.completion(&doc("app/X.php", rules), at(rules, "strin", 2), None);
+        let range = items[0].replace.unwrap();
+        assert_eq!(range.start, at(rules, "strin", 0));
+        assert_eq!(range.end, at(rules, "strin|", 5));
+    }
+
+    #[test]
+    fn ctrl_click_on_a_cache_key_opens_the_cache_tab_filtered() {
+        use openidea_plugin::views::{ViewEvent, Views};
+        let host = setup();
+        let mut plugin = Laravel::default();
+        let text = "<?php\n$total = Cache::get('orders.total');\n";
+        let d = doc("app/X.php", text);
+        assert!(plugin.definition(&d, at(text, "orders", 2)).is_empty());
+        host.add_file(
+            "storage/openidea/hub/cache.laravel-hub",
+            "{\"section\":\"cache\"}\n",
+        );
+        let found = plugin.definition(&d, at(text, "orders", 2));
+        assert_eq!(
+            found[0].path,
+            "/project/storage/openidea/hub/cache.laravel-hub"
+        );
+        host.open_editor(
+            "/project/storage/openidea/hub/cache.laravel-hub",
+            "plaintext",
+            "{\"section\":\"cache\"}\n",
+            &[],
+        );
+        plugin
+            .handle(
+                "hub",
+                ViewEvent::Message(r#"{"type":"hello","instance":"tab1"}"#.into()),
+                &host.invocation(),
+            )
+            .unwrap();
+        let (view, message) = host.view_messages().pop().unwrap();
+        let message: serde_json::Value = serde_json::from_str(&message).unwrap();
+        assert_eq!(view, "hub");
+        assert_eq!(message["type"], "navigate");
+        assert_eq!(message["id"], "cache");
+        assert_eq!(message["cacheKey"], "orders.total");
+        assert_eq!(message["instance"], "tab1");
+        plugin
+            .handle(
+                "hub",
+                ViewEvent::Message(r#"{"type":"hello","instance":"tab2"}"#.into()),
+                &host.invocation(),
+            )
+            .unwrap();
+        let (_, again) = host.view_messages().pop().unwrap();
+        assert!(!again.contains("cacheKey"), "the filter is used once");
+        host.add_file("storage/openidea/hub/sections", &hubtabs::wanted());
+        plugin
+            .handle(
+                "laravel",
+                ViewEvent::Message(
+                    r#"{"type":"openeditor","id":"routes","instance":"side"}"#.into(),
+                ),
+                &host.invocation(),
+            )
+            .unwrap();
+        assert_eq!(
+            host.opened_locations().pop().unwrap().0,
+            "/project/storage/openidea/hub/routes.laravel-hub"
+        );
+    }
+
+    #[test]
+    fn searches_every_hub_section() {
+        use openidea_plugin::views::{ViewEvent, Views};
+        let host = setup();
+        let mut plugin = Laravel::default();
+        let search = |plugin: &mut Laravel, query: &str| {
+            plugin
+                .handle(
+                    "laravel",
+                    ViewEvent::Message(
+                        serde_json::json!({ "type": "search", "query": query, "instance": "side" })
+                            .to_string(),
+                    ),
+                    &host.invocation(),
+                )
+                .unwrap();
+            let (_, message) = host.view_messages().pop().unwrap();
+            serde_json::from_str::<serde_json::Value>(&message).unwrap()
+        };
+        let found = search(&mut plugin, "users");
+        assert_eq!(found["type"], "searchresults");
+        assert_eq!(found["instance"], "side");
+        let ids: Vec<&str> = found["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|g| g["id"].as_str())
+            .collect();
+        assert!(
+            ids.contains(&"routes") && ids.contains(&"database"),
+            "{ids:?}"
+        );
+        let routes = found["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["id"] == "routes")
+            .unwrap();
+        assert!(routes["rows"][0]["open"]["path"].is_string());
+        let none = search(&mut plugin, "zzzz-nothing");
+        assert_eq!(none["groups"].as_array().unwrap().len(), 0);
+        let short = search(&mut plugin, "u");
+        assert_eq!(short["groups"].as_array().unwrap().len(), 0);
+    }
+
+    fn install_laravel_10(host: &MockHost) {
+        let base = "vendor/laravel/framework/";
+        host.add_file(
+            &format!("{base}composer.json"),
+            r#"{"autoload": {"psr-4": {"Illuminate\\": "src/Illuminate/"}}}"#,
+        );
+        host.add_file(
+            &format!("{base}src/Illuminate/Validation/Concerns/ValidatesAttributes.php"),
+            "<?php\nnamespace Illuminate\\Validation\\Concerns;\n\ntrait ValidatesAttributes\n{\n    public function validateRequired($attribute, $value) {}\n    public function validateString($attribute, $value) {}\n    public function validateExists($attribute, $value, $parameters) {}\n}\n",
+        );
+        host.add_file(
+            &format!("{base}src/Illuminate/Database/Eloquent/Concerns/HasAttributes.php"),
+            "<?php\nnamespace Illuminate\\Database\\Eloquent\\Concerns;\n\ntrait HasAttributes\n{\n    protected static $primitiveCastTypes = ['array', 'datetime'];\n}\n",
+        );
+        host.add_file(
+            &format!("{base}src/Illuminate/View/Compilers/BladeCompiler.php"),
+            "<?php\nnamespace Illuminate\\View\\Compilers;\n\nclass BladeCompiler\n{\n    use Concerns\\CompilesLoops;\n}\n",
+        );
+        host.add_file(
+            &format!("{base}src/Illuminate/View/Compilers/Concerns/CompilesLoops.php"),
+            "<?php\nnamespace Illuminate\\View\\Compilers\\Concerns;\n\ntrait CompilesLoops\n{\n    protected function compileForeach($expression) {}\n    protected function compileEndforeach() {}\n}\n",
+        );
+    }
+
+    #[test]
+    fn follows_the_installed_framework_version() {
+        let host = setup();
+        install_laravel_10(&host);
+        let mut plugin = Laravel::default();
+        let text = "<?php\n$request->validate(['email' => 'required|hex_color', 'name' => 's']);\n";
+        let d = doc("app/X.php", text);
+        let first = plugin.completion(&d, at(text, "'s'", 2), None);
+        assert_eq!(labels(&first), ["exists", "string"]);
+        plugin.handle_events(
+            &[Event::FileOpened("/project/app/X.php".into())],
+            &host.invocation(),
+        );
+        let rules = plugin.completion(&d, at(text, "'s'", 2), None);
+        assert_eq!(labels(&rules), ["exists", "string"]);
+        let problems = plugin.inspect("/project/app/X.php", text);
+        let messages: Vec<&str> = problems.iter().map(|p| p.message.as_str()).collect();
+        assert!(messages.contains(&"Validation rule 'hex_color' not found"));
+        assert!(!messages.iter().any(|m| m.contains("'required'")));
+        let defs = plugin.definition(&d, at(text, "required|", 2));
+        assert!(
+            defs.iter()
+                .any(|l| l.path.ends_with("ValidatesAttributes.php")),
+            "{defs:?}"
+        );
+        let model = "<?php\nclass User extends Authenticatable\n{\n    protected $cas\n}\n";
+        let members = plugin.completion(
+            &doc("app/Models/User.php", model),
+            at(model, "$cas\n", 4),
+            None,
+        );
+        assert_eq!(labels(&members), ["$casts"]);
+        assert!(members[0].insert_text.starts_with("protected $casts = "));
+        let blade = "<div>\n    @fore\n</div>\n";
+        let directives = plugin.completion(
+            &doc("resources/views/home.blade.php", blade),
+            at(blade, "@fore", 5),
+            None,
+        );
+        assert_eq!(
+            labels(&directives),
+            ["@foreach", "@endforeach", "@foreach … @end"]
+        );
+        let casts = "<?php\nclass Post extends Model\n{\n    protected $casts = ['published_at' => ''];\n}\n";
+        let types = plugin.completion(
+            &doc("app/Models/Post.php", casts),
+            at(casts, "=> '", 4),
+            None,
+        );
+        let types = labels(&types);
+        assert!(types.contains(&"datetime") && types.contains(&"array"));
+        assert!(!types.contains(&"hashed") && !types.contains(&"encrypted"));
     }
 
     #[test]

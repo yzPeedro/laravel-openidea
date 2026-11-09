@@ -72,6 +72,7 @@ fn indexes_a_real_project() {
         "database/migrations",
         "database/seeders",
         "resources/js",
+        "vendor/laravel/framework",
     ] {
         load(&host, root, &root.join(dir));
     }
@@ -84,6 +85,46 @@ fn indexes_a_real_project() {
     println!(
         "full index in {} ms: {summary}",
         started.elapsed().as_millis()
+    );
+    let probe = |plugin: &mut Laravel, text: &str, needle: &str| {
+        let at = position(text, text.find(needle).unwrap() + needle.len());
+        let doc = Document {
+            path: "/project/app/Probe.php".into(),
+            language: "php".into(),
+            version: 1,
+            text: text.into(),
+        };
+        let started = Instant::now();
+        let labels: Vec<String> = plugin
+            .completion(&doc, at, None)
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        (labels, started.elapsed().as_millis())
+    };
+    let (rules, ms) = probe(
+        &mut plugin,
+        "<?php\n$request->validate(['a' => '']);\n",
+        "=> '",
+    );
+    println!("validation rules from vendor: {} in {ms} ms", rules.len());
+    let (statics, ms) = probe(
+        &mut plugin,
+        "<?php\nnamespace App\\Http\\Controllers;\n\nclass A\n{\n    public function b()\n    {\n        Cac\n    }\n}\n",
+        "        Cac",
+    );
+    println!(
+        "static classes for Cac: {:?} in {ms} ms",
+        statics
+            .iter()
+            .filter(|l| l.ends_with("::"))
+            .collect::<Vec<_>>()
+    );
+    let (query, ms) = probe(&mut plugin, "<?php\nUser::query()->wh\n", "->wh");
+    println!(
+        "User::query()->wh: {} methods in {ms} ms, e.g. {:?}",
+        query.len(),
+        &query[..query.len().min(8)]
     );
     let models: Vec<String> = std::env::var("LARAVEL_MODELS")
         .unwrap_or_else(|_| "User".into())

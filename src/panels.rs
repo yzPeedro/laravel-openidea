@@ -38,6 +38,16 @@ const PROJECT_DIRS: [&str; 10] = [
 #[serde(tag = "type", rename_all = "lowercase")]
 enum Request {
     Overview,
+    Hello,
+    Openeditor {
+        id: String,
+    },
+    Search {
+        query: String,
+    },
+    Model {
+        name: String,
+    },
     Section {
         id: String,
     },
@@ -200,7 +210,8 @@ fn remember(argv: &[String]) -> Vec<Vec<String>> {
     recent
 }
 
-fn post(view: &str, value: serde_json::Value) {
+fn post(view: &str, mut value: serde_json::Value) {
+    crate::hubtabs::tag(&mut value);
     let kind = value["type"].as_str().unwrap_or_default();
     let problem = match kind {
         "error" => value["message"].as_str(),
@@ -253,6 +264,42 @@ fn found_rows(found: Vec<Found>) -> Vec<Row> {
 }
 
 const DEV_SECTIONS: [&str; 4] = ["debug-tools", "debug-calls", "profiles", "ecosystem"];
+
+const SEARCHABLE: [&str; 32] = [
+    "routes",
+    "controllers",
+    "requests",
+    "api-resources",
+    "middleware",
+    "models",
+    "scopes",
+    "observers",
+    "casts",
+    "enums",
+    "database",
+    "factories",
+    "views",
+    "components",
+    "frontend",
+    "translations",
+    "classes",
+    "providers",
+    "bindings",
+    "rules",
+    "macros",
+    "config",
+    "env",
+    "services",
+    "policies",
+    "queues",
+    "schedule",
+    "events",
+    "listeners",
+    "mail",
+    "tests",
+    "debug-calls",
+];
+const SEARCH_ROWS: usize = 6;
 
 const CODE_SECTIONS: [&str; 18] = [
     "classes",
@@ -482,7 +529,7 @@ impl Laravel {
         if !colored.iter().any(|a| a == "--ansi" || a == "--no-ansi") {
             colored.push("--ansi".into());
         }
-        let result = project.run_process(mode.program(), &mode.args(&colored, false), None);
+        let result = crate::runner::run(&project, &mode, &mode.args(&colored, false), None);
         drop(task);
         let message = match result {
             Ok(out) => {
@@ -602,7 +649,7 @@ impl Laravel {
             "openapi": count(RefKind::OpenApi),
         });
         let mut counts = counts;
-        let scan = resources::scan(&project, &root);
+        let scan = self.cached_scan(&project, &root);
         if let Some(map) = counts.as_object_mut() {
             for (k, v) in sections::counts(&scan, &project, &root) {
                 map.insert(k.to_owned(), json!(v));
@@ -1020,36 +1067,7 @@ impl Laravel {
 
     fn section(&mut self, view: &str, ctx: &Invocation, id: &str) -> Result<(), Error> {
         let (project, root) = project(ctx)?;
-        let built = if DEV_SECTIONS.contains(&id) {
-            Some(match id {
-                "debug-tools" => devtools::tools(&project),
-                "debug-calls" => devtools::debug_calls(&project, &root),
-                "ecosystem" => {
-                    let config: Vec<(String, String)> = self
-                        .cache
-                        .get(RefKind::Config, &project, &root)
-                        .iter()
-                        .map(|e| (e.key.clone(), e.detail.clone().unwrap_or_default()))
-                        .collect();
-                    let mut count = |k: RefKind| self.cache.get(k, &project, &root).len();
-                    let counts = [
-                        ("token abilities", count(RefKind::TokenAbility)),
-                        ("socialite", count(RefKind::SocialiteDriver)),
-                        ("roles", count(RefKind::Role)),
-                        ("permissions", count(RefKind::Permission)),
-                        ("livewire", count(RefKind::Livewire)),
-                        ("inertia", count(RefKind::InertiaPage)),
-                    ];
-                    devtools::ecosystem(&project, &root, &config, &counts)
-                }
-                _ => devtools::profiles(&project, &root),
-            })
-        } else if CODE_SECTIONS.contains(&id) {
-            let scan = resources::scan(&project, &root);
-            sections::build(id, &scan, &project, &root, &mut self.cache)
-        } else {
-            self.index_section(&project, &root, id)
-        };
+        let built = self.build_section(&project, &root, id, &mut None);
         let Some(mut t) = built else {
             return Err(Error::NotFound(format!("section {id}")));
         };
@@ -1059,6 +1077,99 @@ impl Laravel {
             json!({ "type": "section", "id": id, "columns": t.columns, "rows": t.rows, "facets": t.facets, "actions": section_actions(id, &project) }),
         );
         Ok(())
+    }
+
+    fn hub_search(&mut self, view: &str, ctx: &Invocation, query: &str) -> Result<(), Error> {
+        let (project, root) = project(ctx)?;
+        let needle = query.trim().to_lowercase();
+        if needle.chars().count() < 2 {
+            post(
+                view,
+                json!({ "type": "searchresults", "query": query, "groups": [] }),
+            );
+            return Ok(());
+        }
+        let fresh = self.hub_tables.as_ref().is_some_and(|(r, _)| *r == root);
+        if !fresh {
+            let _task = host::begin_task("Laravel: indexing the hub for search", false);
+            let mut scan = None;
+            let mut tables = Vec::new();
+            for id in SEARCHABLE {
+                if let Some(t) = self.build_section(&project, &root, id, &mut scan) {
+                    tables.push((id, t));
+                }
+            }
+            self.hub_tables = Some((root.clone(), Rc::new(tables)));
+        }
+        let Some((_, tables)) = self.hub_tables.clone() else {
+            return Ok(());
+        };
+        let groups: Vec<serde_json::Value> = tables
+            .iter()
+            .filter_map(|(id, t)| {
+                let hits: Vec<&sections::Row> = t
+                    .rows
+                    .iter()
+                    .filter(|r| r.cells.iter().any(|c| c.to_lowercase().contains(&needle)))
+                    .collect();
+                (!hits.is_empty()).then(|| {
+                    json!({
+                        "id": id,
+                        "total": hits.len(),
+                        "columns": t.columns,
+                        "rows": hits.into_iter().take(SEARCH_ROWS).collect::<Vec<_>>(),
+                    })
+                })
+            })
+            .collect();
+        post(
+            view,
+            json!({ "type": "searchresults", "query": query, "groups": groups }),
+        );
+        Ok(())
+    }
+
+    fn build_section(
+        &mut self,
+        project: &Project,
+        root: &str,
+        id: &str,
+        scan: &mut Option<Rc<resources::Scan>>,
+    ) -> Option<Table> {
+        let (project, root) = (project, root.to_owned());
+        if DEV_SECTIONS.contains(&id) {
+            Some(match id {
+                "debug-tools" => devtools::tools(project),
+                "debug-calls" => devtools::debug_calls(project, &root),
+                "ecosystem" => {
+                    let config: Vec<(String, String)> = self
+                        .cache
+                        .get(RefKind::Config, project, &root)
+                        .iter()
+                        .map(|e| (e.key.clone(), e.detail.clone().unwrap_or_default()))
+                        .collect();
+                    let mut count = |k: RefKind| self.cache.get(k, project, &root).len();
+                    let counts = [
+                        ("token abilities", count(RefKind::TokenAbility)),
+                        ("socialite", count(RefKind::SocialiteDriver)),
+                        ("roles", count(RefKind::Role)),
+                        ("permissions", count(RefKind::Permission)),
+                        ("livewire", count(RefKind::Livewire)),
+                        ("inertia", count(RefKind::InertiaPage)),
+                    ];
+                    devtools::ecosystem(project, &root, &config, &counts)
+                }
+                _ => devtools::profiles(project, &root),
+            })
+        } else if CODE_SECTIONS.contains(&id) {
+            if scan.is_none() {
+                *scan = Some(self.cached_scan(project, &root));
+            }
+            let scan = scan.clone().unwrap_or_default();
+            sections::build(id, &scan, project, &root, &mut self.cache)
+        } else {
+            self.index_section(project, &root, id)
+        }
     }
 }
 
@@ -1093,7 +1204,7 @@ impl Laravel {
         let mode = runner::detect(&project);
         let task = host::begin_task("Tinker", true);
         let args = mode.php_args(&["-r".into(), devtools::script(devtools::TINKER_PHP)]);
-        let result = project.run_process(mode.program(), &args, Some(code));
+        let result = crate::runner::run(&project, &mode, &args, Some(code));
         drop(task);
         let message = match result {
             Ok(out) => {
@@ -1131,7 +1242,7 @@ impl Laravel {
         let task = host::begin_task("Reading the cache", true);
         let args = mode.php_args(&["-r".into(), devtools::script(devtools::CACHE_PHP)]);
         let input = serde_json::to_string(request).map_err(|e| Error::Failed(e.to_string()))?;
-        let result = project.run_process(mode.program(), &args, Some(&input));
+        let result = crate::runner::run(&project, &mode, &args, Some(&input));
         drop(task);
         let mut message = match result {
             Ok(out) => devtools::cache_reply(&out.stdout).unwrap_or_else(|| {
@@ -1162,7 +1273,7 @@ impl Laravel {
             action.into(),
         ]);
         let stdin = (action == "install").then_some(devtools::RECORDER_PHP);
-        let result = project.run_process(mode.program(), &args, stdin);
+        let result = crate::runner::run(&project, &mode, &args, stdin);
         drop(task);
         let message = match result {
             Ok(out) => {
@@ -1222,8 +1333,9 @@ impl Laravel {
             devtools::script(devtools::INSTALL_PHP),
             action.into(),
         ]);
-        let result = project.run_process(
-            mode.program(),
+        let result = crate::runner::run(
+            &project,
+            &mode,
             &run,
             (action == "agents").then_some(payload.as_str()),
         );
@@ -1314,6 +1426,9 @@ impl Views for Laravel {
     }
 
     fn handle(&mut self, view: &str, event: ViewEvent, ctx: &Invocation) -> Result<(), Error> {
+        if let Some(root) = ctx.project().and_then(|p| p.root().ok()) {
+            self.status_for(&root);
+        }
         let result = self.handle_request(view, event, ctx);
         if let Err(e) = &result {
             audit::failed(&format!("hub request on {view}"), e);
@@ -1332,10 +1447,209 @@ impl Laravel {
         let ViewEvent::Message(text) = event else {
             return Ok(());
         };
-        let request: Request =
+        let value: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| Error::Invalid(e.to_string()))?;
+        let instance = value["instance"].as_str().map(str::to_owned);
+        let request: Request =
+            serde_json::from_value(value).map_err(|e| Error::Invalid(e.to_string()))?;
+        crate::hubtabs::with_instance(instance, || self.dispatch(view, ctx, request))
+    }
+
+    fn hub_hello(&mut self, view: &str, ctx: &Invocation) -> Result<(), Error> {
+        if view != crate::hubtabs::EDITOR {
+            return Ok(());
+        }
+        let Some(path) = ctx.editor().map(|e| e.path()) else {
+            return Ok(());
+        };
+        let Some(section) = crate::hubtabs::section_of(&path) else {
+            return Ok(());
+        };
+        let search = self.take_hub_filter(section);
+        post(
+            view,
+            crate::hubtabs::navigate(section, &path, search.as_deref()),
+        );
+        Ok(())
+    }
+
+    pub(crate) fn cached_scan(&mut self, project: &Project, root: &str) -> Rc<resources::Scan> {
+        self.read_project(project, root, crate::VIEW_SLICE);
+        self.store(root).scan()
+    }
+
+    fn model_overview(&mut self, view: &str, ctx: &Invocation, name: &str) -> Result<(), Error> {
+        use crate::modelmap::{self, Group, Row};
+        let (project, root) = project(ctx)?;
+        let _task = host::begin_task(&format!("Laravel: everything about {name}"), false);
+        let models = self.cache.get(RefKind::Model, &project, &root);
+        let Some(entry) = models.iter().find(|e| e.key == name).cloned() else {
+            post(
+                view,
+                json!({ "type": "error", "message": format!("{name} is not a model of this project") }),
+            );
+            return Ok(());
+        };
+        let table = entry
+            .detail
+            .as_deref()
+            .and_then(|d| d.strip_prefix("table "))
+            .unwrap_or_default()
+            .to_owned();
+        let model_path = rel(&root, &entry.location.path).to_owned();
+        let model_text = project.read_file(&model_path).unwrap_or_default();
+        let mut groups: Vec<Group> = vec![Group {
+            title: "Model".into(),
+            rows: vec![Row {
+                label: name.to_owned(),
+                detail: format!("table {table}"),
+                path: model_path.clone(),
+                line: entry.location.range.start.line + 1,
+            }],
+        }];
+        let migrations: Vec<(String, String)> =
+            crate::project::find(&project, &root, "database/migrations/**/*.php", 5000)
+                .into_iter()
+                .filter_map(|p| {
+                    let r = rel(&root, &p).to_owned();
+                    project.read_file(&r).ok().map(|t| (r, t))
+                })
+                .collect();
+        let found = modelmap::migrations(&migrations, &table);
+        if !found.is_empty() {
+            groups.push(Group {
+                title: "Migrations".into(),
+                rows: found,
+            });
+        }
+        let from_entries = |kind: RefKind, title: &str, this: &mut Self| -> Option<Group> {
+            let prefix = format!("{name}.");
+            let rows: Vec<Row> = this
+                .cache
+                .get(kind, &project, &root)
+                .iter()
+                .filter_map(|e| {
+                    let key = e.key.strip_prefix(&prefix)?;
+                    Some(Row {
+                        label: key.to_owned(),
+                        detail: e.detail.clone().unwrap_or_default(),
+                        path: rel(&root, &e.location.path).to_owned(),
+                        line: e.location.range.start.line + 1,
+                    })
+                })
+                .collect();
+            (!rows.is_empty()).then(|| Group {
+                title: title.into(),
+                rows,
+            })
+        };
+        groups.extend(from_entries(RefKind::Relation, "Relations", self));
+        groups.extend(from_entries(RefKind::Scope, "Scopes", self));
+        let composer = project.read_file("composer.json").unwrap_or_default();
+        let casts: Vec<Row> =
+            crate::enums::of_model(&project, &crate::casts::psr4(&composer), &model_text)
+                .into_iter()
+                .map(|e| Row {
+                    label: format!("{} → {}", e.column, e.name),
+                    detail: e
+                        .values
+                        .iter()
+                        .map(|(_, v)| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    path: model_path.clone(),
+                    line: modelmap::first_offset(&model_text, &e.name)
+                        .map_or(1, |at| modelmap::line_of(&model_text, at)),
+                })
+                .collect();
+        if !casts.is_empty() {
+            groups.push(Group {
+                title: "Casts".into(),
+                rows: casts,
+            });
+        }
+        let factory = crate::factories::file(&project, name, &model_text).map(|(path, text)| Row {
+            label: path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&path)
+                .trim_end_matches(".php")
+                .to_owned(),
+            detail: "factory".into(),
+            line: modelmap::line_of(&text, crate::factories::class_offset(&text)),
+            path,
+        });
+        let scan = self.cached_scan(&project, &root);
+        let usages: std::collections::BTreeMap<String, u32> = self
+            .store(&root)
+            .files_using(name, &model_path)
+            .into_iter()
+            .collect();
+        let mut used = modelmap::from_scan(&scan, name, &usages);
+        if let Some(row) = factory {
+            match used.iter_mut().find(|g| g.title == "Factories") {
+                Some(g) if !g.rows.iter().any(|r| r.path == row.path) => g.rows.insert(0, row),
+                Some(_) => {}
+                None => used.push(Group {
+                    title: "Factories".into(),
+                    rows: vec![row],
+                }),
+            }
+        }
+        groups.extend(used);
+        for (dir, title) in [("routes/", "Routes"), ("tests/", "Tests")] {
+            let mut rows = Vec::new();
+            for r in usages.keys().filter(|p| p.starts_with(dir)) {
+                if let Ok(text) = project.read_file(r) {
+                    rows.extend(modelmap::lines_mentioning(r, &text, name));
+                }
+            }
+            rows.truncate(200);
+            if rows.is_empty() {
+                continue;
+            }
+            match groups.iter_mut().find(|g| g.title == title) {
+                Some(g) => g.rows.extend(rows),
+                None => groups.push(Group {
+                    title: title.into(),
+                    rows,
+                }),
+            }
+        }
+        modelmap::sort(&mut groups);
+        post(
+            view,
+            json!({ "type": "modelresources", "name": name, "table": table, "groups": groups }),
+        );
+        Ok(())
+    }
+
+    fn open_hub_tab(&mut self, view: &str, ctx: &Invocation, id: &str) -> Result<(), Error> {
+        let (project, root) = project(ctx)?;
+        if id != crate::hubtabs::WHOLE && !crate::hubtabs::SECTIONS.contains(&id) {
+            return Err(Error::Invalid(format!("unknown hub section {id}")));
+        }
+        if let Err(why) = self.sync_hub_files(&project, true) {
+            post(
+                view,
+                json!({ "type": "error", "message": format!("The hub tab files couldn't be written to storage/openidea/hub: {why}") }),
+            );
+            return Ok(());
+        }
+        let path = crate::project::join(&root, &crate::hubtabs::file_path(id));
+        if let Err(e) = host::open_location(&path, 0, 0) {
+            post(view, json!({ "type": "error", "message": e.to_string() }));
+        }
+        Ok(())
+    }
+
+    fn dispatch(&mut self, view: &str, ctx: &Invocation, request: Request) -> Result<(), Error> {
         match request {
             Request::Overview => self.overview(view, ctx),
+            Request::Hello => self.hub_hello(view, ctx),
+            Request::Search { query } => self.hub_search(view, ctx, &query),
+            Request::Model { name } => self.model_overview(view, ctx, &name),
+            Request::Openeditor { id } => self.open_hub_tab(view, ctx, &id),
             Request::Section { id } => self.section(view, ctx, &id),
             Request::Init => self.send_commands(view, ctx, false),
             Request::Refresh => self.send_commands(view, ctx, true),

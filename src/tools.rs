@@ -168,7 +168,7 @@ impl Laravel {
         let tmp = matches!(mode, Mode::DockerRun(_)).then_some("storage/framework/cache/openidea");
         let input = json!({ "seconds": SAVE_SECONDS, "jobs": jobs, "tmp": tmp }).to_string();
         let args = mode.php_args(&["-r".into(), devtools::script(devtools::TOOLS_PHP)]);
-        let out = match project.run_process(mode.program(), &args, Some(&input)) {
+        let out = match runner::run(project, &mode, &args, Some(&input)) {
             Ok(out) => out,
             Err(e) => {
                 audit::failed(&format!("{label} on save"), &e);

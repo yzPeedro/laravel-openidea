@@ -28,7 +28,7 @@ fn create_form_request(project: &Project, x: &crate::formrequest::Extraction) ->
         "--".into(),
         x.file.clone(),
     ]);
-    let out = match project.run_process(mode.program(), &args, Some(&x.content)) {
+    let out = match crate::runner::run(project, &mode, &args, Some(&x.content)) {
         Ok(out) => out,
         Err(Error::Denied(cap)) => {
             return Err(Error::Failed(format!(

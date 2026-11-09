@@ -1,4 +1,5 @@
 use super::Entry;
+use crate::framework::Framework;
 use crate::php::{CallKind, string_args, tokenize};
 use crate::project::{Lines, join};
 use openidea_plugin::{Project, Range};
@@ -62,7 +63,7 @@ pub fn parse(path: &str, text: &str) -> Vec<Entry> {
         .collect()
 }
 
-pub fn index(project: &Project, root: &str) -> Vec<Entry> {
+pub fn index(project: &Project, root: &str, framework: &Framework) -> Vec<Entry> {
     let mut out = Vec::new();
     for file in ["bootstrap/app.php", "app/Http/Kernel.php"] {
         if let Ok(text) = project.read_file(file) {
@@ -70,6 +71,14 @@ pub fn index(project: &Project, root: &str) -> Vec<Entry> {
         }
     }
     let mut seen: BTreeSet<String> = out.iter().map(|e| e.key.clone()).collect();
+    if framework.installed {
+        for entry in &framework.middleware {
+            if seen.insert(entry.key.clone()) {
+                out.push(entry.clone());
+            }
+        }
+        return out;
+    }
     for (name, detail) in BUILTIN {
         if seen.insert(name.to_owned()) {
             out.push(Entry::new(

@@ -1,4 +1,5 @@
 use super::Entry;
+use crate::framework::Framework;
 use openidea_plugin::Range;
 
 pub const RULES: &[(&str, &str)] = &[
@@ -118,7 +119,10 @@ pub const EXTRA: &[(&str, &str)] = &[
     ("uuid", "uuid[:4]"),
 ];
 
-pub fn entries() -> Vec<Entry> {
+pub fn entries(framework: &Framework) -> Vec<Entry> {
+    if !framework.rules.is_empty() {
+        return framework.rules.clone();
+    }
     RULES
         .iter()
         .chain(EXTRA)

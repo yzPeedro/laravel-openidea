@@ -58,6 +58,39 @@ if ($action === 'helpers') {
     exit(0);
 }
 
+if ($action === 'hub') {
+    $index = (string) stream_get_contents(STDIN);
+    $sections = array_values(array_filter(array_map('trim', explode("\n", $index)), static fn ($s) => preg_match('/^[A-Za-z0-9_-]+$/', $s) === 1));
+    $hub = $dir . '/hub';
+    if (! is_dir($hub) && ! @mkdir($hub, 0775, true) && ! is_dir($hub)) {
+        $emit(['ok' => false, 'error' => "cannot create $hub"]);
+        exit(1);
+    }
+    $own($dir);
+    $own($hub);
+    if (! is_file($dir . '/.gitignore')) {
+        file_put_contents($dir . '/.gitignore', "*\n");
+        $own($dir . '/.gitignore');
+    }
+    foreach (glob($hub . '/*.laravel-hub') ?: [] as $stale) {
+        if (! in_array(basename($stale, '.laravel-hub'), $sections, true)) {
+            @unlink($stale);
+        }
+    }
+    foreach ($sections as $section) {
+        $path = $hub . '/' . $section . '.laravel-hub';
+        $content = json_encode(['section' => $section]) . "\n";
+        if (! is_file($path) || file_get_contents($path) !== $content) {
+            file_put_contents($path, $content);
+            $own($path);
+        }
+    }
+    file_put_contents($hub . '/sections', $index);
+    $own($hub . '/sections');
+    $emit(['ok' => true, 'sections' => count($sections)]);
+    exit(0);
+}
+
 if ($action === 'install') {
     if (! is_file($autoload)) {
         $emit(['ok' => false, 'error' => 'vendor/autoload.php is missing; run composer install']);

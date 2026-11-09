@@ -1,4 +1,4 @@
-use openidea_plugin::{Project, host};
+use openidea_plugin::{Error, ProcessOutput, Project, host};
 
 const COMPOSE_FILES: [&str; 4] = [
     "compose.yaml",
@@ -70,6 +70,56 @@ impl Mode {
         args.extend(argv.iter().cloned());
         args
     }
+}
+
+pub const WINDOWLESS_PHP: &str = "php-win";
+
+pub fn is_windows_root(root: &str) -> bool {
+    root.as_bytes().get(1) == Some(&b':') || root.starts_with("\\\\")
+}
+
+fn unavailable(error: &Error) -> bool {
+    match error {
+        Error::Denied(_) | Error::NotFound(_) => true,
+        Error::Failed(message) => message.starts_with(&format!("process:{WINDOWLESS_PHP}")),
+        _ => false,
+    }
+}
+
+const INLINE_CODE_BYTES: usize = 1024;
+
+pub const BOOT: &str = "$__oiN=(int)fgets(STDIN);$__oiC='';while(strlen($__oiC)<$__oiN&&!feof(STDIN)){$__oiC.=fread(STDIN,$__oiN-strlen($__oiC));}unset($__oiN);eval($__oiC);";
+
+pub fn pack(args: &[String], stdin: Option<&str>) -> (Vec<String>, Option<String>) {
+    let long = args
+        .iter()
+        .position(|a| a == "-r")
+        .filter(|&i| args.get(i + 1).is_some_and(|c| c.len() > INLINE_CODE_BYTES));
+    let Some(at) = long else {
+        return (args.to_vec(), stdin.map(str::to_owned));
+    };
+    let code = &args[at + 1];
+    let mut packed = args.to_vec();
+    packed[at + 1] = BOOT.to_owned();
+    let input = format!("{}\n{code}{}", code.len(), stdin.unwrap_or(""));
+    (packed, Some(input))
+}
+
+pub fn run(
+    project: &Project,
+    mode: &Mode,
+    args: &[String],
+    stdin: Option<&str>,
+) -> Result<ProcessOutput, Error> {
+    let (args, stdin) = pack(args, stdin);
+    let stdin = stdin.as_deref();
+    if *mode == Mode::Php && project.root().is_ok_and(|r| is_windows_root(&r)) {
+        match project.run_process(WINDOWLESS_PHP, &args, stdin) {
+            Err(e) if unavailable(&e) => {}
+            other => return other,
+        }
+    }
+    project.run_process(mode.program(), &args, stdin)
 }
 
 impl Mode {
@@ -221,6 +271,91 @@ pub fn detect(project: &Project) -> Mode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openidea_plugin::mock::MockHost;
+
+    #[test]
+    fn long_scripts_travel_on_stdin_and_still_read_their_input() {
+        let script = format!(
+            "$pad = '{}'; echo $argv[1], ':', strlen($pad), ':', stream_get_contents(STDIN);",
+            "x".repeat(5000)
+        );
+        let args = vec!["-r".to_owned(), script.clone(), "hub".to_owned()];
+        let (packed, stdin) = pack(&args, Some("payload ç"));
+        assert_eq!(packed, ["-r", BOOT, "hub"]);
+        assert!(packed.iter().all(|a| a.len() <= 4096));
+        assert!(
+            stdin
+                .as_deref()
+                .unwrap()
+                .starts_with(&format!("{}\n", script.len()))
+        );
+        let short = vec!["-r".to_owned(), "echo 1;".to_owned()];
+        assert_eq!(pack(&short, None), (short.clone(), None));
+        let Ok(mut child) = std::process::Command::new("php")
+            .args(&packed)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+        else {
+            return;
+        };
+        use std::io::Write;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.unwrap().as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "hub:5000:payload ç");
+    }
+
+    fn ran(host: &MockHost) -> Vec<String> {
+        host.process_runs().into_iter().map(|r| r.program).collect()
+    }
+
+    #[test]
+    fn windows_projects_run_php_without_a_console_window_when_allowed() {
+        let ok = |_: &[String], _: Option<&str>| {
+            Ok(ProcessOutput {
+                status: Some(0),
+                stdout: "ok".into(),
+                stderr: String::new(),
+            })
+        };
+        let host = MockHost::install().with_capabilities(&[
+            "project.read",
+            "process:php",
+            "process:php-win",
+        ]);
+        host.set_project_root(Some("C:\\Users\\dev\\shop"));
+        host.on_process("php", ok);
+        host.on_process("php-win", ok);
+        let project = host::projects().unwrap().remove(0);
+        let args = ["-v".to_owned()];
+        assert_eq!(run(&project, &Mode::Php, &args, None).unwrap().stdout, "ok");
+        assert_eq!(ran(&host), ["php-win"]);
+
+        let host = MockHost::install().with_capabilities(&["project.read", "process:php"]);
+        host.set_project_root(Some("C:\\Users\\dev\\shop"));
+        host.on_process("php", ok);
+        let project = host::projects().unwrap().remove(0);
+        run(&project, &Mode::Php, &args, None).unwrap();
+        assert_eq!(ran(&host), ["php"]);
+
+        let host = MockHost::install().with_capabilities(&[
+            "project.read",
+            "process:php",
+            "process:php-win",
+        ]);
+        host.on_process("php", ok);
+        host.on_process("php-win", ok);
+        let project = host::projects().unwrap().remove(0);
+        run(&project, &Mode::Php, &args, None).unwrap();
+        assert_eq!(ran(&host), ["php"]);
+        assert!(is_windows_root("\\\\?\\UNC\\wsl.localhost\\Ubuntu\\app"));
+        assert!(!is_windows_root("/home/dev/app"));
+    }
 
     #[test]
     fn reads_compose_services_and_builds_commands() {

@@ -8,9 +8,13 @@ pub struct Members {
     pub name: String,
     pub backed: Option<String>,
     pub cases: Vec<String>,
+    pub values: Vec<(String, String)>,
     pub methods: Vec<(String, String, bool)>,
     pub properties: Vec<(String, String)>,
     pub traits: Vec<String>,
+    pub extends: Option<String>,
+    pub hidden: Vec<(String, String)>,
+    pub offsets: Vec<(String, usize)>,
 }
 
 fn ident(tokens: &[Token], i: usize) -> Option<&str> {
@@ -40,6 +44,10 @@ pub fn read(text: &str) -> Option<Members> {
         ..Members::default()
     };
     let open = (at..tokens.len()).find(|&i| tokens[i].kind == Kind::Open('{'))?;
+    m.extends = (at + 2..open)
+        .find(|&i| ident(&tokens, i).is_some_and(|w| w.eq_ignore_ascii_case("extends")))
+        .and_then(|i| ident(&tokens, i + 1))
+        .map(str::to_owned);
     if m.kind == "enum" && tokens.get(at + 2).map(|t| &t.kind) == Some(&Kind::Colon) {
         m.backed = ident(&tokens, at + 3).map(str::to_owned);
     }
@@ -64,6 +72,16 @@ pub fn read(text: &str) -> Option<Members> {
             Some("case") if m.kind == "enum" => {
                 if let Some(name) = ident(&tokens, i + 1) {
                     m.cases.push(name.to_owned());
+                    if tokens.get(i + 2).is_some_and(|t| t.kind == Kind::Assign) {
+                        let value = match tokens.get(i + 3).map(|t| &t.kind) {
+                            Some(Kind::Str { value, .. }) => Some(value.clone()),
+                            Some(Kind::Num(n)) => Some(n.clone()),
+                            _ => None,
+                        };
+                        if let Some(value) = value {
+                            m.values.push((name.to_owned(), value));
+                        }
+                    }
                 }
             }
             Some("use") => {
@@ -103,12 +121,16 @@ pub fn read(text: &str) -> Option<Members> {
                         j += 1;
                     }
                     let sig_end = tokens.get(j).map_or(text.len(), |t| t.start);
+                    m.offsets.push((name.to_owned(), tokens[i + 1].start));
                     if public && name != "__construct" && !name.starts_with("__") {
                         m.methods.push((
                             name.to_owned(),
                             collapse(&text[sig_start..sig_end]),
                             is_static,
                         ));
+                    } else if !public {
+                        m.hidden
+                            .push((name.to_owned(), collapse(&text[sig_start..sig_end])));
                     }
                     if name == "__construct" {
                         let mut p = i + 2;
@@ -204,6 +226,13 @@ mod tests {
         assert_eq!((m.kind.as_str(), m.name.as_str()), ("enum", "OrderStatus"));
         assert_eq!(m.backed.as_deref(), Some("string"));
         assert_eq!(m.cases, ["APPROVED", "PENDING"]);
+        assert_eq!(
+            m.values,
+            [
+                ("APPROVED".to_owned(), "approved".to_owned()),
+                ("PENDING".to_owned(), "pending".to_owned())
+            ]
+        );
         assert_eq!(m.traits, ["HasLabel", "Comparable"]);
         assert_eq!(
             m.methods,

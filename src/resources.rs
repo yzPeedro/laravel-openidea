@@ -14,6 +14,7 @@ pub struct Method {
     pub name: String,
     pub line: u32,
     pub public: bool,
+    pub is_static: bool,
     pub params: String,
     pub body: String,
     pub attributes: Vec<Attribute>,
@@ -383,12 +384,14 @@ pub fn scan_text(path: &str, text: &str) -> Scan {
                     {
                         let params_end = matching(&tokens, k + 2);
                         let mut public = true;
+                        let mut is_static = false;
                         let mut b = k;
                         while b > 0 {
                             b -= 1;
                             match ident(&tokens, b).map(str::to_ascii_lowercase).as_deref() {
                                 Some("private" | "protected") => public = false,
-                                Some("public" | "static" | "final" | "abstract") => {}
+                                Some("static") => is_static = true,
+                                Some("public" | "final" | "abstract") => {}
                                 _ => break,
                             }
                         }
@@ -410,6 +413,7 @@ pub fn scan_text(path: &str, text: &str) -> Scan {
                             name: name.to_owned(),
                             line: line(tokens[k + 1].start),
                             public,
+                            is_static,
                             params: text[tokens[k + 2].end..tokens[params_end].start]
                                 .trim()
                                 .to_owned(),
@@ -469,32 +473,6 @@ fn scan_calls(path: &str, owner: &str, text: &str, tokens: &[Token], lines: &Lin
             args,
             closure_types,
         });
-    }
-    out
-}
-
-pub fn scan(project: &Project, root: &str) -> Scan {
-    let mut paths: Vec<String> = Vec::new();
-    for glob in [
-        "app/**/*.php",
-        "database/factories/**/*.php",
-        "database/seeders/**/*.php",
-        "routes/**/*.php",
-        "bootstrap/app.php",
-        "bootstrap/providers.php",
-    ] {
-        paths.extend(find(project, root, glob, 20_000));
-    }
-    paths.sort();
-    paths.dedup();
-    let mut out = Scan::default();
-    for p in paths {
-        let Ok(text) = crate::project::read_listed(project, &p) else {
-            continue;
-        };
-        let part = scan_text(rel(root, &p), &text);
-        out.symbols.extend(part.symbols);
-        out.calls.extend(part.calls);
     }
     out
 }

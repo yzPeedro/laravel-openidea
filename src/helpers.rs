@@ -297,7 +297,7 @@ impl Laravel {
             devtools::script(devtools::INSTALL_PHP),
             "helpers".into(),
         ]);
-        match project.run_process(mode.program(), &run, Some(&wanted)) {
+        match crate::runner::run(project, &mode, &run, Some(&wanted)) {
             Ok(out) if out.status != Some(0) => {
                 audit::error("IDE helper sync", audit::output(&out));
             }
@@ -314,6 +314,14 @@ impl Laravel {
     }
 
     pub(crate) fn path_items(&mut self, project: &Project, root: &str, base: &str) -> Vec<Entry> {
+        let base = if base == "lang/"
+            && crate::project::find(project, root, "lang/*", 1).is_empty()
+            && !crate::project::find(project, root, "resources/lang/*", 1).is_empty()
+        {
+            "resources/lang/"
+        } else {
+            base
+        };
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());

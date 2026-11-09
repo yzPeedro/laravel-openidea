@@ -44,7 +44,7 @@ body:
     id: openidea
     attributes:
       label: OpenIDEA version or commit
-      placeholder: "0.1.38"
+      placeholder: "0.1.40"
     validations:
       required: true
   - type: input

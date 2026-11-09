@@ -8,7 +8,7 @@ use Throwable;
 final class Recorder
 {
     private const MAX_BYTES = 8_000_000;
-    private const SECRET = '/pass(word)?|secret|token|api[_-]?key|authorization|cookie|credential|private|signature|otp|cvv|card/i';
+    private const SECRET = '/pass(word)?|secret|token|api[_-]?key|authorization|cookie|credential|private|signature|otp|cvv|card|(^|[_.-])key$/i';
     private const PII = '/e-?mail|cpf|cnpj|rg$|document|phone|telefone|celular|mobile|birth|nascimento|address|endereco|cep|zip|ssn|passport/i';
 
     public static bool $showPii = false;

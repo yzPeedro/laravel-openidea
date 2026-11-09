@@ -135,7 +135,7 @@ impl Laravel {
         let file = querysql::tinker_file(&code, &source, &classes);
         let mode = runner::detect(&project);
         let write = mode.php_args(&["-r".into(), devtools::script(devtools::SELECTION_PHP)]);
-        let written = match project.run_process(mode.program(), &write, Some(&file)) {
+        let written = match crate::runner::run(&project, &mode, &write, Some(&file)) {
             Ok(out) => out,
             Err(Error::Denied(cap)) => {
                 return Err(Error::Failed(format!(

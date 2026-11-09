@@ -5,8 +5,8 @@
 <p align="center">
   <a href="https://github.com/yzPeedro/laravel-openidea/actions/workflows/ci.yml"><img src="https://github.com/yzPeedro/laravel-openidea/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/yzPeedro/laravel-openidea/releases/latest"><img src="https://img.shields.io/github/v/release/yzPeedro/laravel-openidea?color=ff2d20&label=release" alt="Latest release"></a>
-  <img src="https://img.shields.io/badge/OpenIDEA-0.1.38%2B-4f46e5" alt="OpenIDEA 0.1.38 and newer">
-  <img src="https://img.shields.io/badge/Laravel-10%2B-ff2d20?logo=laravel&logoColor=white" alt="Laravel 10 and newer">
+  <img src="https://img.shields.io/badge/OpenIDEA-0.1.40%2B-4f46e5" alt="OpenIDEA 0.1.40 and newer">
+  <img src="https://img.shields.io/badge/Laravel-6%2B-ff2d20?logo=laravel&logoColor=white" alt="Laravel 6 and newer">
   <img src="https://img.shields.io/badge/built%20with-Rust%20%2B%20WebAssembly-orange?logo=rust" alt="Rust and WebAssembly">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
 </p>
@@ -60,14 +60,14 @@ https://github.com/user-attachments/assets/a653530b-f3d4-44e3-921e-bef9119cd659
 
 ## Installation
 
-**Requirements:** [OpenIDEA](https://github.com/l0ng-ai/openidea/releases/latest) 0.1.38 or newer and a Laravel 10 (or newer) project. PHP or Docker Compose is needed for the runtime features (Artisan, Tinker, Live Audit).
+**Requirements:** [OpenIDEA](https://github.com/l0ng-ai/openidea/releases/latest) 0.1.40 or newer and a Laravel project. Completion and inspections follow the Laravel version installed in `vendor/` (tested from Laravel 6 to 13); the runtime features are tested on Laravel 10 and newer. PHP or Docker Compose is needed for the runtime features (Artisan, Tinker, Live Audit).
 
 1. **Download** `laravel-openidea-<version>.zip` from the [latest release](https://github.com/yzPeedro/laravel-openidea/releases/latest).
 2. In OpenIDEA open **Settings › Plugins › ⚙ › Install Plugin from Package File…** and pick the zip.
 
    <img src="docs/media/settings-plugins-menu.webp" alt="Settings, Plugins, gear menu, Install Plugin from Package File" width="80%">
 
-3. **Allow `process:php` or `process:docker`** in the plugin's permissions. They are optional: completion and navigation work without them, while Artisan, Tinker and Live Audit need one of them.
+3. **Allow `process:php` or `process:docker`** in the plugin's permissions. They are optional: completion and navigation work without them, while Artisan, Tinker and Live Audit need one of them. On Windows, also allow `process:php-win` (the `php-win.exe` next to `php.exe`): the hub, Tinker, the Cache browser and the other background calls then run without flashing a console window.
 
    <img src="docs/media/settings-plugins.webp" alt="Plugin permissions in Settings" width="80%">
 
@@ -77,7 +77,7 @@ https://github.com/user-attachments/assets/a653530b-f3d4-44e3-921e-bef9119cd659
 <summary><b>Build from source</b></summary>
 
 ```sh
-git clone https://github.com/l0ng-ai/openidea --branch v0.1.38
+git clone https://github.com/l0ng-ai/openidea --branch v0.1.40
 git clone https://github.com/yzPeedro/laravel-openidea
 cd laravel-openidea
 rustup target add wasm32-wasip2
@@ -93,6 +93,8 @@ Install the zip as above, or link the folder for development with `openidea-plug
 ### Editor intelligence
 
 Completion and navigation come from cached indexes of your project files, built to answer within the IDE's 50 ms completion budget.
+
+**Snippets**: about 200 PHP and Laravel snippets (`pubf`, `ctorp`, `foreach`, `hasmany`, `scope`, `rget`, `qwhere`, `cremember`, `postjson`, `it`…) expand with Tab where they make sense (outside a class, in a class body or in code), add the `use` statements they need, and Blade block directives come with their closing tag. Every snippet is listed in [docs/snippets.md](docs/snippets.md).
 
 | Routes, with verb and URI | Eloquent columns from migrations |
 | :---: | :---: |
@@ -134,6 +136,14 @@ Completion and navigation come from cached indexes of your project files, built 
 ### The Laravel OpenIDEA hub
 
 One tool window for everything your app has. It refreshes from your files and opens every row in the editor. Every table section, Logs and Live Audit show 100 rows per page (50 to 500) with a pager that stays at the bottom; searching, filtering or sorting goes back to the first page.
+
+**Everything about a model**: click a model in the hub's Models section to see its table and migrations, relations, scopes, casts, factory and seeders, and every controller, Form Request, API Resource, policy, observer, job, event, listener, notification, mail, Livewire or Filament class, command, route and test that uses it. Mentions in comments and `use` imports are left out; *Open ›* on the row still opens the model's file.
+
+**Usages in the gutter**: a Laravel icon next to every class in `app/` and `database/` (models, API Resources, Form Requests, jobs, events, enums and the rest) and next to every model scope opens the list of every place that uses it, with each file's icon, to pick one; comments, strings and `use` imports are left out. The usages are published to the IDE's own background index, so they follow your edits and changes on disk. Ctrl+click on the class name lists them too.
+
+**Search the whole hub**: the box above the sections searches every table at once (routes, models, tables and columns, views, config, env, translations, classes, events, listeners, jobs and the rest), shows the first matches of each section with a link to its file, offers the sections whose name matches, and *Show all* opens a section searched for the same text.
+
+**In editor tabs**: *Open in editor* in the hub's header opens the current section (or, from the Overview, the whole hub) in an editor tab, and *Laravel: Open the Hub in an Editor Tab* does it from the command palette. Each tab keeps its own state, so you can drag tabs into a split to see two sections side by side. Ctrl+click on a cache key (`Cache::get('…')`, `cache('…')`, `cache()->remember('…')`…) opens the Cache section in a tab, searched for that key and expanded to show its value and when it expires. The tabs are small files in `storage/openidea/hub`, which the plugin writes with `process:php` (or `process:docker`).
 
 <img src="docs/media/hub-overview.webp" alt="Hub overview">
 
@@ -278,6 +288,7 @@ Live Audit reads two environment variables from your app: `OPENIDEA_AUDIT=false`
 ```
 OpenIDEA ── WIT (openidea:plugin@1.0) ──► laravel-openidea.wasm (Rust)
   │                                         ├─ index/      cached indexes of routes, config, views, models, migrations…
+  │                                         ├─ framework.rs rules, directives, casts and methods of the installed laravel/framework
   │  completion, definitions, gutter,       ├─ refs.rs     which helper, facade or directive points to which index
   │  code actions, Blade syntax             ├─ php.rs      PHP and Blade tokenizer with call context
   │                                         ├─ panels.rs   the hub (HTML view) and its sections

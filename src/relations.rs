@@ -1,3 +1,4 @@
+use crate::framework::Framework;
 use openidea_plugin::Range;
 use openidea_plugin::providers::{CompletionItem, CompletionKind};
 
@@ -272,7 +273,51 @@ pub enum Shape {
     Model,
     Many,
     Query,
+    Factory,
 }
+
+const FACTORY_MODEL: &[&str] = &[
+    "create",
+    "make",
+    "createOne",
+    "makeOne",
+    "createQuietly",
+    "createOneQuietly",
+];
+
+const FACTORY_MANY: &[&str] = &["createMany", "makeMany", "createManyQuietly"];
+
+pub const FACTORY: &[Method] = &[
+    ("count", "(?int $count): static"),
+    ("state", "($state): static"),
+    ("sequence", "(...$sequence): static"),
+    (
+        "has",
+        "(Factory $factory, ?string $relationship = null): static",
+    ),
+    (
+        "hasAttached",
+        "($factory, $pivot = [], ?string $relationship = null): static",
+    ),
+    ("for", "($factory, ?string $relationship = null): static"),
+    ("recycle", "($model): static"),
+    ("afterMaking", "(Closure $callback): static"),
+    ("afterCreating", "(Closure $callback): static"),
+    ("trashed", "(): static"),
+    ("create", "($attributes = [], ?Model $parent = null): {T}"),
+    ("createOne", "($attributes = []): {T}"),
+    (
+        "createMany",
+        "(iterable|int|null $records = null): Collection<int, {T}>",
+    ),
+    (
+        "createQuietly",
+        "($attributes = [], ?Model $parent = null): {T}",
+    ),
+    ("make", "($attributes = [], ?Model $parent = null): {T}"),
+    ("makeOne", "($attributes = []): {T}"),
+    ("raw", "($attributes = [], ?Model $parent = null): array"),
+];
 
 const QUERY_ELEMENT: &[&str] = &[
     "first",
@@ -415,11 +460,68 @@ pub fn after_call(shape: Shape, call: &str) -> Option<Shape> {
         Shape::Query if chains_query(call) => Some(Shape::Query),
         Shape::Model if MODEL_SELF.contains(&call) => Some(Shape::Model),
         Shape::Model if chains_query(call) => Some(Shape::Query),
+        Shape::Query if call == "factory" => Some(Shape::Factory),
+        Shape::Factory if FACTORY_MODEL.contains(&call) => Some(Shape::Model),
+        Shape::Factory if FACTORY_MANY.contains(&call) => Some(Shape::Many),
+        Shape::Factory if call != "raw" => Some(Shape::Factory),
         _ => None,
     }
 }
 
-pub fn relation_methods(kind: &str) -> Vec<Method> {
+pub type Owned = (String, String);
+
+fn owned(methods: &[Method]) -> Vec<Owned> {
+    methods
+        .iter()
+        .map(|(n, s)| ((*n).to_owned(), (*s).to_owned()))
+        .collect()
+}
+
+pub fn merged(curated: &[Method], installed: &[Owned]) -> Vec<Owned> {
+    if installed.is_empty() {
+        return owned(curated);
+    }
+    let mut out: Vec<Owned> = installed
+        .iter()
+        .map(|(name, signature)| {
+            let signature = curated
+                .iter()
+                .find(|(n, _)| n == name)
+                .map_or_else(|| signature.clone(), |(_, s)| (*s).to_owned());
+            (name.clone(), signature)
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+pub fn collection_methods(framework: &Framework) -> Vec<Owned> {
+    merged(COLLECTION, &framework.collection)
+}
+
+pub fn factory_methods(framework: &Framework) -> Vec<Owned> {
+    merged(FACTORY, &framework.factory)
+}
+
+pub fn query_methods(framework: &Framework) -> Vec<Owned> {
+    merged(QUERY, &framework.query)
+}
+
+pub fn relation_methods(kind: &str, framework: &Framework) -> Vec<Owned> {
+    let curated = curated_relation_methods(kind);
+    let Some(own) = framework.relations.get(kind).filter(|m| !m.is_empty()) else {
+        return owned(&curated);
+    };
+    let mut installed = own.clone();
+    for (name, signature) in &framework.query {
+        if !installed.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)) {
+            installed.push((name.clone(), signature.clone()));
+        }
+    }
+    merged(&curated, &installed)
+}
+
+fn curated_relation_methods(kind: &str) -> Vec<Method> {
     let own: &[&[Method]] = match kind {
         "hasMany" | "morphMany" => &[ONE_OR_MANY],
         "hasOne" | "morphOne" => &[ONE_OR_MANY, ONE_OF_MANY],
@@ -437,8 +539,8 @@ pub fn relation_methods(kind: &str) -> Vec<Method> {
     out
 }
 
-pub fn method_items<N: AsRef<str>>(
-    methods: &[(N, &str)],
+pub fn method_items<N: AsRef<str>, S: AsRef<str>>(
+    methods: &[(N, S)],
     model: &str,
     typed: &str,
     replace: Range,
@@ -449,6 +551,7 @@ pub fn method_items<N: AsRef<str>>(
         .filter(|(name, _)| name.as_ref().to_lowercase().contains(&lower))
         .map(|(name, signature)| {
             let name = name.as_ref();
+            let signature = signature.as_ref();
             let rank = if name.to_lowercase().starts_with(&lower) {
                 '0'
             } else {
@@ -473,19 +576,33 @@ mod tests {
     #[test]
     fn relation_kinds_get_their_own_methods_and_the_query_ones() {
         let names = |kind: &str| {
-            relation_methods(kind)
+            relation_methods(kind, &Framework::default())
                 .into_iter()
                 .map(|(n, _)| n)
                 .collect::<Vec<_>>()
         };
+        let has = |list: &[String], name: &str| list.iter().any(|n| n == name);
         let many = names("hasMany");
-        assert!(
-            many.contains(&"createMany") && many.contains(&"where") && !many.contains(&"attach")
-        );
+        assert!(has(&many, "createMany") && has(&many, "where") && !has(&many, "attach"));
         let pivot = names("belongsToMany");
-        assert!(pivot.contains(&"sync") && pivot.contains(&"attach") && pivot.contains(&"get"));
-        assert!(names("belongsTo").contains(&"associate"));
-        assert!(names("hasOne").contains(&"latestOfMany"));
-        assert_eq!(many.iter().filter(|n| **n == "create").count(), 1);
+        assert!(has(&pivot, "sync") && has(&pivot, "attach") && has(&pivot, "get"));
+        assert!(has(&names("belongsTo"), "associate"));
+        assert!(has(&names("hasOne"), "latestOfMany"));
+        assert_eq!(many.iter().filter(|n| *n == "create").count(), 1);
+    }
+
+    #[test]
+    fn installed_methods_replace_the_curated_list_but_keep_its_signatures() {
+        let installed = vec![
+            ("where".to_owned(), "($column, $operator = null)".to_owned()),
+            ("whereLike".to_owned(), "($column, $value)".to_owned()),
+            ("first".to_owned(), "($columns = ['*'])".to_owned()),
+        ];
+        let methods = merged(QUERY, &installed);
+        let names: Vec<&str> = methods.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["first", "where", "whereLike"]);
+        assert_eq!(methods[0].1, "($columns = ['*']): ?{T}");
+        assert_eq!(methods[2].1, "($column, $value)");
+        assert_eq!(merged(QUERY, &[]).len(), QUERY.len());
     }
 }

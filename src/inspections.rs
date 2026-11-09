@@ -36,6 +36,19 @@ fn setting(name: &str) -> bool {
 }
 
 impl Laravel {
+    pub(crate) fn cached_facts(&mut self, project: &Project, root: &str) -> std::rc::Rc<Parts> {
+        if let Some(facts) = self.facts_cache.get(root) {
+            return facts.clone();
+        }
+        let facts = std::rc::Rc::new(self.check_facts(project, root));
+        self.facts_cache.insert(root.to_owned(), facts.clone());
+        facts
+    }
+
+    pub(crate) fn facts_ready(&self, root: &str) -> bool {
+        self.facts_cache.contains_key(root)
+    }
+
     fn check_facts(&mut self, project: &Project, root: &str) -> Parts {
         let relations: Vec<(String, String)> = self
             .cache
@@ -47,18 +60,21 @@ impl Laravel {
                     .map(|(m, r)| (m.to_owned(), r.to_owned()))
             })
             .collect();
+        let psr4 = crate::casts::psr4(&project.read_file("composer.json").unwrap_or_default());
         let models = self
             .cache
             .get(RefKind::Model, project, root)
             .iter()
             .filter_map(|e| {
                 let table = e.detail.as_deref()?.strip_prefix("table ")?.to_owned();
+                let source =
+                    crate::project::read_listed(project, &e.location.path).unwrap_or_default();
                 Some(ModelFacts {
                     name: e.key.clone(),
                     table,
                     path: e.location.path.clone(),
-                    source: crate::project::read_listed(project, &e.location.path)
-                        .unwrap_or_default(),
+                    enums: crate::enums::of_model(project, &psr4, &source),
+                    source,
                     relations: relations
                         .iter()
                         .filter(|(m, _)| *m == e.key)
@@ -118,25 +134,28 @@ impl Laravel {
             fillable: setting("fillableInspection"),
             n_plus_one: setting("nPlusOneInspection"),
             duplicate_keys: setting("duplicateKeyInspection"),
+            enum_values: setting("enumValueInspection"),
         };
         if !(enabled.columns
             || enabled.env
             || enabled.fillable
             || enabled.n_plus_one
-            || enabled.duplicate_keys)
+            || enabled.duplicate_keys
+            || enabled.enum_values)
         {
             return Vec::new();
         }
-        let (models, columns, config_env) = self.check_facts(project, root);
+        let facts = self.cached_facts(project, root);
+        let (models, columns, config_env) = &*facts;
         let rel = crate::project::rel(root, path).replace('\\', "/");
         checks::php(
             text,
             &Facts {
                 path,
                 rel_path: &rel,
-                models: &models,
-                columns: &columns,
-                config_env: &config_env,
+                models,
+                columns,
+                config_env,
                 enabled,
             },
         )
