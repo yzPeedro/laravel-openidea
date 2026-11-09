@@ -22,7 +22,15 @@ if (! is_file($dir . '/.gitignore')) {
     $own($dir);
     $own($dir . '/.gitignore');
 }
-if (file_put_contents($file, stream_get_contents(STDIN)) === false) {
+$code = (string) stream_get_contents(STDIN);
+try {
+    token_get_all($code, TOKEN_PARSE);
+} catch (ParseError $e) {
+    $line = trim(explode("\n", $code)[$e->getLine() - 1] ?? '');
+    fwrite(STDERR, $e->getMessage() . ($line === '' ? '' : " in: $line") . "\n");
+    exit(2);
+}
+if (file_put_contents($file, $code) === false) {
     fwrite(STDERR, "cannot write $file\n");
     exit(1);
 }

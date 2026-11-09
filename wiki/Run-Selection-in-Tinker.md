@@ -2,6 +2,9 @@
 
 Select some PHP in the editor, right-click and pick *Laravel: Run Selection in Tinker*: a terminal opens `artisan tinker` with the file's imports, shows the value of each statement of the selection, and stays open at the Tinker prompt with the selection's variables defined, so you can keep exploring.
 
+<p align="center"><img src="images/tinker-selection-error.webp" alt="The artisan tinker (selection) terminal after running Nope::first(): ErrorException Class Nope not found, then the Tinker prompt" width="760"></p>
+<p align="center"><sub>An error in the selection is shown and the Tinker prompt stays open</sub></p>
+
 ## How to use it
 
 1. In a PHP file of a Laravel project, select the code to run, such as:
@@ -24,8 +27,12 @@ The plugin writes the selection to `storage/openidea/selection.php`, turned into
 
 use App\Models\Post;
 
+try {
 dump($count = Post::count());
 dump(Post::first());
+} catch (\Error $__openideaError) {
+    throw new \ErrorException($__openideaError->getMessage(), 0, E_ERROR, $__openideaError->getFile(), $__openideaError->getLine(), $__openideaError);
+}
 ```
 
 and starts Tinker with it:
@@ -34,23 +41,25 @@ and starts Tinker with it:
 php artisan tinker storage/openidea/selection.php
 ```
 
-Tinker runs the file, so you see one dump per statement, then hands you its prompt in the same session.
+Tinker runs the file, so you see one dump per statement, then hands you its prompt in the same session. The statements are not indented inside `try`, so heredocs keep their content.
 
 ## Details
 
 ### How the script is built
 
 1. **Imports.** Every `use …;` statement of the file you're in that names a class (contains a `\`) is copied to the top. Then each of your models used in the selection as `Post::`, `new Post` or `Post $` is imported (`use App\Models\Post;`) when the file doesn't import it already. Models come from the [model index](Model-Members.md), with the namespace written in each model's file.
-2. **Statements.** A leading `<?php` is dropped, and the selection is split into statements at each `;` outside brackets, braces and strings (comments are skipped). A missing final `;` is added.
+2. **Statements.** A leading `<?php` is dropped, and the selection is split into statements at each `;` outside brackets, braces and strings (comments are skipped). A missing final `;` is added. `use` statements of the selection join the imports at the top, and `namespace` and `declare(…)` go first, since PHP doesn't accept them inside a block.
 3. **Dumps.** Each statement is wrapped in `dump(…)`, so assignments still assign (`dump($count = Post::count())`). A statement is left as it is when it:
    - starts with a control or declaration keyword: `if`, `else`, `elseif`, `foreach`, `for`, `while`, `do`, `switch`, `try`, `catch`, `finally`, `function`, `class`, `interface`, `trait`, `enum`, `namespace`, `use`, `return`, `echo`, `print`, `throw`, `unset`, `global`, `static`, `const`, `abstract`, `final`, `readonly` or `declare`;
    - ends with `}` (a block, a closure assignment);
    - already calls `dump(` or `dd(`;
    - is a comment.
+4. **Errors.** The statements run inside `try { … }`. Tinker shows an exception thrown by the included file and carries on, but a PHP `Error` (an unknown class or function, a call on `null`, a `TypeError`…) would end `artisan tinker` with exit code 1, and OpenIDEA 0.1.40 closes a terminal tab as soon as its process exits, so the tab vanished before you could read anything. The `catch` turns the `Error` into an `ErrorException` with the same message, file and line, which Tinker prints (`ErrorException  Class "Nope" not found.`) before its prompt. The statements before the failing one have run and their variables are defined.
+5. **Syntax check.** Before the file is written, `php/selection.php` parses it (`token_get_all()` with `TOKEN_PARSE`). A syntax error opens no terminal: the command fails with *The selection isn't valid PHP: …*, PHP's message and the line of the generated script it points at, such as `syntax error, unexpected token ")" in: dump($x =);`.
 
 ### Where it runs
 
-The script is written by `php/selection.php`, which creates `storage/openidea` with its `.gitignore` (`*`) when needed, and overwrites `selection.php` on every run. Then the terminal runs Tinker with your [runner](Settings.md#artisanrunner):
+The script is written by `php/selection.php`, which creates `storage/openidea` with its `.gitignore` (`*`) when needed, checks the syntax, and overwrites `selection.php` on every run. The writer script is longer than 1 KB, so it travels on stdin ahead of the generated file, like the hub's other long scripts. Then the terminal runs Tinker with your [runner](Settings.md#artisanrunner):
 
 | Runner | Terminal command |
 | --- | --- |
@@ -67,6 +76,7 @@ The path is relative to the project root, so it works inside the container too. 
 | Select the code first, or place the cursor in a query. | Nothing is selected |
 | this file is not in a Laravel project | The file's project has no `artisan` and `laravel/framework` |
 | Allow "process:php" for Laravel OpenIDEA in Settings › Plugins to run Tinker. | Writing the script or opening the terminal was refused |
+| The selection isn't valid PHP: … | The generated script has a syntax error, with PHP's message and the line; no terminal opens |
 | Couldn't prepare the selection for Tinker: … | `selection.php` couldn't be written, with PHP's error |
 
 ### Compared with the hub's Tinker
