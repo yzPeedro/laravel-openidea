@@ -12,4 +12,5 @@
 
 - [ ] Tests cover the change
 - [ ] `CHANGELOG.md` updated under *Unreleased*
+- [ ] The feature's page in `wiki/` updated (or a new page linked from `wiki/Home.md`)
 - [ ] No new capability, or it is discussed in the issue

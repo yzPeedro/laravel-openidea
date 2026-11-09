@@ -7,6 +7,7 @@ Thanks for helping. This guide covers the setup, the checks every change must pa
 - Open an issue before a large change, so we can agree on the approach first.
 - One topic per pull request. Small, focused PRs are reviewed faster.
 - Every behaviour change comes with a test.
+- Every feature is documented in the [wiki](wiki/Home.md) in the same pull request (see [Documentation](#documentation)).
 - Be kind. Everyone here follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Development setup
@@ -97,11 +98,20 @@ The hub page posts JSON messages (`{"type": "section", "id": "routes"}`) through
 3. Add it to `SECTIONS` in `web/hub.html` with a group, an icon and a description.
 4. Add the id to `tests/real_project.rs` and `tests/hub_dump.rs`.
 
+## Documentation
+
+The `wiki/` folder is the plugin's documentation: one page per feature, setting, command and hub section, indexed in `wiki/Home.md`. A pull request that adds or changes behaviour updates the matching page in the same change, or adds a page and links it from `wiki/Home.md`.
+
+- Describe what the code really does: the triggers and contexts, where the data comes from, ordering, limits, settings, permissions and edge cases.
+- Take screenshots in OpenIDEA on a demo project, never a private one. Show no secrets. Save them as WebP in `wiki/images/`: editor shots cropped around the popup, hub shots as the full window.
+- Every page ends with a link back to the wiki home.
+- The README stays short: it links to the wiki rather than repeating it.
+
 ## Conventions
 
 - **No comments in code.** Names and small functions carry the meaning. Type annotations required by tools are fine.
 - Keep the completion path fast: providers must answer within the IDE's 50 ms budget, so index work happens on activation and events, never per keystroke.
-- No new capabilities without a discussion: the plugin asks only for `project.read`, `events`, and the optional `process:php` and `process:docker`.
+- No new capabilities without a discussion: the plugin requires only `project.read`, `events` and `storage`. `process:php`, `process:php-win`, `process:docker`, `editor.read`, `editor.write` and `clipboard` are optional (see the [permissions page](wiki/Permissions.md)).
 - The recorder and installer never touch tracked files, and they mask secrets and personal data.
 - UI text is English, short, and in sentence case.
 - Formatting is `rustfmt`'s. PHP follows PSR-12. JavaScript in `hub.html` uses two-space indentation and double quotes.
@@ -126,7 +136,7 @@ Pull requests use the type and area labels of the issue they close.
 ## Commits and pull requests
 
 - Write commit subjects in the imperative mood ("Add observer hooks to the hub"), under 72 characters, and explain the why in the body when it isn't obvious.
-- Update `CHANGELOG.md` under *Unreleased* for user-visible changes.
+- Update `CHANGELOG.md` under *Unreleased* for user-visible changes, and the wiki page of the feature.
 - Fill in the pull request template, including how you verified the change. For UI changes, add a before and after screenshot taken on a demo project.
 
 ## Releasing
