@@ -5,6 +5,7 @@ All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](h
 ## Unreleased
 
 - *Rename route* and *Rename translation* are offered after the file was saved, autosave included. On Windows OpenIDEA's file watcher reports the save before the save itself, which refreshed the plugin's copy of the file first, so the rename was lost. Renaming twice before applying keeps the first name, and renaming back to the original forgets the rename.
+- `$this->app->make('…')`, `$this->app->path('…')` and the other container calls on `$this->app` complete container ids and paths, as in a service provider, and `$this->request->input('…')` completes request fields. They were listed but never recognised.
 
 ## 0.15.0
 

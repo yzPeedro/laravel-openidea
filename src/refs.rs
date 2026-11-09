@@ -944,6 +944,20 @@ mod tests {
     }
 
     #[test]
+    fn container_and_request_properties_of_this_are_receivers() {
+        let text = "<?php\n$this->app->make('cache');\n$this->app->path('Models');\n$this->request->input('total');\n$this->other->make('x');\n";
+        assert_eq!(
+            wants(text, false, &Scope::default()),
+            [
+                ("cache".into(), Some(Want::Container)),
+                ("Models".into(), Some(Want::Paths("app/"))),
+                ("total".into(), Some(Want::RequestFields)),
+                ("x".into(), None),
+            ]
+        );
+    }
+
+    #[test]
     fn suggests_paths_disks_container_ids_uris_and_request_fields() {
         let text = "<?php\npublic_path('css/app.css');\nstorage_path('logs');\nbase_path('');\napp()->storagePath('app');\nApp::langPath('en');\nStorage::put('a.txt', 'x');\nStorage::disk('public')->exists('img');\nStorage::copy('a', 'b');\nlogs('daily');\napp('cache');\nresolve('files');\nurl('/orders');\nredirect('/home');\nredirect()->to('/back');\nold('email');\nrequest('name');\n$request->input('total');\n$request->only(['a', 'b']);\n$collection->get('x');\n";
         let got = wants(text, false, &Scope::default());
