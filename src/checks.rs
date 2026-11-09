@@ -802,6 +802,14 @@ fn n_plus_one(toks: &[Tok], facts: &Facts, out: &mut Vec<Finding>) {
                     end: toks[term.name_at].end,
                     text: format!("with('{rel}')->get"),
                 }]
+            } else if terminal == 0 {
+                let at = toks[term.name_at].start;
+                vec![Edit {
+                    path: facts.path.to_owned(),
+                    start: at,
+                    end: at,
+                    text: format!("with('{rel}')->"),
+                }]
             } else {
                 let at = toks[term.name_at - 1].start;
                 vec![Edit {
@@ -1214,6 +1222,12 @@ mod tests {
         assert_eq!(
             apply(all, &found[0].fixes[0].edits[0]),
             all.replace("Post::all()", "Post::with('comments')->get()")
+        );
+        let paged = "<?php\nforeach (Post::paginate() as $p) { $p->comments->count(); }\n";
+        let found = php(paged, &facts(&m, &c, &e, "app/A.php"));
+        assert_eq!(
+            apply(paged, &found[0].fixes[0].edits[0]),
+            paged.replace("Post::paginate()", "Post::with('comments')->paginate()")
         );
     }
 

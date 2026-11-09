@@ -46,8 +46,9 @@ foreach (Product::all() as $item) {
 | `Product::all()` | `Product::with('category')->get()` |
 | `Post::latest()->get()` | `Post::latest()->with('user')->get()` |
 | `Post::where('published', true)->paginate()` | `Post::where('published', true)->with('user')->paginate()` |
+| `Post::paginate()` | `Post::with('user')->paginate()` |
 
-`->with('…')` is inserted right before the last call. The tooltip offers the fix directly with Alt+Shift+Enter.
+`->with('…')` is inserted right before the last call. When the collecting call is the first one after the model (`Post::paginate()`, `Post::cursor()`), `with('…')->` goes right after `::`; `Post::all()` becomes `with('…')->get()`, since a query has no `all()`. The tooltip offers the fix directly with Alt+Shift+Enter.
 
 ## Details
 
