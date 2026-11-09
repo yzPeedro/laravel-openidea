@@ -121,6 +121,7 @@ pub struct Laravel {
     facts_cache: Option<(String, std::rc::Rc<checks::Parts>)>,
     live: BTreeMap<String, u64>,
     files: BTreeMap<String, projectfiles::Store>,
+    stamps: BTreeMap<String, Option<(u64, Option<u64>)>>,
 }
 
 const EVENT_SLICE: std::time::Duration = std::time::Duration::from_millis(250);
@@ -440,6 +441,29 @@ impl Laravel {
         }
     }
 
+    fn unreported_changes(&mut self, project: &Project, root: &str) -> Vec<String> {
+        let mut changed = Vec::new();
+        for relative in WATCHED.iter().filter(|glob| !glob.contains('*')) {
+            let path = join(root, relative);
+            let stamp = project.stat(&path).ok().map(|s| (s.size, s.modified));
+            if self
+                .stamps
+                .insert(path.clone(), stamp)
+                .is_some_and(|before| before != stamp)
+            {
+                changed.push(path);
+            }
+        }
+        for path in &changed {
+            self.disk_changed(path);
+            self.stamps.insert(
+                path.clone(),
+                project.stat(path).ok().map(|s| (s.size, s.modified)),
+            );
+        }
+        changed
+    }
+
     fn forget_everything(&mut self) {
         self.hub_tables = None;
         self.facts_cache = None;
@@ -471,6 +495,7 @@ impl Laravel {
         self.hub_tables = None;
         self.facts_cache = None;
         self.live.remove(path);
+        self.stamps.remove(path);
         self.reindex_usages(&project, &root, path);
         self.cache.invalidate(&root, path);
         if path.replace('\\', "/").contains("/tests/") {
@@ -1903,29 +1928,6 @@ impl Laravel {
         Ok(None)
     }
 
-    fn artisan(&self, ctx: &Invocation, args: &[&str]) -> Result<Option<String>, Error> {
-        let project = ctx.project().ok_or("open a Laravel project first")?;
-        let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
-        let mode = runner::detect(&project);
-        let out = crate::runner::run(&project, &mode, &mode.args(&args[1..], false), None)?;
-        let text = if out.stdout.trim().is_empty() {
-            out.stderr
-        } else {
-            out.stdout
-        };
-        if out.status != Some(0) {
-            let status = out.status.map_or("a signal".to_owned(), |s| s.to_string());
-            return Err(Error::Failed(format!(
-                "artisan {} exited with {status}: {}",
-                args[1],
-                text.trim()
-            )));
-        }
-        Ok(Some(
-            text.trim().lines().last().unwrap_or("done").to_owned(),
-        ))
-    }
-
     fn controller_markers(
         &mut self,
         doc: &Document,
@@ -2195,6 +2197,7 @@ impl Providers for Laravel {
         let Some((project, root)) = self.laravel_project(&doc.path) else {
             return Vec::new();
         };
+        self.unreported_changes(&project, &root);
         let Some(cursor) = offset(&doc.text, at) else {
             return Vec::new();
         };
@@ -2378,6 +2381,7 @@ impl Providers for Laravel {
         let Some((project, root)) = self.laravel_project(&doc.path) else {
             return Vec::new();
         };
+        self.unreported_changes(&project, &root);
         let Some(cursor) = offset(&doc.text, at) else {
             return Vec::new();
         };
@@ -2628,8 +2632,8 @@ impl Laravel {
                 Ok(Some(format!("Indexed {}", counts.join(", "))))
             }
             "related-file" => self.related_file(ctx),
-            "artisan-optimize-clear" => self.artisan(ctx, &["artisan", "optimize:clear"]),
-            "artisan-migrate" => self.artisan(ctx, &["artisan", "migrate"]),
+            "artisan-optimize-clear" => self.artisan_terminal(ctx, "optimize:clear"),
+            "artisan-migrate" => self.artisan_terminal(ctx, "migrate"),
             "artisan-tinker" => self.artisan_terminal(ctx, "tinker"),
             "copy-query-sql" => self.copy_query_sql(ctx),
             "run-in-tinker" => self.run_selection_in_tinker(ctx),
@@ -2664,6 +2668,7 @@ impl openidea_plugin::Plugin for Laravel {
                 && let Some((project, root)) = self.laravel_project(&root)
             {
                 let _task = host::begin_task("Indexing the Laravel project", false);
+                self.unreported_changes(&project, &root);
                 self.cache.warm(&project, &root);
                 self.cached_facts(&project, &root);
                 self.sync_mcp(&project);
@@ -2760,6 +2765,17 @@ impl openidea_plugin::Plugin for Laravel {
                     }
                 }
                 _ => {}
+            }
+        }
+        let roots: Vec<String> = self
+            .projects
+            .iter()
+            .filter(|(_, laravel)| **laravel)
+            .map(|(root, _)| root.clone())
+            .collect();
+        for root in roots {
+            if let Some((project, root)) = self.laravel_project(&root) {
+                paths.extend(self.unreported_changes(&project, &root));
             }
         }
         for path in paths {
@@ -4445,6 +4461,51 @@ Blade::if('admin', fn () => true);
         );
         let again = plugin.completion(&d, at(text, "('", 2), None);
         assert!(labels(&again).contains(&"brand.new"));
+    }
+
+    #[test]
+    fn slow_artisan_commands_run_in_the_terminal() {
+        let host = setup().with_capabilities(&["project.read", "process:php"]);
+        let mut plugin = Laravel::default();
+        for (id, command) in [
+            ("artisan-optimize-clear", "optimize:clear"),
+            ("artisan-migrate", "migrate"),
+        ] {
+            let result =
+                openidea_plugin::Plugin::run_command(&mut plugin, id, &host.invocation(), None);
+            assert_eq!(result.unwrap(), None);
+            let terminals = host.terminals();
+            let terminal = terminals.last().unwrap();
+            assert_eq!(terminal.title, format!("artisan {command}"));
+            assert_eq!(terminal.program, "php");
+            assert_eq!(terminal.args, ["artisan", command]);
+        }
+        assert!(host.process_runs().is_empty());
+    }
+
+    #[test]
+    fn ignored_files_changed_outside_the_editor_refresh_without_an_event() {
+        let host = setup();
+        host.add_file(".env", "APP_NAME=Shop\n");
+        let mut plugin = Laravel::default();
+        let text = "<?php\nenv('');\n";
+        let d = doc("app/X.php", text);
+        let before = plugin.completion(&d, at(text, "('", 2), None);
+        assert!(!labels(&before).contains(&"BRAND_NEW_KEY"));
+        host.add_file(".env", "APP_NAME=Shop\nBRAND_NEW_KEY=1\n");
+        let after = plugin.completion(&d, at(text, "('", 2), None);
+        assert!(
+            labels(&after).contains(&"BRAND_NEW_KEY"),
+            "{:?}",
+            labels(&after)
+        );
+        host.add_file(".env", "APP_NAME=Shop\nBRAND_NEW_KEY=1\nOTHER_NEW_KEY=2\n");
+        plugin.handle_events(
+            &[Event::EditorFocused(Some("/project/app/X.php".into()))],
+            &host.invocation(),
+        );
+        let cached = plugin.completion(&d, at(text, "('", 2), None);
+        assert!(labels(&cached).contains(&"OTHER_NEW_KEY"));
     }
 
     #[test]
