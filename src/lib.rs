@@ -1852,7 +1852,11 @@ impl Laravel {
         let scope = scope_of(&doc.text);
         let refs = php::args_in(&doc.text, is_blade(&doc.path))
             .into_iter()
-            .filter_map(|a| refs::segment(&a, a.value.len(), &scope).map(|s| (s, a)))
+            .flat_map(|a| {
+                refs::segments(&a, &scope)
+                    .into_iter()
+                    .map(move |s| (s, a.clone()))
+            })
             .collect();
         Some((project, root, refs))
     }
@@ -4787,7 +4791,7 @@ Blade::if('admin', fn () => true);
         let host = setup();
         install_laravel_10(&host);
         let mut plugin = Laravel::default();
-        let text = "<?php\n$request->validate(['email' => 'required|hex_color', 'name' => 's']);\n";
+        let text = "<?php\n$request->validate(['email' => 'required|hex_color', 'name' => 's', 'title' => 'strng|required', 'body' => 'requird|exists:users,id']);\n";
         let d = doc("app/X.php", text);
         let first = plugin.completion(&d, at(text, "'s'", 2), None);
         assert_eq!(labels(&first), ["exists", "string"]);
@@ -4800,7 +4804,13 @@ Blade::if('admin', fn () => true);
         let problems = plugin.inspect("/project/app/X.php", text);
         let messages: Vec<&str> = problems.iter().map(|p| p.message.as_str()).collect();
         assert!(messages.contains(&"Validation rule 'hex_color' not found"));
-        assert!(!messages.iter().any(|m| m.contains("'required'")));
+        assert!(messages.contains(&"Validation rule 'strng' not found"));
+        assert!(messages.contains(&"Validation rule 'requird' not found"));
+        assert!(
+            !messages
+                .iter()
+                .any(|m| m.contains("'required'") || m.contains("'exists'"))
+        );
         let defs = plugin.definition(&d, at(text, "required|", 2));
         assert!(
             defs.iter()

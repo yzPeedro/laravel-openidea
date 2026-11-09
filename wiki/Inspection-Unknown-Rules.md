@@ -3,7 +3,7 @@
 Reports a validation rule name that the project's Laravel version doesn't have, such as a typo (`strng`) or a rule added in a later Laravel (`hex_color` in a Laravel 10 project). Laravel throws `Method Illuminate\Validation\Validator::validateStrng does not exist` only when the rule runs; this catches it in the editor.
 
 <p align="center"><img src="images/inspection-unknown-rule.webp" alt="Validation rule 'strng' not found, on 'required|strng' in $request->validate()" width="760"></p>
-<p align="center"><sub>The warning on the last rule of a pipe-separated string</sub></p>
+<p align="center"><sub>The warning on a misspelled rule of a pipe-separated string</sub></p>
 
 ## How to use it
 
@@ -42,8 +42,9 @@ There is no quick fix. Completion inside the string lists the rules that exist (
 - **Without `vendor/`** (before `composer install`) the plugin uses its built-in list of about 110 rules, written for recent Laravel.
 - **Refresh.** The list is read again when `composer.lock` or `vendor/composer/installed.json` changes, so upgrading Laravel updates it.
 - **Only framework rules are known.** String rules registered with `Validator::extend()` are not read, so they are reported. Rule objects (`new Uppercase`, `Rule::unique(...)`, closures) are not strings and are never checked; nor are the strings inside a call such as `Rule::in(['a', 'b'])`.
-- **Pipe-separated strings: the last rule.** In a string like `'required|string|max:255'` the inspection looks at the last rule of the string, and only when it has no parameters. `'required|strng'` is reported; `'strng|required'` and `'required|strng|max:255'` are not. Writing rules as an array (`['required', 'strng', 'max:255']`) gets every rule without parameters checked.
-- **Parameters are not checked.** The part after `:` is not a rule name (`max:255`, `in:a,b`, `exists:users,email`).
+- **Every rule of a pipe-separated string.** In a string like `'required|strng|max:255'` each rule is checked, wherever it is and whether or not it has parameters: `'strng|required'`, `'required|strng|max:255'` and `'mx:255'` are all reported, on the misspelled rule only. Array items (`['required', 'strng', 'mx:255']`) are checked the same way.
+- **Regular expressions.** After `regex:` or `not_regex:` the rest of the string is the pattern, so a `|` inside it (`'regex:/^(a|b)$/'`) doesn't start a new rule.
+- **Parameters are not checked.** The part after `:` is not a rule name (`max:255`, `in:a,b`, `exists:users,email`); only the name before it is.
 - **Keys are not rules.** Field names (`'items.*.price' =>`) are skipped.
 - **Skipped strings.** Strings with `$`, `{` or `*`, concatenated strings, empty strings and strings you are still typing. Comments are skipped.
 

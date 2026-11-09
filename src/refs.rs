@@ -915,6 +915,26 @@ pub fn is_rule_key(arg: &StringArg) -> bool {
     arg.is_key && matches!(ctx_of(arg, &Scope::default()), Some((Ctx::Rules, _, _)))
 }
 
+pub fn segments(arg: &StringArg, scope: &Scope) -> Vec<Segment> {
+    let value = arg.value.as_str();
+    let first = segment(arg, 0, scope);
+    if first.as_ref().map(|s| &s.want) != Some(&Want::Kind(RefKind::Rule)) {
+        return segment(arg, value.len(), scope).into_iter().collect();
+    }
+    let mut out = Vec::new();
+    let mut start = 0;
+    for piece in value.split('|') {
+        if let Some(seg) = rules_segment(value, start) {
+            out.push(seg);
+        }
+        if piece.starts_with("regex:") || piece.starts_with("not_regex:") {
+            break;
+        }
+        start += piece.len() + 1;
+    }
+    out
+}
+
 pub fn checkable(kind: RefKind, value: &str) -> bool {
     !value.is_empty()
         && !value.contains(['$', '{', '*'])
@@ -953,6 +973,33 @@ mod tests {
                 ("Models".into(), Some(Want::Paths("app/"))),
                 ("total".into(), Some(Want::RequestFields)),
                 ("x".into(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn every_part_of_a_rule_string_is_a_rule() {
+        let text = "<?php\n$request->validate(['a' => 'strng|required', 'b' => 'requird|max:255', 'c' => 'email', 'd' => ['mx:3', 'exists:users,id'], 'e' => 'regex:/^(a|b)$/']);\n";
+        let names: Vec<Vec<String>> = args_in(text, false)
+            .into_iter()
+            .filter(|a| !a.is_key)
+            .map(|a| {
+                segments(&a, &Scope::default())
+                    .into_iter()
+                    .filter(|s| s.want == Want::Kind(RefKind::Rule))
+                    .map(|s| a.value[s.start..s.end].to_owned())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            names,
+            [
+                vec!["strng", "required"],
+                vec!["requird", "max"],
+                vec!["email"],
+                vec!["mx"],
+                vec!["exists"],
+                vec!["regex"]
             ]
         );
     }

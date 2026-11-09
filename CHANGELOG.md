@@ -7,6 +7,7 @@ All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](h
 - *Rename route* and *Rename translation* are offered after the file was saved, autosave included. On Windows OpenIDEA's file watcher reports the save before the save itself, which refreshed the plugin's copy of the file first, so the rename was lost. Renaming twice before applying keeps the first name, and renaming back to the original forgets the rename.
 - `$this->app->make('…')`, `$this->app->path('…')` and the other container calls on `$this->app` complete container ids and paths, as in a service provider, and `$this->request->input('…')` completes request fields. They were listed but never recognised.
 - The N+1 quick fix on a loop over `Post::paginate()`, `Post::cursor()` or another collecting call made right after the model writes `Post::with('…')->paginate()`. It used to insert `->with('…')` before the `::`.
+- The unknown validation rule inspection checks every rule of a pipe-separated string, and rules with parameters: `'strng|required'` and `'requird|max:255'` are reported. It used to look only at the last rule, and only when it had no parameters. A `|` inside a `regex:` pattern doesn't start a new rule.
 
 ## 0.15.0
 
