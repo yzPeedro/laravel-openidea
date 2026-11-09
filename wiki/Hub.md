@@ -58,7 +58,7 @@ The badge next to a section is its size. Routes, Controllers, Form Requests, API
 
 ### The header
 
-Every section has a header with its icon, title and a one-line description, a **Filter…** box and the **Open in editor** button. The filter box is hidden on Overview, SQL to Laravel, the search results and a model's detail page; **Open in editor** is hidden on the search results and on a model's detail page.
+Every section has a header with its icon, title and a one-line description, a **Filter…** box and the **Open in editor** button. The filter box is hidden on Overview, Tinker, SQL to Laravel, AI Agents, the search results and a model's detail page; **Open in editor** is hidden on the search results and on a model's detail page.
 
 ### Tables
 
@@ -68,7 +68,7 @@ Most sections are a table. Under the header there may be:
 2. The **Filter** bar with one drop-down per facet.
 3. The table, with sortable column headers.
 4. A pager when there are more than 50 rows.
-5. A count line at the bottom: `12 items`, or `3 of 12 items` while a filter is active.
+5. A count line at the bottom: `12 items` (`1 item` for a single row), or `3 of 12 items` while a filter is active.
 
 Columns that hold code (URIs, keys, files, actions, migrations…) use the editor's monospace font, and long lists (fields, relations, hooks, cases, listeners…) wrap instead of being cut. In Routes, the method is a coloured badge: green for GET and HEAD, blue for POST, orange for PUT and PATCH, red for DELETE and purple for anything else.
 
@@ -162,7 +162,7 @@ There is no global refresh button, because there is nothing to refresh by hand:
 - Each time you open a section, the plugin rebuilds its table from its indexes. The indexes follow every save in the editor and every change on disk (a `git checkout`, a generator run in a terminal), so the next visit shows the new state. When more than 200 files change at once, everything is forgotten and read again.
 - **Laravel: Refresh Index**, also behind the Laravel version in the status bar (see [Status bar](Status-Bar.md)), clears every index and reads the project again.
 - Sections that read live data have their own controls: **Refresh** in [Cache](Hub-Cache.md), **Live** and **Follow** in [Logs](Hub-Logs.md), the recorder in [Live Audit](Hub-Live-Audit.md).
-- The list of Artisan commands is read once and kept for the session.
+- The list of Artisan commands is read again when a PHP file under `app/`, `composer.lock`, `vendor/composer/installed.json` or the Composer class map changes, and the section asks for it each time it opens. Its **Refresh** button reads it again by hand.
 
 Some data survives the session in the plugin's storage: the Tinker tabs and their code, the last 20 Artisan commands, and the text and mode of SQL to Laravel.
 

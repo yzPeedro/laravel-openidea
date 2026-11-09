@@ -2,7 +2,7 @@
 
 Every Artisan command of the app and its packages in one list, each turned into a form with its arguments and options. Fill it in, check the command line at the bottom and run it in an IDE terminal or see its output right in the hub.
 
-<p align="center"><img src="images/hub-artisan.webp" alt="The Artisan section: the command list grouped by namespace with a Recent group on top, and the empty form area" width="100%"></p>
+<p align="center"><img src="images/hub-artisan.webp" alt="The Artisan section: the Refresh button, the command list grouped by namespace with a Recent group on top, and the empty form area" width="100%"></p>
 <p align="center"><sub>The command list, with the last command run under Recent</sub></p>
 
 ## How to use it
@@ -34,7 +34,7 @@ The badge next to **Artisan** in the sidebar and the Overview card show how many
 - The description and its source after a `·`: the Composer package (`laravel/framework`), `app` or `routes/console.php`. `No description` when there is none.
 - **Arguments**: one text field per argument, labelled with its name. A required argument has a red `*`; an array argument ends in `…`. The hint under the field is the argument's description and `default: …` when it has one.
 - **Options**: a checkbox for a flag, a text field for an option that takes a value (labelled `--name=`). The shortcut comes first when there is one (`-m, --migration`).
-- Array arguments and array options show `comma separated` as placeholder.
+- Array arguments show `space separated` as placeholder, array options `comma separated`, matching how each is split (below).
 - **Global options**: `--env=` (text), `--no-interaction`, `--verbose`, `--quiet` and `--ansi` (checkboxes), for every command.
 
 ### The run bar
@@ -76,11 +76,11 @@ Each command is read the way Laravel declares it:
 
 Signature details: `{user}` is required, `{user?}` and `{user=default}` optional, `{ids*}` an array argument; `{--force}` is a flag, `{--queue=}` takes a value, `{--delay=5}` has a default, `{--tag=*}` is an array; `{--Q|queue=}` declares the shortcut `Q`; ` : ` separates the description. With `getArguments()`, `REQUIRED` and `IS_ARRAY` set the argument's mode; with `getOptions()`, `VALUE_REQUIRED` or `VALUE_OPTIONAL` make an option take a value.
 
-The list is read once and kept for the rest of the session; a command added later appears after the window is reloaded.
+The list is kept between visits, and read again from the files when a PHP file under `app/`, `composer.lock`, `vendor/composer/installed.json` or `vendor/composer/autoload_classmap.php` changes (a new command class, `composer require`). The section asks the plugin for the list each time it opens, so a command added since then appears there. **Refresh**, in the toolbar above the list, reads every command again.
 
 ### How values become the command
 
-- Arguments come first, in their declared order; an empty argument is left out. An array argument is split on spaces (not commas, whatever the placeholder says) into several arguments.
+- Arguments come first, in their declared order; an empty argument is left out. An array argument is split on spaces into several arguments.
 - A flag adds `--name` when checked.
 - A value option adds `--name=value`; an array option is split on commas and repeated, `--tag=a --tag=b`.
 - Global options come last.

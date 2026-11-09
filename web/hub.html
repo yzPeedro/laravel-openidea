@@ -532,7 +532,7 @@ function showModel(name) {
 function renderModel(msg) {
   const parts = [];
   const total = msg.groups.reduce((n, g) => n + g.rows.length, 0);
-  $("section-desc").textContent = (msg.table ? "Table " + msg.table + " · " : "") + total + " places define or use " + msg.name;
+  $("section-desc").textContent = (msg.table ? "Table " + msg.table + " · " : "") + counted(total, "place defines or uses ", "places define or use ") + msg.name;
   const jump = el("div", { className: "search-sections" });
   for (const g of msg.groups) {
     const b = el("button", { className: "btn ghost", textContent: g.title + " · " + g.rows.length });
@@ -563,6 +563,8 @@ $("hub-search").addEventListener("input", () => {
   hubSearchTimer = setTimeout(() => showSearch(query), 350);
 });
 
+function counted(n, one, many) { return n + " " + (n === 1 ? one : many); }
+
 function go(id) {
   state.section = id;
   $("open-tab").hidden = false;
@@ -571,13 +573,13 @@ function go(id) {
   $("section-title").textContent = s.title;
   $("section-desc").textContent = s.desc;
   $("search").value = "";
-  $("search-box").hidden = id === "overview";
+  $("search-box").hidden = ["overview", "tinker", "ai"].includes(id);
   $("toolbar").replaceChildren();
   $("filters").replaceChildren();
   $("count").hidden = true;
   renderNav();
   if (id === "overview") { renderOverview(); send({ type: "overview" }); }
-  else if (id === "artisan") { renderArtisan(); if (!state.commands.length) send({ type: "init" }); }
+  else if (id === "artisan") { renderArtisan(); send({ type: "init" }); }
   else if (id === "logs") { renderLogs(); send({ type: "files" }); }
   else if (id === "tinker") { renderTinker(); }
   else if (id === "sql") { $("search-box").hidden = true; renderSql(); }
@@ -813,7 +815,7 @@ function renderSection(id) {
   const paged = rows.length > PAGE_SIZES[0] ? [pager(id, rows.length, () => renderSection(id))] : [];
   content.replaceChildren(...(rows.length ? [table, ...paged] : [emptyState(q ? "No match for “" + q + "”." : "No item matches the filters.")]));
   $("count").hidden = false;
-  $("count").textContent = rows.length === data.rows.length ? data.rows.length + " items" : rows.length + " of " + data.rows.length + " items";
+  $("count").textContent = rows.length === data.rows.length ? counted(data.rows.length, "item", "items") : rows.length + " of " + counted(data.rows.length, "item", "items");
 }
 
 $("search").addEventListener("input", () => {
@@ -847,6 +849,9 @@ function argv() {
 }
 
 function renderArtisan() {
+  const refresh = el("button", { className: "btn ghost", textContent: "Refresh", title: "Read the commands of the app and its packages again" });
+  refresh.addEventListener("click", () => { state.commands = []; renderCommandList(); send({ type: "refresh" }); });
+  $("toolbar").replaceChildren(refresh);
   const wrap = el("div", { className: "artisan" }, el("div", { className: "commands", id: "commands" }), el("div", { className: "form", id: "form" }));
   $("content").replaceChildren(wrap);
   renderCommandList();
@@ -882,7 +887,7 @@ function renderCommandList() {
 
 function field(key, label, hint, kind, required) {
   const id = "f-" + key.replace(/[^\w-]/g, "_");
-  const input = kind === "flag" ? el("input", { type: "checkbox", id }) : el("input", { type: "text", id, placeholder: kind === "array" ? "comma separated" : "" });
+  const input = kind === "flag" ? el("input", { type: "checkbox", id }) : el("input", { type: "text", id, placeholder: kind === "array" ? "space separated" : kind === "list" ? "comma separated" : "" });
   if (kind === "flag") input.checked = state.values[key] === true; else input.value = state.values[key] ?? "";
   input.addEventListener(kind === "flag" ? "change" : "input", () => { state.values[key] = kind === "flag" ? input.checked : input.value; updateRunbar(); });
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") runCurrent(); });
@@ -909,7 +914,7 @@ function renderForm() {
   }
   if (c.options.length) {
     const fs = el("fieldset", {}, el("legend", { textContent: "Options" }));
-    for (const o of c.options) fs.append(field("opt:" + o.name, (o.shortcut ? "-" + o.shortcut + ", " : "") + "--" + o.name + (o.value ? "=" : ""), [o.description, o.default ? "default: " + o.default : ""].filter(Boolean).join(" · "), o.value ? (o.array ? "array" : "text") : "flag"));
+    for (const o of c.options) fs.append(field("opt:" + o.name, (o.shortcut ? "-" + o.shortcut + ", " : "") + "--" + o.name + (o.value ? "=" : ""), [o.description, o.default ? "default: " + o.default : ""].filter(Boolean).join(" · "), o.value ? (o.array ? "list" : "text") : "flag"));
     body.append(fs);
   }
   const gs = el("fieldset", {}, el("legend", { textContent: "Global options" }));
@@ -1040,7 +1045,7 @@ function renderEntries() {
   }
   $("count").hidden = false;
   if (visible.length > PAGE_SIZES[0]) box.append(pager("logs", visible.length, renderEntries, () => stopFollow(L, "logs-follow")));
-  $("count").textContent = visible.length + " of " + (L.entries.length - L.hiddenBefore) + " entries · " + (L.path || "");
+  $("count").textContent = visible.length + " of " + counted(L.entries.length - L.hiddenBefore, "entry", "entries") + " · " + (L.path || "");
   if (L.follow) $("content").scrollTop = $("content").scrollHeight;
 }
 
@@ -2569,7 +2574,7 @@ function renderAuditList() {
       scope = r.scope;
       const h = heads.get(scope);
       const n = A.records.filter((x) => x.scope === scope && x.type === "query").length;
-      list.append(el("div", { className: "scope-head" }, el("b", { textContent: !h ? "pid " + r.pid : h.type === "boot" ? (/Standard input|Command line/.test(h.argv || "") ? "Tinker run" : h.context === "console" ? "artisan " + (h.argv || "").replace(/^artisan\s*/, "") : "HTTP") : auditSummary(h)[0] }), el("span", { textContent: h && h.type === "request" ? h.status + " · " + Math.round(h.ms) + " ms" : h && h.ms != null ? Math.round(h.ms) + " ms" : "" }), el("span", { textContent: n ? n + " queries" : "" })));
+      list.append(el("div", { className: "scope-head" }, el("b", { textContent: !h ? "pid " + r.pid : h.type === "boot" ? (/Standard input|Command line/.test(h.argv || "") ? "Tinker run" : h.context === "console" ? "artisan " + (h.argv || "").replace(/^artisan\s*/, "") : "HTTP") : auditSummary(h)[0] }), el("span", { textContent: h && h.type === "request" ? h.status + " · " + Math.round(h.ms) + " ms" : h && h.ms != null ? Math.round(h.ms) + " ms" : "" }), el("span", { textContent: n ? counted(n, "query", "queries") : "" })));
     }
     const [main, sub] = auditSummary(r);
     const time = new Date(r.t * 1000);
@@ -2586,7 +2591,7 @@ function renderAuditList() {
   }
   $("count").hidden = false;
   if (visible.length > PAGE_SIZES[0]) list.append(pager("audit", visible.length, renderAuditList, () => stopFollow(A, "audit-follow")));
-  $("count").textContent = visible.length + " of " + A.records.length + " records · " + heads.size + " requests, jobs and commands";
+  $("count").textContent = visible.length + " of " + counted(A.records.length, "record", "records") + " · " + heads.size + " requests, jobs and commands";
   if (A.follow) $("content").scrollTop = $("content").scrollHeight;
 }
 
@@ -2703,7 +2708,7 @@ function renderCache() {
   table.append(body);
   content.replaceChildren(...notes, table, pager("cache", C.total, () => requestCache("list")));
   $("count").hidden = false;
-  $("count").textContent = C.total + " keys · " + C.store + " (" + C.driver + ")";
+  $("count").textContent = counted(C.total, "key", "keys") + " · " + C.store + " (" + C.driver + ")";
 }
 
 

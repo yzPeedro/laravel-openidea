@@ -543,6 +543,7 @@ impl Laravel {
             self.show_status(&project, &root);
         }
         self.reindex_usages(&project, &root, path);
+        self.forget_commands(&root, path);
         self.cache.invalidate(&root, path);
         if path.replace('\\', "/").contains("/tests/") {
             self.pest.remove(&root);
@@ -556,6 +557,19 @@ impl Laravel {
                 self.originals.remove(&renames::path_key(path));
                 false
             }
+        }
+    }
+
+    fn forget_commands(&mut self, root: &str, path: &str) {
+        let rel_path = project::rel(root, path).replace('\\', "/");
+        let packages = matches!(
+            rel_path.as_str(),
+            "vendor/composer/autoload_classmap.php"
+                | "vendor/composer/installed.json"
+                | "composer.lock"
+        );
+        if packages || rel_path.starts_with("app/") && rel_path.ends_with(".php") {
+            self.commands.remove(root);
         }
     }
 
@@ -2751,6 +2765,7 @@ impl openidea_plugin::Plugin for Laravel {
                         self.facts_cache.clear();
                         self.live.remove(path);
                         self.reindex_usages(&project, &root, path);
+                        self.forget_commands(&root, path);
                         self.cache.invalidate(&root, path);
                         if let Ok(text) = project.read_file(path) {
                             self.remember_original(&root, path, &text, true);
@@ -3078,6 +3093,45 @@ mod tests {
                 .title
                 .contains("'admin.users.index' to 'admin.users.list'")
         );
+    }
+
+    #[test]
+    fn the_artisan_list_picks_up_a_new_command() {
+        use openidea_plugin::views::{ViewEvent, Views};
+        let host = setup();
+        let mut plugin = Laravel::default();
+        let names = |plugin: &mut Laravel| {
+            plugin
+                .handle(
+                    "hub",
+                    ViewEvent::Message(r#"{"type":"init","instance":"t"}"#.into()),
+                    &host.invocation(),
+                )
+                .unwrap();
+            let (_, message) = host.view_messages().pop().unwrap();
+            let message: serde_json::Value = serde_json::from_str(&message).unwrap();
+            message["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|c| c["name"].as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
+        assert!(!names(&mut plugin).contains(&"shop:sync".to_owned()));
+        host.add_file(
+            "app/Console/Commands/SyncShop.php",
+            "<?php\nnamespace App\\Console\\Commands;\n\nuse Illuminate\\Console\\Command;\n\nclass SyncShop extends Command\n{\n    protected $signature = 'shop:sync';\n}\n",
+        );
+        assert!(!names(&mut plugin).contains(&"shop:sync".to_owned()));
+        plugin.handle_events(
+            &[Event::FilesChanged(openidea_plugin::FilesChanged {
+                created: vec!["/project/app/Console/Commands/SyncShop.php".into()],
+                modified: Vec::new(),
+                removed: Vec::new(),
+            })],
+            &host.invocation(),
+        );
+        assert!(names(&mut plugin).contains(&"shop:sync".to_owned()));
     }
 
     #[test]
