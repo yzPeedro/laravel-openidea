@@ -468,9 +468,7 @@ fn ctx_of(arg: &StringArg, scope: &Scope) -> Option<(Ctx, usize, bool)> {
             "to" if matches!(class, "url()" | "redirect()") => (Ctx::RoutePaths, 0, false),
             m if is_request(class) && REQUEST_INPUTS.contains(&m) => (Ctx::RequestFields, 0, true),
             "route" if matches!(class, "$request" | "request()" | "$this") => return None,
-            "route" | "signedroute" | "temporarysignedroute" | "torroute" => {
-                (S(RefKind::Route), 0, false)
-            }
+            "route" | "signedroute" | "temporarysignedroute" => (S(RefKind::Route), 0, false),
             "routeis" | "named" => (S(RefKind::Route), 0, true),
             "view" | "markdown" | "text" | "layout" => (S(RefKind::View), 0, false),
             "middleware" | "withoutmiddleware" => (Ctx::Middleware, 0, true),
