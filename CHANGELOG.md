@@ -2,6 +2,10 @@
 
 All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+- *Rename route* and *Rename translation* are offered after the file was saved, autosave included. On Windows OpenIDEA's file watcher reports the save before the save itself, which refreshed the plugin's copy of the file first, so the rename was lost. Renaming twice before applying keeps the first name, and renaming back to the original forgets the rename.
+
 ## 0.15.0
 
 - Completion and inspections follow the Laravel version the project has installed, read from `vendor/laravel/framework`, instead of a fixed list written for Laravel 10 and newer. Validation rules, Blade directives, cast types, the built-in middleware aliases, container ids, the methods after collection, query and relation chains, and the Laravel classes, interfaces and traits after `extends`, `implements` and `use` are the ones that version has, so a rule or directive added in a later version is not suggested, and is reported as unknown, in an older project. Tested with Laravel 6, 8, 9, 10, 11, 12 and 13.

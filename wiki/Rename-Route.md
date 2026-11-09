@@ -2,6 +2,9 @@
 
 Change a route's name in its `->name('…')` call, press Alt+Enter, and *Rename route* updates every `route('…')`, `to_route('…')`, `redirect()->route('…')` and other usage of the old name across your PHP and Blade files. It works right after you type the new name, before saving, and after you saved.
 
+<p align="center"><img src="images/refactor-rename-route.webp" alt="Alt+Enter on the new name products.list in routes/web.php offering Rename route 'products.index' to 'products.list' in every usage" width="760"></p>
+<p align="center"><sub>The action after products.index was renamed to products.list and the file saved</sub></p>
+
 ## How to use it
 
 1. Open a route file (any PHP file under `routes/`) and change the name inside `->name('…')`:
@@ -46,7 +49,11 @@ Applying it edits every file at once through the IDE, so a single undo reverts i
 
 So rename first, then save; or rename, save, then use the action (below). If you also edited other lines of the file before saving, the before-saving comparison doesn't apply, and the after-saving one takes over once you save.
 
-**After saving.** When a route file is saved, the plugin lists the route names it defines, in order, before and after the save. If the file still defines the same number of names, each position whose name changed is remembered as a rename (the last 32 are kept). Alt+Enter on the new name, in that file, then offers the action. A remembered rename is forgotten once you apply it.
+**After saving.** Whenever the plugin learns that a route file changed on disk (the IDE's file watcher, a save, or the file being opened again), it compares the route names the copy it kept defines with the names the new text defines, in order. If both define the same number of names, each position whose name changed is remembered as a rename (the last 32 are kept), and the kept copy becomes the new text. Alt+Enter on the new name, in that file, then offers the action. This works whichever event arrives first: on Windows the file watcher reports the save before the save event itself. It also covers OpenIDEA's autosave, which writes the buffer when you switch tabs.
+
+Renaming twice before applying keeps the first name: `products.index` → `products.list`, saved, then → `products.all`, saved, offers *Rename route 'products.index' to 'products.all'*. Renaming back to the original name forgets the rename, since the usages still match. A remembered rename is forgotten once you apply it.
+
+Paths are compared without regard to `\` or `/` and to the case of the drive letter.
 
 ### Group prefixes
 

@@ -553,7 +553,7 @@ impl Laravel {
                 true
             }
             Err(_) => {
-                self.originals.remove(path);
+                self.originals.remove(&renames::path_key(path));
                 false
             }
         }
@@ -2747,10 +2747,7 @@ impl openidea_plugin::Plugin for Laravel {
                         self.facts_cache.clear();
                         self.live.remove(path);
                         self.reindex_usages(&project, &root, path);
-                        let before = self.snapshot_keys(&project, &root, path);
                         self.cache.invalidate(&root, path);
-                        let after = self.snapshot_keys(&project, &root, path);
-                        self.remember_renames(path, before, after);
                         if let Ok(text) = project.read_file(path) {
                             self.remember_original(&root, path, &text, true);
                         }
@@ -3077,6 +3074,51 @@ mod tests {
                 .title
                 .contains("'admin.users.index' to 'admin.users.list'")
         );
+    }
+
+    #[test]
+    fn renaming_a_route_is_offered_when_the_watcher_reports_the_save_first() {
+        let host = setup();
+        let mut plugin = Laravel::default();
+        let changed = |path: &str| {
+            Event::FilesChanged(openidea_plugin::FilesChanged {
+                created: Vec::new(),
+                modified: vec![path.into()],
+                removed: Vec::new(),
+            })
+        };
+        plugin.handle_events(
+            &[Event::FileOpened("/project/routes/web.php".into())],
+            &host.invocation(),
+        );
+        let edited = ROUTES.replace("name('users.index')", "name('users.list')");
+        host.add_file("routes/web.php", &edited);
+        plugin.handle_events(&[changed("/project/routes/web.php")], &host.invocation());
+        plugin.handle_events(
+            &[Event::FileSaved("/project/routes/web.php".into())],
+            &host.invocation(),
+        );
+        let d = doc("routes/web.php", &edited);
+        let actions = refactor(&mut plugin, &d, "users.list", 3);
+        assert_eq!(
+            actions.iter().map(|a| a.title.as_str()).collect::<Vec<_>>(),
+            ["Rename route 'admin.users.index' to 'admin.users.list' in every usage"]
+        );
+
+        let again = ROUTES.replace("name('users.index')", "name('users.all')");
+        host.add_file("routes/web.php", &again);
+        plugin.handle_events(&[changed("/project/routes/web.php")], &host.invocation());
+        let d = doc("routes/web.php", &again);
+        let actions = refactor(&mut plugin, &d, "users.all", 3);
+        assert_eq!(
+            actions.iter().map(|a| a.title.as_str()).collect::<Vec<_>>(),
+            ["Rename route 'admin.users.index' to 'admin.users.all' in every usage"]
+        );
+
+        host.add_file("routes/web.php", ROUTES);
+        plugin.handle_events(&[changed("/project/routes/web.php")], &host.invocation());
+        let d = doc("routes/web.php", ROUTES);
+        assert!(refactor(&mut plugin, &d, "users.index", 3).is_empty());
     }
 
     #[test]
