@@ -164,6 +164,23 @@ git push origin v0.15.0
 
 The full guide is [CONTRIBUTING.md](../CONTRIBUTING.md).
 
+## Documentation
+
+Every feature has a page in this wiki, and a pull request that adds or changes behaviour updates the page in the same change. The pages live in the repository's `wiki/` folder, where they are reviewed with the code. `scripts/publish-wiki.py` publishes them to this GitHub wiki:
+
+```sh
+python3 scripts/publish-wiki.py            # converts wiki/ and pushes it to the GitHub wiki
+python3 scripts/publish-wiki.py --dry-run  # leaves the converted copy in a temporary folder
+```
+
+The script:
+- drops `.md` from links between pages and turns links to files outside `wiki/` (such as `docs/snippets.md` or the banner) into absolute GitHub URLs;
+- builds the sidebar (`_Sidebar.md`) from the tables in `wiki/Home.md`;
+- copies `wiki/images/`;
+- commits as you and pushes to the wiki's own repository.
+
+When nothing changed, it says so and pushes nothing. Screenshots are taken in OpenIDEA on a demo project, never a private one, and saved as WebP in `wiki/images/`.
+
 ## Related
 
 - [Installation](Installation.md)

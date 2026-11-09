@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="wiki/Home.md"><b>📖 Read the wiki</b></a> — every feature, setting and hub section, with screenshots
+  <a href="https://github.com/yzPeedro/laravel-openidea/wiki"><b>📖 Read the wiki</b></a> — every feature, setting and hub section, with screenshots
 </p>
 
 https://github.com/user-attachments/assets/a653530b-f3d4-44e3-921e-bef9119cd659
@@ -29,14 +29,14 @@ https://github.com/user-attachments/assets/a653530b-f3d4-44e3-921e-bef9119cd659
 
 | | |
 | --- | --- |
-| ⚡ **[Completion everywhere](wiki/Route-Names.md)** | Routes with verb and URI, views, config, env, translations, validation rules, middleware, gates, disks, stores, channels, Blade components and directives, and more. |
-| 🧠 **[Eloquent that follows the chain](wiki/Eloquent-Chains.md)** | Columns, relations, scopes, casts and enum members, from `$order->` to `->first()->`, with typed closures and factory states. |
-| 🧭 **[Navigation and gutter usages](wiki/Gutter-Usages.md)** | Ctrl+click opens what a string means; a Laravel icon lists every place a class or scope is used. |
-| 🩺 **[Inspections with quick fixes](wiki/Inspections.md)** | Unknown views, rules and columns, N+1 queries, `env()` outside config, `$fillable`, enum values, duplicate keys and more. |
-| 🧩 **[A hub for your whole app](wiki/Hub.md)** | 43 sections, from routes and models to queues, schedule and translations, searchable as one, in a tool window or editor tabs. |
-| 🐘 **[Tinker](wiki/Hub-Tinker.md) and [SQL to Laravel](wiki/Hub-SQL-to-Laravel.md)** | PHP in tabs with Tinker-style output; SQL to Eloquent as you type, and Laravel back to MySQL. |
-| 🔍 **[Live Audit](wiki/Hub-Live-Audit.md)** | Requests, queries with the line that ran them, events, jobs, cache, mail and more, with N+1 and slow query insights. |
-| 🤖 **[AI agents](wiki/AI-Agents.md)** | An MCP server with your app's runtime data behind an access level you choose, next to Laravel Boost. |
+| ⚡ **[Completion everywhere](https://github.com/yzPeedro/laravel-openidea/wiki/Route-Names)** | Routes with verb and URI, views, config, env, translations, validation rules, middleware, gates, disks, stores, channels, Blade components and directives, and more. |
+| 🧠 **[Eloquent that follows the chain](https://github.com/yzPeedro/laravel-openidea/wiki/Eloquent-Chains)** | Columns, relations, scopes, casts and enum members, from `$order->` to `->first()->`, with typed closures and factory states. |
+| 🧭 **[Navigation and gutter usages](https://github.com/yzPeedro/laravel-openidea/wiki/Gutter-Usages)** | Ctrl+click opens what a string means; a Laravel icon lists every place a class or scope is used. |
+| 🩺 **[Inspections with quick fixes](https://github.com/yzPeedro/laravel-openidea/wiki/Inspections)** | Unknown views, rules and columns, N+1 queries, `env()` outside config, `$fillable`, enum values, duplicate keys and more. |
+| 🧩 **[A hub for your whole app](https://github.com/yzPeedro/laravel-openidea/wiki/Hub)** | 43 sections, from routes and models to queues, schedule and translations, searchable as one, in a tool window or editor tabs. |
+| 🐘 **[Tinker](https://github.com/yzPeedro/laravel-openidea/wiki/Hub-Tinker) and [SQL to Laravel](https://github.com/yzPeedro/laravel-openidea/wiki/Hub-SQL-to-Laravel)** | PHP in tabs with Tinker-style output; SQL to Eloquent as you type, and Laravel back to MySQL. |
+| 🔍 **[Live Audit](https://github.com/yzPeedro/laravel-openidea/wiki/Hub-Live-Audit)** | Requests, queries with the line that ran them, events, jobs, cache, mail and more, with N+1 and slow query insights. |
+| 🤖 **[AI agents](https://github.com/yzPeedro/laravel-openidea/wiki/AI-Agents)** | An MCP server with your app's runtime data behind an access level you choose, next to Laravel Boost. |
 
 ## Installation
 
@@ -47,20 +47,20 @@ https://github.com/user-attachments/assets/a653530b-f3d4-44e3-921e-bef9119cd659
 3. Allow `process:php` or `process:docker` (and `process:php-win` on Windows) in the plugin's permissions.
 4. Open a Laravel project and click the Laravel icon at the bottom of the left tool bar.
 
-The [installation page](wiki/Installation.md) covers each step with screenshots, the [permissions](wiki/Permissions.md) and the [settings](wiki/Settings.md).
+The [installation page](https://github.com/yzPeedro/laravel-openidea/wiki/Installation) covers each step with screenshots, the [permissions](https://github.com/yzPeedro/laravel-openidea/wiki/Permissions) and the [settings](https://github.com/yzPeedro/laravel-openidea/wiki/Settings).
 
 ## Documentation
 
 | | |
 | --- | --- |
-| **Getting started** | [Installation](wiki/Installation.md) · [Permissions](wiki/Permissions.md) · [Settings](wiki/Settings.md) · [Commands](wiki/Commands.md) · [Privacy and security](wiki/Privacy-and-Security.md) · [How it works](wiki/How-It-Works.md) · [Troubleshooting](wiki/Troubleshooting.md) |
-| **Editor** | [Completion and navigation](wiki/Home.md#editor-completion-and-navigation) · [Inspections](wiki/Inspections.md) · [Refactorings and actions](wiki/Home.md#refactorings-and-actions) |
-| **Hub** | [The hub](wiki/Hub.md) · [All 43 sections](wiki/Home.md#the-hub) |
-| **AI agents** | [MCP server and access levels](wiki/AI-Agents.md) |
+| **Getting started** | [Installation](https://github.com/yzPeedro/laravel-openidea/wiki/Installation) · [Permissions](https://github.com/yzPeedro/laravel-openidea/wiki/Permissions) · [Settings](https://github.com/yzPeedro/laravel-openidea/wiki/Settings) · [Commands](https://github.com/yzPeedro/laravel-openidea/wiki/Commands) · [Privacy and security](https://github.com/yzPeedro/laravel-openidea/wiki/Privacy-and-Security) · [How it works](https://github.com/yzPeedro/laravel-openidea/wiki/How-It-Works) · [Troubleshooting](https://github.com/yzPeedro/laravel-openidea/wiki/Troubleshooting) |
+| **Editor** | [Completion and navigation](https://github.com/yzPeedro/laravel-openidea/wiki#editor-completion-and-navigation) · [Inspections](https://github.com/yzPeedro/laravel-openidea/wiki/Inspections) · [Refactorings and actions](https://github.com/yzPeedro/laravel-openidea/wiki#refactorings-and-actions) |
+| **Hub** | [The hub](https://github.com/yzPeedro/laravel-openidea/wiki/Hub) · [All 43 sections](https://github.com/yzPeedro/laravel-openidea/wiki#the-hub) |
+| **AI agents** | [MCP server and access levels](https://github.com/yzPeedro/laravel-openidea/wiki/AI-Agents) |
 
 ## Contributing
 
-Issues and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the [development page](wiki/Development.md), and see the [roadmap](ROADMAP.md) for what's next. Please follow the [code of conduct](CODE_OF_CONDUCT.md), and report security issues as described in [SECURITY.md](SECURITY.md).
+Issues and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the [development page](https://github.com/yzPeedro/laravel-openidea/wiki/Development), and see the [roadmap](ROADMAP.md) for what's next. Please follow the [code of conduct](CODE_OF_CONDUCT.md), and report security issues as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
