@@ -10,7 +10,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   SDK_REPOSITORY: l0ng-ai/openidea
-  SDK_REF: v0.1.38
+  SDK_REF: v0.1.40
 
 jobs:
   release:
@@ -68,7 +68,7 @@ jobs:
             echo
             echo "### Install"
             echo
-            echo "In OpenIDEA open **Settings › Plugins › Available** and install **Laravel OpenIDEA**. Without the marketplace, download \`laravel-openidea-${version}.zip\` and pick it in **Settings › Plugins › ⚙ › Install Plugin from Package File…**. Requires OpenIDEA 0.1.38 or newer."
+            echo "In OpenIDEA open **Settings › Plugins › Available** and install **Laravel OpenIDEA**. Without the marketplace, download \`laravel-openidea-${version}.zip\` and pick it in **Settings › Plugins › ⚙ › Install Plugin from Package File…**. Requires OpenIDEA 0.1.40 or newer."
           } >> build/notes.md
 
       - name: Publish

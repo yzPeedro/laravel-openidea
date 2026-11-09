@@ -14,7 +14,7 @@ Thanks for helping. This guide covers the setup, the checks every change must pa
 You need Rust (stable, edition 2024), the `wasm32-wasip2` target, and a checkout of [OpenIDEA](https://github.com/l0ng-ai/openidea) next to this repository, because the SDK is a path dependency. Use the tag CI uses (`SDK_REF` in `.github/workflows/ci.yml`).
 
 ```sh
-git clone https://github.com/l0ng-ai/openidea --branch v0.1.38
+git clone https://github.com/l0ng-ai/openidea --branch v0.1.40
 git clone https://github.com/yzPeedro/laravel-openidea
 cd laravel-openidea
 rustup target add wasm32-wasip2

@@ -77,7 +77,7 @@ https://github.com/user-attachments/assets/a653530b-f3d4-44e3-921e-bef9119cd659
 <summary><b>Build from source</b></summary>
 
 ```sh
-git clone https://github.com/l0ng-ai/openidea --branch v0.1.39
+git clone https://github.com/l0ng-ai/openidea --branch v0.1.40
 git clone https://github.com/yzPeedro/laravel-openidea
 cd laravel-openidea
 rustup target add wasm32-wasip2
