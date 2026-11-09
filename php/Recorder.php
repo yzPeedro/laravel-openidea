@@ -8,8 +8,8 @@ use Throwable;
 final class Recorder
 {
     private const MAX_BYTES = 8_000_000;
-    private const SECRET = '/pass(word)?|secret|token|api[_-]?key|authorization|cookie|credential|private|signature|otp|cvv|card|(^|[_.-])key$/i';
-    private const PII = '/e-?mail|cpf|cnpj|rg$|document|phone|telefone|celular|mobile|birth|nascimento|address|endereco|cep|zip|ssn|passport/i';
+    private const SECRET = '/^(pass|passwd|passwords?|passphrase|passcode|pwd|secrets?|tokens?|apikey|authorization|cookies?|credentials?|private|signature|otp|cvv|cvc|card|cardholder|creditcard)$/';
+    private const PII = '/^(emails?|cpf|cnpj|rg|documents?|phones?|telefones?|celular|mobile|birth|birthday|birthdate|nascimento|address(es)?|endereco|cep|zip|zipcode|ssn|passport)$/';
 
     public static bool $showPii = false;
 
@@ -78,9 +78,31 @@ final class Recorder
         return ['file' => null, 'line' => null];
     }
 
+    public static function masked(string $key): bool
+    {
+        $spaced = preg_replace(['/([a-z0-9])([A-Z])/', '/([A-Z]+)([A-Z][a-z])/', '/([a-zA-Z])([0-9])/'], '$1 $2', $key);
+        $words = preg_split('/[^a-z0-9]+/', strtolower($spaced ?? $key), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        if ($words === []) {
+            return false;
+        }
+        if (end($words) === 'key') {
+            return true;
+        }
+        $candidates = $words;
+        for ($i = 1; $i < count($words); $i++) {
+            $candidates[] = $words[$i - 1] . $words[$i];
+        }
+        foreach ($candidates as $word) {
+            if (preg_match(self::SECRET, $word) || (! self::$showPii && preg_match(self::PII, $word))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static function value(mixed $value, int $depth = 0, ?string $key = null): mixed
     {
-        if ($key !== null && (preg_match(self::SECRET, $key) || (! self::$showPii && preg_match(self::PII, $key)))) {
+        if ($key !== null && self::masked($key)) {
             return $value === null ? null : '•••';
         }
         if ($value === null || is_bool($value) || is_int($value) || is_float($value)) {

@@ -190,16 +190,18 @@ Notes on the types:
 
 ### Masking
 
-Values that pass through the recorder's value formatter (request `input`, event `payload`, log `context`, the queued job `payload`, and model attributes inside them) are masked by key name, case-insensitively, anywhere in the key:
+Values that pass through the recorder's value formatter (request `input`, event `payload`, log `context`, the queued job `payload`, and model attributes inside them) are masked by the **words** of their key name. A key is split into words at every character that isn't a letter or digit, at camelCase humps and before digits, and lowercased: `currentPassword` is `current` `password`, `X-Api-Key` is `x` `api` `key`, `DB_PASSWORD2` is `db` `password` `2`. Each word, and each pair of neighbouring words written together (`e` `mail` → `email`, `api` `key` → `apikey`, `zip` `code` → `zipcode`), is compared with these lists:
 
-| Masked | Key contains |
+| Masked | A word of the key is |
 | --- | --- |
-| Always | `pass` (so `password` and `passport` too), `secret`, `token`, `api_key` / `api-key` / `apikey`, `authorization`, `cookie`, `credential`, `private`, `signature`, `otp`, `cvv`, `card`; or the key is `key` or ends in `_key`, `.key` or `-key` (`app_key`, `stripe.key`) |
-| Personal data, unless `OPENIDEA_AUDIT_SHOW_PII=true` | `email` / `e-mail`, `cpf`, `cnpj`, `document`, `phone`, `telefone`, `celular`, `mobile`, `birth`, `nascimento`, `address`, `endereco`, `cep`, `zip`, `ssn`, or ends in `rg` |
+| Always | `pass`, `passwd`, `password`, `passwords`, `passphrase`, `passcode`, `pwd`, `secret`, `secrets`, `token`, `tokens`, `apikey`, `authorization`, `cookie`, `cookies`, `credential`, `credentials`, `private`, `signature`, `otp`, `cvv`, `cvc`, `card`, `cardholder`, `creditcard`; or the key's last word is `key` (`key`, `app_key`, `stripe.key`, `apiKey`) |
+| Personal data, unless `OPENIDEA_AUDIT_SHOW_PII=true` | `email`, `emails`, `cpf`, `cnpj`, `rg`, `document`, `documents`, `phone`, `phones`, `telefone`, `telefones`, `celular`, `mobile`, `birth`, `birthday`, `birthdate`, `nascimento`, `address`, `addresses`, `endereco`, `cep`, `zip`, `zipcode`, `ssn`, `passport` |
+
+So `password_confirmation`, `remember_token`, `accessToken`, `card_number`, `user_email`, `e-mail`, `mobilePhone` and `date_of_birth` are masked, while `footprint`, `compass`, `accepted_terms`, `org`, `passenger`, `discard`, `keyword` and `monkey` are kept: the list words must be whole words of the key, not parts of a longer word.
 
 A masked value is replaced by `•••` (`null` stays `null`). Model attributes listed in the model's `$hidden` are masked too. `OPENIDEA_AUDIT_SHOW_PII` accepts `true` or `1` and is read when the app boots.
 
-Because matching is by substring, some harmless keys are masked as well: `accepted_terms` contains `cep`, `footprint` contains `otp`, `org` ends in `rg`, `compass` contains `pass`. A key that merely contains `key` elsewhere, such as `keyword` or `monkey`, is kept.
+A secret stored under a key that doesn't use one of these words, such as `pin` or `hash`, is not masked.
 
 Not masked:
 

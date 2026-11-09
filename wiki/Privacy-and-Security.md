@@ -77,12 +77,12 @@ The installer, the recorder and the MCP files never touch tracked files, apart f
 
 The recorder runs only when the app's environment is `local`, `development` or `dev`, unless `.env` sets `OPENIDEA_AUDIT=true` (which turns it on in any environment). `OPENIDEA_AUDIT=false` (or `0`) turns it off everywhere.
 
-Before a value is written, its key is checked:
+Before a value is written, its key is split into words (at `_`, `-`, `.` and other separators, at camelCase humps and before digits) and each word, and each pair of neighbouring words written together, is checked. Only whole words count, so `footprint`, `compass` and `accepted_terms` are kept:
 
-| Category | Keys matched (case-insensitive) | Shown as |
+| Category | Words matched (case-insensitive) | Shown as |
 | --- | --- | --- |
-| Secrets, always masked | `pass`, `password`, `secret`, `token`, `api_key` / `api-key` / `apikey`, `authorization`, `cookie`, `credential`, `private`, `signature`, `otp`, `cvv`, `card`, and any key ending in `key` (`_key`, `.key`, `-key`) | `•••` |
-| Personal data, masked by default | `email` / `e-mail`, `cpf`, `cnpj`, keys ending in `rg`, `document`, `phone`, `telefone`, `celular`, `mobile`, `birth`, `nascimento`, `address`, `endereco`, `cep`, `zip`, `ssn`, `passport` | `•••`, or the value when `OPENIDEA_AUDIT_SHOW_PII=true` (or `1`) |
+| Secrets, always masked | `pass`, `passwd`, `password`, `passphrase`, `passcode`, `pwd`, `secret`, `token`, `apikey` (`api_key`, `apiKey`, `X-Api-Key`), `authorization`, `cookie`, `credential`, `private`, `signature`, `otp`, `cvv`, `cvc`, `card`, `cardholder`, `creditcard` (and their plurals), and any key whose last word is `key` (`app_key`, `stripe.key`) | `•••` |
+| Personal data, masked by default | `email` (`e-mail` too), `cpf`, `cnpj`, `rg`, `document`, `phone`, `telefone`, `celular`, `mobile`, `birth`, `birthday`, `birthdate`, `nascimento`, `address`, `endereco`, `cep`, `zip`, `zipcode`, `ssn`, `passport` | `•••`, or the value when `OPENIDEA_AUDIT_SHOW_PII=true` (or `1`) |
 
 HTTP client URLs have `token`, `key`, `secret`, `signature` and `password` query parameters masked. Strings are cut at 400 characters, arrays at 25 items and nesting at 3 levels. The log rotates to `openidea-audit.jsonl.1` above 8 MB. See [Live Audit](Hub-Live-Audit.md).
 

@@ -8,6 +8,7 @@ All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](h
 - `$this->app->make('…')`, `$this->app->path('…')` and the other container calls on `$this->app` complete container ids and paths, as in a service provider, and `$this->request->input('…')` completes request fields. They were listed but never recognised.
 - The N+1 quick fix on a loop over `Post::paginate()`, `Post::cursor()` or another collecting call made right after the model writes `Post::with('…')->paginate()`. It used to insert `->with('…')` before the `::`.
 - The unknown validation rule inspection checks every rule of a pipe-separated string, and rules with parameters: `'strng|required'` and `'requird|max:255'` are reported. It used to look only at the last rule, and only when it had no parameters. A `|` inside a `regex:` pattern doesn't start a new rule.
+- Live Audit masks a value when a whole word of its key is a secret or personal data word (`password_confirmation`, `accessToken`, `user_email`, `date_of_birth`), instead of when the key merely contains one, so `footprint`, `compass`, `accepted_terms` and `org` are no longer masked. Keys are split at separators, camelCase humps and digits. `passport` is now personal data, shown with `OPENIDEA_AUDIT_SHOW_PII=true`. An installed recorder keeps the old rules until it is turned off and on again in the hub.
 
 ## 0.15.0
 
