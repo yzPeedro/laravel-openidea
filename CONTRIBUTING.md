@@ -7,7 +7,7 @@ Thanks for helping. This guide covers the setup, the checks every change must pa
 - Open an issue before a large change, so we can agree on the approach first.
 - One topic per pull request. Small, focused PRs are reviewed faster.
 - Every behaviour change comes with a test.
-- Every feature is documented in the [wiki](wiki/Home.md) in the same pull request (see [Documentation](#documentation)).
+- Every feature is documented in the [wiki](https://github.com/yzPeedro/laravel-openidea/wiki) in the same pull request (see [Documentation](#documentation)).
 - Be kind. Everyone here follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Development setup
@@ -102,6 +102,8 @@ The hub page posts JSON messages (`{"type": "section", "id": "routes"}`) through
 
 The `wiki/` folder is the plugin's documentation: one page per feature, setting, command and hub section, indexed in `wiki/Home.md`. A pull request that adds or changes behaviour updates the matching page in the same change, or adds a page and links it from `wiki/Home.md`.
 
+The `wiki/` folder is the source of the [GitHub wiki](https://github.com/yzPeedro/laravel-openidea/wiki). After a change to `wiki/` lands on `main`, maintainers publish it with `python3 scripts/publish-wiki.py`: it converts the links for the wiki (no `.md`, absolute URLs for files outside `wiki/`), builds `_Sidebar.md` from `wiki/Home.md`, copies `wiki/images/` and pushes to `https://github.com/yzPeedro/laravel-openidea.wiki.git`. `--dry-run` leaves the converted copy in a temporary folder without pushing.
+
 - Describe what the code really does: the triggers and contexts, where the data comes from, ordering, limits, settings, permissions and edge cases.
 - Take screenshots in OpenIDEA on a demo project, never a private one. Show no secrets. Save them as WebP in `wiki/images/`: editor shots cropped around the popup, hub shots as the full window.
 - Every page ends with a link back to the wiki home.
@@ -111,7 +113,7 @@ The `wiki/` folder is the plugin's documentation: one page per feature, setting,
 
 - **No comments in code.** Names and small functions carry the meaning. Type annotations required by tools are fine.
 - Keep the completion path fast: providers must answer within the IDE's 50 ms budget, so index work happens on activation and events, never per keystroke.
-- No new capabilities without a discussion: the plugin requires only `project.read`, `events` and `storage`. `process:php`, `process:php-win`, `process:docker`, `editor.read`, `editor.write` and `clipboard` are optional (see the [permissions page](wiki/Permissions.md)).
+- No new capabilities without a discussion: the plugin requires only `project.read`, `events` and `storage`. `process:php`, `process:php-win`, `process:docker`, `editor.read`, `editor.write` and `clipboard` are optional (see the [permissions page](https://github.com/yzPeedro/laravel-openidea/wiki/Permissions)).
 - The recorder and installer never touch tracked files, and they mask secrets and personal data.
 - UI text is English, short, and in sentence case.
 - Formatting is `rustfmt`'s. PHP follows PSR-12. JavaScript in `hub.html` uses two-space indentation and double quotes.
