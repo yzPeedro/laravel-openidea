@@ -144,6 +144,12 @@ impl Laravel {
             }
             Err(e) => return Err(e),
         };
+        if written.status == Some(2) {
+            return Err(Error::Invalid(format!(
+                "The selection isn't valid PHP: {}",
+                written.stderr.trim()
+            )));
+        }
         if written.status != Some(0) {
             let why = written.stderr.trim();
             return Err(Error::Failed(format!(
@@ -245,10 +251,11 @@ mod tests {
         Laravel::default()
             .run_command("run-in-tinker", &host.invocation(), None)
             .unwrap();
-        assert_eq!(
-            written.borrow().as_str(),
-            "<?php\n\nuse App\\Models\\Post;\n\ndump($count = Post::count());\ndump(Post::first());\n"
+        let file = format!(
+            "<?php\n\nuse App\\Models\\Post;\n\ntry {{\ndump($count = Post::count());\ndump(Post::first());\n{}",
+            crate::querysql::RETHROW
         );
+        assert!(written.borrow().ends_with(&file), "{}", written.borrow());
         let terminals = host.terminals();
         let t = terminals.last().unwrap();
         assert_eq!(t.program, "php");
@@ -256,6 +263,32 @@ mod tests {
             t.args,
             ["artisan", "tinker", "storage/openidea/selection.php"]
         );
+    }
+
+    #[test]
+    fn a_selection_that_isnt_valid_php_opens_no_terminal() {
+        let host = laravel_app().with_capabilities(&["project.read", "editor.read", "process:php"]);
+        host.on_process("php", |_, _| {
+            Ok(openidea_plugin::ProcessOutput {
+                status: Some(2),
+                stdout: String::new(),
+                stderr: "syntax error, unexpected token \";\" in: $x = ;\n".into(),
+            })
+        });
+        host.open_editor(
+            "/project/routes/web.php",
+            "php",
+            "<?php\n$x = ;\n",
+            &[(1, 0, 1, 7)],
+        );
+        let err = Laravel::default()
+            .run_command("run-in-tinker", &host.invocation(), None)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("isn't valid PHP: syntax error"),
+            "{err}"
+        );
+        assert!(host.terminals().is_empty());
     }
 
     #[test]

@@ -80,7 +80,7 @@ A three-step recipe: turn the recorder on in [Live Audit](Hub-Live-Audit.md), re
 - The first visit asks for the state, which runs the plugin's setup script (`install.php agents-status`) with the project's runner. It also brings the server files in `storage/openidea` up to date if they are already there.
 - **Connect AI agents** runs the same script with `agents` and passes it the server, the access level and the guide; **Disconnect** runs it with `agents-off`. What exactly each one writes and removes is listed in [AI agents and MCP](AI-Agents.md#what-connecting-writes).
 - **Install Boost** goes through Composer in a terminal: `php -r "passthru('composer …')"` with the php runner (so `composer` must be on the PATH), or `docker compose run --rm --no-deps --entrypoint composer <service> …` / `docker compose exec <service> composer …` with a Compose runner. The hub only allows the Composer commands `require`, `update`, `install`, `remove`, `dump-autoload`, `show` and `outdated`.
-- The **Filter…** box in the header has no effect on this page.
+- The header has no **Filter…** box on this page.
 - The tool list is part of the page; it reflects the server shipped with this plugin version.
 
 ## Settings and permissions

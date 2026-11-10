@@ -20,8 +20,8 @@ collect([1, 2, 3])->map(fn ($n) => $n * 10);
 dump(config('app.name'));
 ```
 
-<p align="center"><img src="images/hub-tinker.webp" alt="An empty Tinker tab with the toolbar: runner badge, Insert snippet, Clear output, Run selection and Run" width="100%"></p>
-<p align="center"><sub>A new tab before running anything</sub></p>
+<p align="center"><img src="images/hub-tinker.webp" alt="A Tinker tab with five statements and the toolbar: runner badge, Insert snippet, Clear output, Run selection and Run" width="100%"></p>
+<p align="center"><sub>A tab before running anything</sub></p>
 
 ## What you see
 
@@ -85,7 +85,7 @@ The run ends with `Done · Laravel 13.40.0 · PHP 8.5.0 · local · 40 MB · 1.2
 - Queries are captured with `DB::listen`; object bindings show as their class name.
 - Error and dump links map container paths (`/var/www/html/app/…`) back to the project file.
 - **SQL to Laravel**'s run button opens a new tab named `SQL <n>` with the generated code and runs it right away (see [SQL to Laravel](Hub-SQL-to-Laravel.md)).
-- This is real code against your real database: writes are written. The **Filter…** box in the header does nothing on this page.
+- This is real code against your real database: writes are written. The header has no **Filter…** box on this page.
 
 ## Settings and permissions
 

@@ -12,7 +12,7 @@ Laravel's global helpers and their facade twins complete their string arguments:
 | Call | Lists what is under |
 | --- | --- |
 | `base_path('…')`, `app()->basePath('…')`, `App::basePath('…')` | the project root, three levels deep |
-| `app_path('…')`, `app()->path('…')`, `$app->path('…')`, `->appPath('…')` | `app/` |
+| `app_path('…')`, `app()->path('…')`, `$app->path('…')`, `$this->app->path('…')`, `->appPath('…')` | `app/` |
 | `config_path('…')`, `->configPath('…')` | `config/` |
 | `database_path('…')`, `->databasePath('…')` | `database/` |
 | `lang_path('…')`, `->langPath('…')` | `lang/`, or `resources/lang/` when `lang/` is empty and `resources/lang/` isn't |
@@ -64,7 +64,7 @@ The disk is the one named in `Storage::disk('…')` right before the call, or th
 
 ## Container ids
 
-`app('…')`, `resolve('…')`, `App::make('…')`, `App::makeWith('…')`, `App::bound('…')`, `App::has('…')`, `App::get('…')` and `app()->make('…')`, `->makeWith('…')`, `->bound('…')` (also on `$app`) complete the container's core aliases, each with the class it resolves to:
+`app('…')`, `resolve('…')`, `App::make('…')`, `App::makeWith('…')`, `App::bound('…')`, `App::has('…')`, `App::get('…')` and `app()->make('…')`, `->makeWith('…')`, `->bound('…')` (also on `$app` and `$this->app`, as in a service provider) complete the container's core aliases, each with the class it resolves to:
 
 ```php
 $cache = app('cache');          // Illuminate\Cache\CacheManager

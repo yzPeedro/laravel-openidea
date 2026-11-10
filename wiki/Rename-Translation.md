@@ -2,24 +2,27 @@
 
 Change a translation key in a `lang/` file, press Alt+Enter, and *Rename translation* updates every `__('…')`, `trans('…')`, `@lang('…')` and other usage of the old key across your PHP and Blade files, and renames the same key in the other locales' files. Like [Rename route](Rename-Route.md), it works before and after saving.
 
+<p align="center"><img src="images/refactor-rename-translation.webp" alt="Alt+Enter on the key 'heading' in lang/en/shop.php offering Rename translation 'shop.title' to 'shop.heading' in every locale and usage" width="760"></p>
+<p align="center"><sub>The action after the key 'title' was renamed to 'heading' and the file saved</sub></p>
+
 ## How to use it
 
 1. Open a translation file, for example `lang/en/shop.php`, and change a key:
 
    ```php
    return [
-       'title' => 'Products',      // was 'heading'
+       'heading' => 'Products',    // was 'title'
        'empty' => 'No products yet.',
    ];
    ```
 
 2. With the cursor inside the new key, press **Alt+Enter**.
-3. Pick **Rename translation 'shop.heading' to 'shop.title' in every locale and usage**.
+3. Pick **Rename translation 'shop.title' to 'shop.heading' in every locale and usage**.
 
 Then:
 
-- `__('shop.heading')`, `trans('shop.heading')`, `@lang('shop.heading')`… become `shop.title` everywhere;
-- `'heading'` becomes `'title'` in `lang/pt_BR/shop.php`, `lang/es/shop.php` and every other locale's `shop.php` that has it.
+- `__('shop.title')`, `trans('shop.title')`, `@lang('shop.title')`… become `shop.heading` everywhere;
+- `'title'` becomes `'heading'` in `lang/pt_BR/shop.php`, `lang/es/shop.php` and every other locale's `shop.php` that has it.
 
 JSON translations work the same way. In `lang/en.json`, change `"Hello"` to `"Hi there"` and the action renames `__('Hello')` in your code and the `"Hello"` key in `lang/pt.json` and the other JSON files.
 
@@ -49,7 +52,7 @@ The cursor must be on an array key in a PHP file, or on a key (a string followed
 
 **Before saving.** When a translation file is opened, the plugin remembers its text as it was on disk. The action is offered when the only difference between the editor and that copy is inside the key under the cursor (the rest of the file must still match the disk), and the old key has no line break or quote.
 
-**After saving.** When a translation file is saved, the plugin lists its keys in order before and after the save. If the file still has the same number of keys, each key that changed is remembered as a rename (the last 32 are kept), and Alt+Enter on the new key offers the action. A remembered rename is forgotten once applied.
+**After saving.** Whenever the plugin learns that a translation file changed on disk (the IDE's file watcher, a save, or the file being opened again), it compares the keys of the copy it kept with the keys of the new text, in order. If both have the same number of keys, each key that changed is remembered as a rename (the last 32 are kept), and Alt+Enter on the new key offers the action. This works whichever event arrives first, and after OpenIDEA's autosave. Renaming a key twice before applying keeps the first name, renaming it back forgets the rename, and a remembered rename is forgotten once applied.
 
 ### Where usages are found
 

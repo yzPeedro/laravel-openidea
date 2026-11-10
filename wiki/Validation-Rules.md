@@ -93,7 +93,7 @@ The fields you validate complete wherever the request is read:
 
 | Call | Arrays too |
 | --- | --- |
-| `$request->…('…')` and `request()->…('…')` with `input`, `get`, `post`, `query`, `string`, `str`, `integer`, `float`, `boolean`, `date`, `enum`, `collect`, `array`, `has`, `hasAny`, `filled`, `anyFilled`, `missing`, `exists`, `isNotFilled`, `only`, `except`, `file`, `hasFile`, `validated` or `safe` | yes: `$request->only(['name', 'price'])` |
+| `$request->…('…')`, `request()->…('…')` and `$this->request->…('…')` with `input`, `get`, `post`, `query`, `string`, `str`, `integer`, `float`, `boolean`, `date`, `enum`, `collect`, `array`, `has`, `hasAny`, `filled`, `anyFilled`, `missing`, `exists`, `isNotFilled`, `only`, `except`, `file`, `hasFile`, `validated` or `safe` | yes: `$request->only(['name', 'price'])` |
 | `Request::input('…')` and the other methods above on the `Request` facade | yes |
 | `request('…')` | yes |
 | `old('…')` | no |

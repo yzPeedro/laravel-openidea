@@ -357,7 +357,7 @@ impl Laravel {
             return Vec::new();
         };
         let mut out = Vec::new();
-        let disk = match self.originals.get(&doc.path) {
+        let disk = match self.originals.get(&path_key(&doc.path)) {
             Some(text) => text.clone(),
             None => project.read_file(&doc.path).unwrap_or_default(),
         };
@@ -374,7 +374,7 @@ impl Laravel {
                     self.saved
                         .iter()
                         .rev()
-                        .find(|r| r.path == doc.path && r.kind == kind && r.new == key)
+                        .find(|r| r.path == path_key(&doc.path) && r.kind == kind && r.new == key)
                         .map(|r| (kind, r.old.clone(), r.new.clone()))
                 }),
         };
@@ -544,7 +544,9 @@ impl Laravel {
                 "resources/lang/*.json",
             ] {
                 for path in find(&project, &root, glob, 2000) {
-                    if skip.as_deref() == Some(path.as_str()) || !seen.insert(path.clone()) {
+                    if skip.as_deref().map(path_key) == Some(path_key(&path))
+                        || !seen.insert(path.clone())
+                    {
                         continue;
                     }
                     let Ok(text) = crate::project::read_listed(&project, &path) else {
@@ -681,66 +683,50 @@ impl Laravel {
 
     pub(crate) fn remember_original(&mut self, root: &str, path: &str, text: &str, replace: bool) {
         let rel_path = rel(root, path).replace('\\', "/");
-        if !(rel_path.starts_with("routes/") || lang_file(&rel_path).is_some()) {
+        if defined_keys(&rel_path, "").is_none() {
             return;
         }
-        if replace || !self.originals.contains_key(path) {
-            self.originals.insert(path.to_owned(), text.to_owned());
+        let key = path_key(path);
+        match self.originals.get(&key) {
+            Some(old) if !replace || old == text => return,
+            Some(old) => {
+                if let (Some((kind, before)), Some((_, after))) =
+                    (defined_keys(&rel_path, old), defined_keys(&rel_path, text))
+                {
+                    self.remember_renames(&key, kind, before, after);
+                }
+            }
+            None => {}
         }
+        self.originals.insert(key.clone(), text.to_owned());
         if self.originals.len() > 64 {
             let first = self.originals.keys().next().cloned();
-            if let Some(k) = first.filter(|k| k != path) {
+            if let Some(k) = first.filter(|k| *k != key) {
                 self.originals.remove(&k);
             }
         }
     }
 
-    pub(crate) fn snapshot_keys(
-        &mut self,
-        project: &Project,
-        root: &str,
-        path: &str,
-    ) -> Vec<(RefKind, Vec<String>)> {
-        let rel_path = rel(root, path).replace('\\', "/");
-        let kind = if rel_path.starts_with("routes/") {
-            RefKind::Route
-        } else if lang_file(&rel_path).is_some() {
-            RefKind::Translation
-        } else {
-            return Vec::new();
-        };
-        let keys = self
-            .cache
-            .get(kind, project, root)
-            .iter()
-            .filter(|e| e.location.path == path)
-            .map(|e| (e.location.range.start, e.key.clone()))
-            .collect::<std::collections::BTreeMap<_, _>>()
-            .into_values()
-            .collect();
-        vec![(kind, keys)]
-    }
-
-    pub(crate) fn remember_renames(
-        &mut self,
-        path: &str,
-        before: Vec<(RefKind, Vec<String>)>,
-        after: Vec<(RefKind, Vec<String>)>,
-    ) {
-        for ((kind, old), (_, new)) in before.into_iter().zip(after) {
-            if old.len() != new.len() {
+    fn remember_renames(&mut self, path: &str, kind: RefKind, old: Vec<String>, new: Vec<String>) {
+        if old.len() != new.len() {
+            return;
+        }
+        for (o, n) in old.into_iter().zip(new) {
+            if o == n {
                 continue;
             }
-            for (o, n) in old.into_iter().zip(new) {
-                if o != n {
-                    self.saved.retain(|r| !(r.path == path && r.new == o));
-                    self.saved.push(Saved {
-                        path: path.to_owned(),
-                        kind,
-                        old: o,
-                        new: n,
-                    });
-                }
+            let old = self
+                .saved
+                .iter()
+                .position(|r| r.path == path && r.kind == kind && r.new == o)
+                .map_or(o, |i| self.saved.remove(i).old);
+            if old != n {
+                self.saved.push(Saved {
+                    path: path.to_owned(),
+                    kind,
+                    old,
+                    new: n,
+                });
             }
         }
         if self.saved.len() > 32 {
@@ -748,6 +734,45 @@ impl Laravel {
             self.saved.drain(..extra);
         }
     }
+}
+
+pub(crate) fn path_key(path: &str) -> String {
+    let mut key = path.replace('\\', "/");
+    if key.as_bytes().get(1) == Some(&b':') {
+        key[..1].make_ascii_lowercase();
+    }
+    key
+}
+
+fn defined_keys(rel_path: &str, text: &str) -> Option<(RefKind, Vec<String>)> {
+    if rel_path.starts_with("routes/") {
+        let names = crate::index::routes::parse(text)
+            .into_iter()
+            .filter_map(|r| r.name)
+            .collect();
+        return Some((RefKind::Route, names));
+    }
+    let (_, file) = lang_file(rel_path)?;
+    let tokens = php::tokenize(text, 0, text.len());
+    let keys = match file {
+        None => tokens
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| match &t.kind {
+                Kind::Str { value, .. }
+                    if tokens.get(i + 1).is_some_and(|n| n.kind == Kind::Colon) =>
+                {
+                    Some(value.clone())
+                }
+                _ => None,
+            })
+            .collect(),
+        Some(file) => php::array_keys(&tokens)
+            .into_iter()
+            .map(|k| format!("{file}.{}", k.path))
+            .collect(),
+    };
+    Some((RefKind::Translation, keys))
 }
 
 #[cfg(test)]
@@ -814,6 +839,35 @@ mod tests {
         let json = "{\n    \"Welcome\": \"Bem-vindo\"\n}\n";
         let edits = lang_definition_edits("lang/pt.json", json, "Welcome", "Hello");
         assert_eq!(&json[edits[0].0..edits[0].1], "Welcome");
+    }
+
+    #[test]
+    fn paths_compare_with_either_slash_and_drive_case() {
+        assert_eq!(
+            path_key(r"C:\Users\p\routes\web.php"),
+            path_key("c:/Users/p/routes/web.php")
+        );
+        assert_eq!(
+            path_key("/project/routes/web.php"),
+            "/project/routes/web.php"
+        );
+    }
+
+    #[test]
+    fn route_names_and_translation_keys_defined_by_a_file() {
+        let routes = "<?php\nRoute::get('/', X::class)->name('home');\nRoute::get('/a', Y::class)->name('a.index');\n";
+        assert_eq!(
+            defined_keys("routes/web.php", routes),
+            Some((RefKind::Route, vec!["home".into(), "a.index".into()]))
+        );
+        let lang = "<?php\nreturn ['title' => 'T', 'nav' => ['home' => 'H']];\n";
+        let (kind, keys) = defined_keys("lang/en/shop.php", lang).unwrap();
+        assert_eq!(kind, RefKind::Translation);
+        assert!(
+            keys.contains(&"shop.title".to_owned()) && keys.contains(&"shop.nav.home".to_owned()),
+            "{keys:?}"
+        );
+        assert_eq!(defined_keys("app/Models/User.php", ""), None);
     }
 
     #[test]

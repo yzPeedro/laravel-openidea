@@ -543,6 +543,7 @@ impl Laravel {
             self.show_status(&project, &root);
         }
         self.reindex_usages(&project, &root, path);
+        self.forget_commands(&root, path);
         self.cache.invalidate(&root, path);
         if path.replace('\\', "/").contains("/tests/") {
             self.pest.remove(&root);
@@ -553,9 +554,22 @@ impl Laravel {
                 true
             }
             Err(_) => {
-                self.originals.remove(path);
+                self.originals.remove(&renames::path_key(path));
                 false
             }
+        }
+    }
+
+    fn forget_commands(&mut self, root: &str, path: &str) {
+        let rel_path = project::rel(root, path).replace('\\', "/");
+        let packages = matches!(
+            rel_path.as_str(),
+            "vendor/composer/autoload_classmap.php"
+                | "vendor/composer/installed.json"
+                | "composer.lock"
+        );
+        if packages || rel_path.starts_with("app/") && rel_path.ends_with(".php") {
+            self.commands.remove(root);
         }
     }
 
@@ -1852,7 +1866,11 @@ impl Laravel {
         let scope = scope_of(&doc.text);
         let refs = php::args_in(&doc.text, is_blade(&doc.path))
             .into_iter()
-            .filter_map(|a| refs::segment(&a, a.value.len(), &scope).map(|s| (s, a)))
+            .flat_map(|a| {
+                refs::segments(&a, &scope)
+                    .into_iter()
+                    .map(move |s| (s, a.clone()))
+            })
             .collect();
         Some((project, root, refs))
     }
@@ -2747,10 +2765,8 @@ impl openidea_plugin::Plugin for Laravel {
                         self.facts_cache.clear();
                         self.live.remove(path);
                         self.reindex_usages(&project, &root, path);
-                        let before = self.snapshot_keys(&project, &root, path);
+                        self.forget_commands(&root, path);
                         self.cache.invalidate(&root, path);
-                        let after = self.snapshot_keys(&project, &root, path);
-                        self.remember_renames(path, before, after);
                         if let Ok(text) = project.read_file(path) {
                             self.remember_original(&root, path, &text, true);
                         }
@@ -3077,6 +3093,90 @@ mod tests {
                 .title
                 .contains("'admin.users.index' to 'admin.users.list'")
         );
+    }
+
+    #[test]
+    fn the_artisan_list_picks_up_a_new_command() {
+        use openidea_plugin::views::{ViewEvent, Views};
+        let host = setup();
+        let mut plugin = Laravel::default();
+        let names = |plugin: &mut Laravel| {
+            plugin
+                .handle(
+                    "hub",
+                    ViewEvent::Message(r#"{"type":"init","instance":"t"}"#.into()),
+                    &host.invocation(),
+                )
+                .unwrap();
+            let (_, message) = host.view_messages().pop().unwrap();
+            let message: serde_json::Value = serde_json::from_str(&message).unwrap();
+            message["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|c| c["name"].as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
+        assert!(!names(&mut plugin).contains(&"shop:sync".to_owned()));
+        host.add_file(
+            "app/Console/Commands/SyncShop.php",
+            "<?php\nnamespace App\\Console\\Commands;\n\nuse Illuminate\\Console\\Command;\n\nclass SyncShop extends Command\n{\n    protected $signature = 'shop:sync';\n}\n",
+        );
+        assert!(!names(&mut plugin).contains(&"shop:sync".to_owned()));
+        plugin.handle_events(
+            &[Event::FilesChanged(openidea_plugin::FilesChanged {
+                created: vec!["/project/app/Console/Commands/SyncShop.php".into()],
+                modified: Vec::new(),
+                removed: Vec::new(),
+            })],
+            &host.invocation(),
+        );
+        assert!(names(&mut plugin).contains(&"shop:sync".to_owned()));
+    }
+
+    #[test]
+    fn renaming_a_route_is_offered_when_the_watcher_reports_the_save_first() {
+        let host = setup();
+        let mut plugin = Laravel::default();
+        let changed = |path: &str| {
+            Event::FilesChanged(openidea_plugin::FilesChanged {
+                created: Vec::new(),
+                modified: vec![path.into()],
+                removed: Vec::new(),
+            })
+        };
+        plugin.handle_events(
+            &[Event::FileOpened("/project/routes/web.php".into())],
+            &host.invocation(),
+        );
+        let edited = ROUTES.replace("name('users.index')", "name('users.list')");
+        host.add_file("routes/web.php", &edited);
+        plugin.handle_events(&[changed("/project/routes/web.php")], &host.invocation());
+        plugin.handle_events(
+            &[Event::FileSaved("/project/routes/web.php".into())],
+            &host.invocation(),
+        );
+        let d = doc("routes/web.php", &edited);
+        let actions = refactor(&mut plugin, &d, "users.list", 3);
+        assert_eq!(
+            actions.iter().map(|a| a.title.as_str()).collect::<Vec<_>>(),
+            ["Rename route 'admin.users.index' to 'admin.users.list' in every usage"]
+        );
+
+        let again = ROUTES.replace("name('users.index')", "name('users.all')");
+        host.add_file("routes/web.php", &again);
+        plugin.handle_events(&[changed("/project/routes/web.php")], &host.invocation());
+        let d = doc("routes/web.php", &again);
+        let actions = refactor(&mut plugin, &d, "users.all", 3);
+        assert_eq!(
+            actions.iter().map(|a| a.title.as_str()).collect::<Vec<_>>(),
+            ["Rename route 'admin.users.index' to 'admin.users.all' in every usage"]
+        );
+
+        host.add_file("routes/web.php", ROUTES);
+        plugin.handle_events(&[changed("/project/routes/web.php")], &host.invocation());
+        let d = doc("routes/web.php", ROUTES);
+        assert!(refactor(&mut plugin, &d, "users.index", 3).is_empty());
     }
 
     #[test]
@@ -4745,7 +4845,7 @@ Blade::if('admin', fn () => true);
         let host = setup();
         install_laravel_10(&host);
         let mut plugin = Laravel::default();
-        let text = "<?php\n$request->validate(['email' => 'required|hex_color', 'name' => 's']);\n";
+        let text = "<?php\n$request->validate(['email' => 'required|hex_color', 'name' => 's', 'title' => 'strng|required', 'body' => 'requird|exists:users,id']);\n";
         let d = doc("app/X.php", text);
         let first = plugin.completion(&d, at(text, "'s'", 2), None);
         assert_eq!(labels(&first), ["exists", "string"]);
@@ -4758,7 +4858,13 @@ Blade::if('admin', fn () => true);
         let problems = plugin.inspect("/project/app/X.php", text);
         let messages: Vec<&str> = problems.iter().map(|p| p.message.as_str()).collect();
         assert!(messages.contains(&"Validation rule 'hex_color' not found"));
-        assert!(!messages.iter().any(|m| m.contains("'required'")));
+        assert!(messages.contains(&"Validation rule 'strng' not found"));
+        assert!(messages.contains(&"Validation rule 'requird' not found"));
+        assert!(
+            !messages
+                .iter()
+                .any(|m| m.contains("'required'") || m.contains("'exists'"))
+        );
         let defs = plugin.definition(&d, at(text, "required|", 2));
         assert!(
             defs.iter()

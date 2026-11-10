@@ -275,6 +275,10 @@ fn receiver(tokens: &[Token], i: usize) -> Option<String> {
     };
     match kind(3)? {
         Kind::Var(v) => Some(format!("${v}")),
+        Kind::Ident(p) => match (kind(4)?, kind(5)?) {
+            (Kind::ObjectOp, Kind::Var(v)) if v == "this" => Some(format!("$this->{p}")),
+            _ => None,
+        },
         Kind::Close(')') => match (kind(4)?, kind(5)?) {
             (Kind::Open('('), Kind::Ident(f)) => Some(format!("{}()", last_segment(f))),
             _ => None,

@@ -1884,11 +1884,28 @@ pub fn tinker_script(code: &str) -> String {
         .join("\n")
 }
 
+pub const RETHROW: &str = "} catch (\\Error $__openideaError) {\n    throw new \\ErrorException($__openideaError->getMessage(), 0, E_ERROR, $__openideaError->getFile(), $__openideaError->getLine(), $__openideaError);\n}\n";
+
 pub fn tinker_file(code: &str, source: &str, classes: &[String]) -> String {
     let mut imports: Vec<String> = split_statements(source.trim().trim_start_matches("<?php"))
         .into_iter()
         .filter(|s| s.starts_with("use ") && s.contains('\\'))
         .collect();
+    let mut head = Vec::new();
+    let mut body = Vec::new();
+    for s in split_statements(code.trim().trim_start_matches("<?php")) {
+        let lower = s.to_ascii_lowercase();
+        if lower.starts_with("use ") {
+            if !imports.contains(&s) {
+                imports.push(s);
+            }
+        } else if lower.starts_with("namespace ") || lower.starts_with("declare(") {
+            head.push(s);
+        } else {
+            body.push(s);
+        }
+    }
+    let code = body.join("\n");
     let imported = |short: &str, imports: &[String]| {
         imports.iter().any(|u| {
             u.trim_end_matches(';')
@@ -1914,6 +1931,10 @@ pub fn tinker_file(code: &str, source: &str, classes: &[String]) -> String {
         }
     }
     let mut out = String::from("<?php\n\n");
+    for h in &head {
+        out.push_str(h);
+        out.push('\n');
+    }
     for u in &imports {
         out.push_str(u);
         out.push('\n');
@@ -1921,8 +1942,10 @@ pub fn tinker_file(code: &str, source: &str, classes: &[String]) -> String {
     if !imports.is_empty() {
         out.push('\n');
     }
-    out.push_str(&tinker_script(code));
+    out.push_str("try {\n");
+    out.push_str(&tinker_script(&code));
     out.push('\n');
+    out.push_str(RETHROW);
     out
 }
 
@@ -1940,7 +1963,13 @@ mod tests {
         ];
         assert_eq!(
             tinker_file("Product::count();\nCategory::first()", source, &classes),
-            "<?php\n\nuse App\\Models\\Product;\nuse Illuminate\\Support\\Facades\\DB;\nuse App\\Models\\Category;\n\ndump(Product::count());\ndump(Category::first());\n"
+            format!(
+                "<?php\n\nuse App\\Models\\Product;\nuse Illuminate\\Support\\Facades\\DB;\nuse App\\Models\\Category;\n\ntry {{\ndump(Product::count());\ndump(Category::first());\n{RETHROW}"
+            )
+        );
+        assert_eq!(
+            tinker_file("use App\\Support\\Cart;\nCart::total()", "<?php\n", &[]),
+            format!("<?php\n\nuse App\\Support\\Cart;\n\ntry {{\ndump(Cart::total());\n{RETHROW}")
         );
     }
 
