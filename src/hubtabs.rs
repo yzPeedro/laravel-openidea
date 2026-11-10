@@ -13,7 +13,7 @@ pub const INDEX: &str = "storage/openidea/hub/sections";
 pub const WHOLE: &str = "hub";
 const PENDING_SECONDS: u64 = 15;
 
-pub const SECTIONS: [&str; 43] = [
+pub const SECTIONS: [&str; 44] = [
     "overview",
     "ecosystem",
     "ai",
@@ -31,6 +31,7 @@ pub const SECTIONS: [&str; 43] = [
     "casts",
     "enums",
     "database",
+    "diagram",
     "cache",
     "factories",
     "views",

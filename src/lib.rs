@@ -18,6 +18,7 @@ mod helpers;
 mod hierarchy;
 mod hubtabs;
 mod index;
+mod indexadvice;
 mod indexer;
 mod inspect;
 mod inspections;
@@ -42,6 +43,7 @@ mod relsnips;
 mod renames;
 mod resources;
 mod runner;
+mod schemadiff;
 mod sections;
 mod snippets;
 mod statics;
@@ -3649,16 +3651,16 @@ mod tests {
         let text = "<?php\nUser::query()->where('')->with('posts.')->get();\n$request->validate(['email' => 'required|exists:users,']);\n";
         let d = doc("app/X.php", text);
         let cols = plugin.completion(&d, at(text, "where('", 7), None);
-        assert_eq!(labels(&cols), ["name", "email", "id"]);
+        assert_eq!(labels(&cols), ["id", "name", "email"]);
         let rels = plugin.completion(&d, at(text, "posts.'", 6), None);
         assert_eq!(labels(&rels), ["author"]);
         let rule_cols = plugin.completion(&d, at(text, "users,'", 6), None);
-        assert_eq!(labels(&rule_cols), ["name", "email", "id"]);
+        assert_eq!(labels(&rule_cols), ["id", "name", "email"]);
         let rules = plugin.completion(&d, at(text, "required|", 9), None);
         assert!(labels(&rules).contains(&"exists"));
         let model = doc("app/Models/User.php", USER);
         let fillable = plugin.completion(&model, at(USER, "''", 1), None);
-        assert_eq!(labels(&fillable), ["name", "email", "id"]);
+        assert_eq!(labels(&fillable), ["id", "name", "email"]);
     }
 
     #[test]
@@ -3668,27 +3670,27 @@ mod tests {
         let cases = [
             (
                 "<?php\nGate::define('x', fn (User $user) => User::query()->notBlockedBy($user)\n    ->whereDoesntHave('posts', fn($query) => $query->where('|', true))\n    ->exists());\n",
-                vec!["title", "id"],
+                vec!["id", "title"],
             ),
             (
                 "<?php\nUser::query()->where(fn($q) => $q->where('|'))->get();\n",
-                vec!["name", "email", "id"],
+                vec!["id", "name", "email"],
             ),
             (
                 "<?php\nUser::with(['posts' => fn ($q) => $q->orderBy('|')])->get();\n",
-                vec!["title", "id"],
+                vec!["id", "title"],
             ),
             (
                 "<?php\nUser::whereHas('posts', function ($q) {\n    $q->whereHas('author', fn($a) => $a->where('|'));\n})->get();\n",
-                vec!["name", "email", "id"],
+                vec!["id", "name", "email"],
             ),
             (
                 "<?php\nfunction show(User $user) {\n    return $user->posts()->where('|')->get();\n}\n",
-                vec!["title", "id"],
+                vec!["id", "title"],
             ),
             (
                 "<?php\nUser::whereHas('posts', fn($q) => $q->where('title', 1))->where('|')->get();\n",
-                vec!["name", "email", "id"],
+                vec!["id", "name", "email"],
             ),
             ("<?php\n$foo->where('|');\n", vec![]),
         ];
@@ -4027,7 +4029,7 @@ mod tests {
         let attr = "<?php\n#[Fillable([''])]\n#[Table('users')]\nclass User extends Authenticatable\n{\n    protected $fil\n}\n";
         let d = doc("app/Models/User.php", attr);
         let cols = plugin.completion(&d, at(attr, "(['", 3), None);
-        assert_eq!(labels(&cols), ["name", "email", "id"]);
+        assert_eq!(labels(&cols), ["id", "name", "email"]);
         assert_eq!(
             cols[0].kind,
             Some(openidea_plugin::providers::CompletionKind::Field)
@@ -4917,7 +4919,7 @@ return Post::query()->create([
             ),
             None,
         );
-        assert_eq!(labels(&items), ["title", "id"]);
+        assert_eq!(labels(&items), ["id", "title"]);
     }
 
     #[test]

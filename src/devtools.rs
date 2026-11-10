@@ -19,6 +19,15 @@ pub fn cache_reply(stdout: &str) -> Option<Value> {
     let line = stdout[at + CACHE_MARKER.len()..].lines().next()?;
     serde_json::from_str(line).ok()
 }
+pub const SCHEMA_PHP: &str = include_str!("../php/schema.php");
+const SCHEMA_MARKER: &str = "@@openidea-schema@@";
+
+pub fn schema_reply(stdout: &str) -> Option<Value> {
+    let at = stdout.rfind(SCHEMA_MARKER)?;
+    let line = stdout[at + SCHEMA_MARKER.len()..].lines().next()?;
+    serde_json::from_str(line).ok()
+}
+
 pub const GUIDELINES: &str = include_str!("../php/guidelines.md");
 pub const AUDIT_LOG: &str = "storage/logs/openidea-audit.jsonl";
 const MARKER: &str = "@@openidea@@";

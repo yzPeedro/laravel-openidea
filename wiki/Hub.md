@@ -1,6 +1,6 @@
 # The hub
 
-The Laravel OpenIDEA hub is a page with 43 sections that shows your application from the inside: Artisan and Tinker, routes, models, the database, cache keys, config, queues, events, logs, a Live Audit recorder and more. Every table row opens the file it comes from, and every section can live in the bottom tool window or in its own editor tab.
+The Laravel OpenIDEA hub is a page with 44 sections that shows your application from the inside: Artisan and Tinker, routes, models, the database, cache keys, config, queues, events, logs, a Live Audit recorder and more. Every table row opens the file it comes from, and every section can live in the bottom tool window or in its own editor tab.
 
 <p align="center"><img src="images/hub-overview.webp" alt="The hub open in an editor tab on the Overview section, with the sidebar of sections on the left" width="100%"></p>
 <p align="center"><sub>The hub in an editor tab, on its Overview section</sub></p>
@@ -27,7 +27,7 @@ The tool window and the editor tabs run the same page. Each tab is its own copy 
 An editor tab of the hub is a small file in `storage/openidea/hub/`, opened by the plugin's custom editor for the `*.laravel-hub` pattern:
 
 - `hub.laravel-hub` opens the whole hub on Overview.
-- `<section>.laravel-hub` (for example `routes.laravel-hub`, `cache.laravel-hub`) opens that section. There is one file for each of the 43 sections.
+- `<section>.laravel-hub` (for example `routes.laravel-hub`, `cache.laravel-hub`) opens that section. There is one file for each of the 44 sections.
 - `sections` lists the expected files. When it matches, nothing is rewritten.
 
 The files are written by a small PHP script run with the project's runner (php or Docker Compose), because the plugin itself can only read the project. This happens when you focus an editor in a Laravel project, and again (forced) when you use **Open in editor** or **Laravel: Open the Hub in an Editor Tab**. The script creates `storage/openidea/` with a `.gitignore` that ignores everything in it, removes `.laravel-hub` files of sections that no longer exist, and only rewrites a file whose content changed. Each file holds a single line such as `{"section":"routes"}`. The files have the Laravel file icon in the project tree.
@@ -47,7 +47,7 @@ The left column shows **Laravel OpenIDEA** with your app name and Laravel versio
 | Project | [Overview](Hub-Overview.md), [Ecosystem](Hub-Ecosystem.md), [AI Agents](Hub-AI-Agents.md) |
 | Develop | [Artisan](Hub-Artisan.md), [Tinker](Hub-Tinker.md), [SQL to Laravel](Hub-SQL-to-Laravel.md) |
 | HTTP | [Routes](Hub-Routes.md), [Controllers](Hub-Controllers.md), [Form Requests](Hub-Form-Requests.md), [API Resources](Hub-API-Resources.md), [Middleware](Hub-Middleware.md) |
-| Data | [Models](Hub-Models.md), [Scopes](Hub-Scopes.md), [Observers](Hub-Observers.md), [Casts](Hub-Casts.md), [Enums](Hub-Enums.md), [Database](Hub-Database.md), [Cache](Hub-Cache.md), [Factories & Seeders](Hub-Factories.md) |
+| Data | [Models](Hub-Models.md), [Scopes](Hub-Scopes.md), [Observers](Hub-Observers.md), [Casts](Hub-Casts.md), [Enums](Hub-Enums.md), [Database](Hub-Database.md), [Schema diagram](Hub-Schema-Diagram.md), [Cache](Hub-Cache.md), [Factories & Seeders](Hub-Factories.md) |
 | Views | [Views](Hub-Views.md), [Components](Hub-Components.md), [Frontend](Hub-Frontend.md), [Translations](Hub-Translations.md) |
 | App | [All Classes](Hub-Classes.md), [Service Providers](Hub-Providers.md), [Container Bindings](Hub-Bindings.md), [Validation Rules](Hub-Rules.md), [Macros](Hub-Macros.md) |
 | Configure | [Config](Hub-Config.md), [Environment](Hub-Environment.md), [Drivers & Connections](Hub-Drivers-and-Connections.md), [Auth & Policies](Hub-Auth-and-Policies.md) |

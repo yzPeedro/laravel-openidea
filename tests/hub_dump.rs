@@ -151,6 +151,12 @@ fn dumps_hub_responses() {
         sections.insert(id.into(), msg);
     }
     dump.insert("sections".into(), Value::Object(sections));
+    dump.insert(
+        "diagram".into(),
+        send(&mut plugin, json!({"type": "diagram"}))
+            .pop()
+            .unwrap_or_default(),
+    );
     let web = Path::new(env!("CARGO_MANIFEST_DIR")).join("web");
     let out = Path::new(&out);
     std::fs::create_dir_all(out.join("icons")).unwrap();

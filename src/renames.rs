@@ -21,18 +21,22 @@ fn text_edits(text: &str, edits: Vec<(usize, usize, String)>) -> Vec<TextEdit> {
 }
 
 fn create_form_request(project: &Project, x: &crate::formrequest::Extraction) -> Result<(), Error> {
+    create_file(project, &x.file, &x.content, "the Form Request")
+}
+
+pub fn create_file(project: &Project, file: &str, content: &str, what: &str) -> Result<(), Error> {
     let mode = crate::runner::detect(project);
     let args = mode.php_args(&[
         "-r".into(),
         crate::devtools::script(crate::devtools::CREATE_FILE_PHP),
         "--".into(),
-        x.file.clone(),
+        file.to_owned(),
     ]);
-    let out = match crate::runner::run(project, &mode, &args, Some(&x.content)) {
+    let out = match crate::runner::run(project, &mode, &args, Some(content)) {
         Ok(out) => out,
         Err(Error::Denied(cap)) => {
             return Err(Error::Failed(format!(
-                "Allow \"{cap}\" for Laravel OpenIDEA in Settings › Plugins to create the Form Request."
+                "Allow \"{cap}\" for Laravel OpenIDEA in Settings › Plugins to create {what}."
             )));
         }
         Err(e) => return Err(e),
@@ -43,7 +47,7 @@ fn create_form_request(project: &Project, x: &crate::formrequest::Extraction) ->
         } else {
             out.stderr.trim()
         };
-        return Err(Error::Failed(format!("Couldn't create {}: {why}", x.file)));
+        return Err(Error::Failed(format!("Couldn't create {file}: {why}")));
     }
     Ok(())
 }

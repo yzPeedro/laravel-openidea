@@ -2,6 +2,13 @@
 
 All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+- The migrations are followed in order: columns removed by `dropColumn()`, `dropMorphs()`, `dropTimestamps()`, `dropSoftDeletes()`, `dropRememberToken()` and `dropConstrainedForeignId()`, columns renamed by `renameColumn()` and tables removed or renamed by `Schema::drop()`, `Schema::dropIfExists()` and `Schema::rename()` leave completion, the unknown column inspection, the hub and *Generate @property PHPDoc*. The `down()` method of a migration is ignored. Columns are listed in the order the migrations add them, so `id` comes first.
+- Hub › Database: **Indexes** and **Foreign keys** columns, read from `index()`, `unique()`, `primary()`, `fullText()`, `foreignId()->constrained()`, `foreign()->references()->on()` and the rest. **Compare with database** boots the app and lists pending migrations, tables only in the migrations or only in the database, and missing columns and indexes. **Rows** shows the rows of a table, read only and paged, with secret and personal data columns masked.
+- Hub › Schema diagram: a new section draws every table with its primary, foreign and unique keys and the model that uses it, linked by foreign keys (solid) and model relations without one (dashed). Drag to pan, scroll to zoom, **Fit**, filter by table, model or column, hover a table to highlight its links, click its title to open the migration.
+- Live Audit: **N+1?** and **Slow query** cards say *No index on orders.status* when none of the columns the query filters on starts an index in the migrations, with **Create migration**, which writes and opens a migration that adds the index. **EXPLAIN** shows the plan of a `select` (MySQL, MariaDB, PostgreSQL, SQLite) in the output drawer, from a card or an expanded query.
+
 ## 0.15.1
 
 - *Rename route* and *Rename translation* are offered after the file was saved, autosave included. On Windows OpenIDEA's file watcher reports the save before the save itself, which refreshed the plugin's copy of the file first, so the rename was lost. Renaming twice before applying keeps the first name, and renaming back to the original forgets the rename.
