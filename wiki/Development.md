@@ -142,7 +142,23 @@ The hub page posts JSON messages (`{"type": "section", "id": "routes"}`) through
 | PHP scripts | `php -l` on every `php/*.php` with PHP 8.3 |
 | Hub script | Extracts the `<script>` of `web/hub.html` and runs `node --check` on it |
 
-`.github/workflows/release.yml` runs on a `v*` tag: it checks the tag matches `version` in `plugin.toml`, runs the tests, packages, signs the marketplace package with the `OPENIDEA_PUBLISHER_KEY` secret, takes the release notes from the tag's section of `CHANGELOG.md` and publishes the GitHub release.
+`.github/workflows/release.yml` runs on a `v*` tag: it checks the tag matches `version` in `plugin.toml`, runs the tests, packages, signs the marketplace package with the `OPENIDEA_PUBLISHER_KEY` secret, takes the release notes from the tag's section of `CHANGELOG.md` and publishes the GitHub release. A second job, *Open the registry pull request*, then lists the version in the marketplace.
+
+### The marketplace registry
+
+The OpenIDEA marketplace reads the community registry [l0ng-ai/openidea-plugins](https://github.com/l0ng-ai/openidea-plugins), not GitHub releases: a version shows in **Settings › Plugins › Available** only once the registry lists it in `plugins/pedro.laravel-openidea.toml`. The *Open the registry pull request* job does that after the release is published:
+
+1. syncs the fork `yzPeedro/openidea-plugins` with the registry's `main` (`gh repo sync`);
+2. on a branch `laravel-openidea-<version>` of the fork, adds a `[[versions]]` table to `plugins/pedro.laravel-openidea.toml` with the version, the URL of `pedro.laravel-openidea-<version>.oiplugin` on the release and its checksum from `build/*.oiplugin.sha256`, keeping the earlier tables;
+3. pushes the branch to the fork and opens the pull request `Update pedro.laravel-openidea to <version>` in the registry, with the registry's template filled in: the plugin, the release link and both boxes checked.
+
+A registry maintainer merges it after the checks pass; until then the marketplace offers the previous version. The job does nothing when the registry already lists the version or a pull request from that branch is open, so it can be run again from the workflow run (*Re-run failed jobs*) without publishing the release a second time.
+
+It needs the `REGISTRY_TOKEN` secret and fails with "the REGISTRY_TOKEN secret is not set" without it. Use a classic personal access token of the fork's owner with the `public_repo` scope: fine-grained tokens can't write to public repositories their owner isn't a member of, so they can push to the fork but not open the pull request in `l0ng-ai/openidea-plugins`.
+
+1. Create the token in **GitHub › Settings › Developer settings › Personal access tokens › Tokens (classic) › Generate new token (classic)**, with the `public_repo` scope and an expiry date.
+2. Add it to this repository in **Settings › Secrets and variables › Actions › New repository secret**, named `REGISTRY_TOKEN`, or with `gh secret set REGISTRY_TOKEN --repo yzPeedro/laravel-openidea`.
+3. Renew it before it expires; an expired token makes the job fail at `gh repo sync`.
 
 To release, maintainers bump `version` in `plugin.toml` and `Cargo.toml`, move *Unreleased* in `CHANGELOG.md` to the new version, update `change-notes`, then tag:
 

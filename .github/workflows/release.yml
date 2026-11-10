@@ -16,6 +16,8 @@ jobs:
   release:
     name: Build and publish
     runs-on: ubuntu-latest
+    outputs:
+      sha256: ${{ steps.checksum.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -59,6 +61,14 @@ jobs:
           test -n "${OPENIDEA_PUBLISHER_KEY}" || { echo "the OPENIDEA_PUBLISHER_KEY secret is not set"; exit 1; }
           ./scripts/oiplugin.sh
 
+      - name: Checksum of the marketplace package
+        id: checksum
+        working-directory: laravel-openidea
+        run: |
+          sha256="$(cut -d ' ' -f 1 build/*.oiplugin.sha256)"
+          [[ "${sha256}" =~ ^[0-9a-f]{64}$ ]] || { echo "build/*.oiplugin.sha256 does not hold one checksum"; exit 1; }
+          echo "sha256=${sha256}" >> "${GITHUB_OUTPUT}"
+
       - name: Release notes
         working-directory: laravel-openidea
         run: |
@@ -81,3 +91,72 @@ jobs:
             --title "Laravel OpenIDEA ${GITHUB_REF_NAME}" \
             --notes-file build/notes.md \
             build/*.zip build/*.oiplugin build/*.sha256
+
+  registry:
+    name: Open the registry pull request
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY: l0ng-ai/openidea-plugins
+      FORK: yzPeedro/openidea-plugins
+      PLUGIN_FILE: plugins/pedro.laravel-openidea.toml
+    steps:
+      - name: Add the version to the registry
+        env:
+          GH_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          SHA256: ${{ needs.release.outputs.sha256 }}
+        run: |
+          test -n "${GH_TOKEN}" || { echo "the REGISTRY_TOKEN secret is not set"; exit 1; }
+          test -n "${SHA256}" || { echo "the release job did not report the package checksum"; exit 1; }
+          version="${GITHUB_REF_NAME#v}"
+          branch="laravel-openidea-${version}"
+          owner="${FORK%%/*}"
+          release="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME}"
+          package="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/pedro.laravel-openidea-${version}.oiplugin"
+          listed="version = \"${version}\""
+
+          gh auth setup-git
+          gh repo sync "${FORK}" --source "${REGISTRY}" --branch main
+          git clone --quiet --depth 1 "${GITHUB_SERVER_URL}/${FORK}.git" registry
+          cd registry
+
+          if grep -qxF "${listed}" "${PLUGIN_FILE}"; then
+            echo "${REGISTRY} already lists ${version}"
+            exit 0
+          fi
+          if [ -n "$(gh pr list --repo "${REGISTRY}" --head "${branch}" --state open --json number --jq '.[].number')" ]; then
+            echo "a pull request from ${branch} is already open in ${REGISTRY}"
+            exit 0
+          fi
+
+          if git ls-remote --exit-code --heads origin "${branch}" > /dev/null; then
+            git fetch --quiet --depth 1 origin "${branch}"
+            git switch --quiet -c "${branch}" FETCH_HEAD
+            grep -qxF "${listed}" "${PLUGIN_FILE}" || { echo "${FORK} has a branch ${branch} without ${version}: delete it and run this job again"; exit 1; }
+          else
+            git switch --quiet -c "${branch}"
+            [ -z "$(tail -c 1 "${PLUGIN_FILE}")" ] || echo >> "${PLUGIN_FILE}"
+            printf '\n[[versions]]\nversion = "%s"\npackage = "%s"\nsha256 = "%s"\n' "${version}" "${package}" "${SHA256}" >> "${PLUGIN_FILE}"
+            id="$(gh api user --jq .id)"
+            login="$(gh api user --jq .login)"
+            git config user.name "${login}"
+            git config user.email "${id}+${login}@users.noreply.github.com"
+            git commit --quiet -am "Update pedro.laravel-openidea to ${version}"
+            git push --quiet origin "${branch}"
+          fi
+
+          {
+            echo "**Plugin:** \`pedro.laravel-openidea\` — ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+            echo
+            echo "**What changed:** ${release}"
+            echo
+            echo "- [x] The package is built from the listed repository and signed with my publisher key."
+            echo "- [x] \`openidea-plugin check <package>\` passes."
+          } > "${RUNNER_TEMP}/body.md"
+
+          gh pr create \
+            --repo "${REGISTRY}" \
+            --base main \
+            --head "${owner}:${branch}" \
+            --title "Update pedro.laravel-openidea to ${version}" \
+            --body-file "${RUNNER_TEMP}/body.md"
