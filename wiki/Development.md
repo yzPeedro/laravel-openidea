@@ -45,7 +45,7 @@ The release build is small and fast: `opt-level = "s"`, `lto = true`, `strip = t
 | Path | What lives there |
 | --- | --- |
 | `plugin.toml` | The manifest: id `pedro.laravel-openidea`, version, `engines.openidea = "^1.4"`, capabilities and every contribution |
-| `settings.schema.json` | The 19 [settings](Settings.md) |
+| `settings.schema.json` | The 22 [settings](Settings.md) |
 | `src/lib.rs` | Plugin entry: providers (completion, definitions, gutter, code actions), commands, events, Blade syntax |
 | `src/php.rs` | PHP and Blade tokenizer and the call context of each string |
 | `src/refs.rs` | Which helper, facade or directive points to which index |
@@ -57,6 +57,7 @@ The release build is small and fast: `opt-level = "s"`, `lto = true`, `strip = t
 | `src/renames.rs`, `src/formrequest.rs`, `src/modeldoc.rs`, `src/querysql.rs`, `src/queries.rs` | Refactorings, Extract Form Request, model PHPDoc, Laravel to SQL, the editor commands |
 | `src/resources.rs` | Reads classes, attributes and calls of the app (listeners, observers, bindings…) |
 | `src/sections.rs` | Hub sections built from code |
+| `src/security.rs`, `src/securityscan.rs`, `src/unused.rs`, `src/upgrade.rs` | Security inspections and the Security section, the Unused section, and the upgrade rules taken from the official guides |
 | `src/schemadiff.rs`, `src/indexadvice.rs` | Comparing the migrations with the live database, the schema diagram, and missing index advice for Live Audit |
 | `src/panels.rs` | The hub view and its message protocol |
 | `src/devtools.rs` | Tinker, Live Audit, debug tools, ecosystem and AI agents |

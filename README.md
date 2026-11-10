@@ -32,8 +32,8 @@ https://github.com/user-attachments/assets/a653530b-f3d4-44e3-921e-bef9119cd659
 | ⚡ **[Completion everywhere](https://github.com/yzPeedro/laravel-openidea/wiki/Route-Names)** | Routes with verb and URI, views, config, env, translations, validation rules, middleware, gates, disks, stores, channels, Blade components and directives, and more. |
 | 🧠 **[Eloquent that follows the chain](https://github.com/yzPeedro/laravel-openidea/wiki/Eloquent-Chains)** | Columns, relations, scopes, casts and enum members, from `$order->` to `->first()->`, with typed closures and factory states. |
 | 🧭 **[Navigation and gutter usages](https://github.com/yzPeedro/laravel-openidea/wiki/Gutter-Usages)** | Ctrl+click opens what a string means; a Laravel icon lists every place a class or scope is used. |
-| 🩺 **[Inspections with quick fixes](https://github.com/yzPeedro/laravel-openidea/wiki/Inspections)** | Unknown views, rules and columns, N+1 queries, `env()` outside config, `$fillable`, enum values, duplicate keys and more. |
-| 🧩 **[A hub for your whole app](https://github.com/yzPeedro/laravel-openidea/wiki/Hub)** | 44 sections, from routes and models to queues, schedule and translations, searchable as one, in a tool window or editor tabs. |
+| 🩺 **[Inspections with quick fixes](https://github.com/yzPeedro/laravel-openidea/wiki/Inspections)** | Unknown views, rules and columns, N+1 queries, `env()` outside config, `$fillable`, enum values, duplicate keys, mass assignment and raw SQL, missing translations, what breaks on the next Laravel and more. |
+| 🧩 **[A hub for your whole app](https://github.com/yzPeedro/laravel-openidea/wiki/Hub)** | 47 sections, from routes and models to queues, schedule and translations, searchable as one, in a tool window or editor tabs. |
 | 🐘 **[Tinker](https://github.com/yzPeedro/laravel-openidea/wiki/Hub-Tinker) and [SQL to Laravel](https://github.com/yzPeedro/laravel-openidea/wiki/Hub-SQL-to-Laravel)** | PHP in tabs with Tinker-style output; SQL to Eloquent as you type, and Laravel back to MySQL. |
 | 🔍 **[Live Audit](https://github.com/yzPeedro/laravel-openidea/wiki/Hub-Live-Audit)** | Requests, queries with the line that ran them, events, jobs, cache, mail and more, with N+1 and slow query insights. |
 | 🤖 **[AI agents](https://github.com/yzPeedro/laravel-openidea/wiki/AI-Agents)** | An MCP server with your app's runtime data behind an access level you choose, next to Laravel Boost. |
@@ -55,7 +55,7 @@ The [installation page](https://github.com/yzPeedro/laravel-openidea/wiki/Instal
 | --- | --- |
 | **Getting started** | [Installation](https://github.com/yzPeedro/laravel-openidea/wiki/Installation) · [Permissions](https://github.com/yzPeedro/laravel-openidea/wiki/Permissions) · [Settings](https://github.com/yzPeedro/laravel-openidea/wiki/Settings) · [Commands](https://github.com/yzPeedro/laravel-openidea/wiki/Commands) · [Privacy and security](https://github.com/yzPeedro/laravel-openidea/wiki/Privacy-and-Security) · [How it works](https://github.com/yzPeedro/laravel-openidea/wiki/How-It-Works) · [Troubleshooting](https://github.com/yzPeedro/laravel-openidea/wiki/Troubleshooting) |
 | **Editor** | [Completion and navigation](https://github.com/yzPeedro/laravel-openidea/wiki#editor-completion-and-navigation) · [Inspections](https://github.com/yzPeedro/laravel-openidea/wiki/Inspections) · [Refactorings and actions](https://github.com/yzPeedro/laravel-openidea/wiki#refactorings-and-actions) |
-| **Hub** | [The hub](https://github.com/yzPeedro/laravel-openidea/wiki/Hub) · [All 44 sections](https://github.com/yzPeedro/laravel-openidea/wiki#the-hub) |
+| **Hub** | [The hub](https://github.com/yzPeedro/laravel-openidea/wiki/Hub) · [All 47 sections](https://github.com/yzPeedro/laravel-openidea/wiki#the-hub) |
 | **AI agents** | [MCP server and access levels](https://github.com/yzPeedro/laravel-openidea/wiki/AI-Agents) |
 
 ## Contributing

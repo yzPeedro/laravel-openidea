@@ -45,10 +45,14 @@ mod resources;
 mod runner;
 mod schemadiff;
 mod sections;
+mod security;
+mod securityscan;
 mod snippets;
 mod statics;
 mod toolconfig;
 mod tools;
+mod unused;
+mod upgrade;
 mod usages;
 
 use audit::Logged;
@@ -202,6 +206,23 @@ fn related_candidates(rel: &str) -> Vec<String> {
     {
         let parts: Vec<String> = r.split('/').map(studly).collect();
         out.push(format!("app/Livewire/{}.php", parts.join("/")));
+    }
+    out
+}
+
+pub(crate) fn string_refs(text: &str, blade: bool) -> Vec<(RefKind, String, bool)> {
+    let scope = scope_of(text);
+    let mut out = Vec::new();
+    for arg in php::args_in(text, blade) {
+        for seg in refs::segments(&arg, &scope) {
+            let Want::Kind(kind) = seg.want else {
+                continue;
+            };
+            let Some(value) = arg.value.get(seg.start..seg.end) else {
+                continue;
+            };
+            out.push((kind, value.to_owned(), arg.closed && !arg.concat));
+        }
     }
     out
 }
@@ -1927,6 +1948,24 @@ impl Laravel {
             }
             let Want::Kind(kind) = seg.want else { continue };
             let value = &arg.value[seg.start.min(arg.value.len())..seg.end.min(arg.value.len())];
+            if kind == RefKind::Translation
+                && arg.closed
+                && !arg.concat
+                && host::setting_bool("missingTranslationInspection").unwrap_or(true)
+            {
+                let (missing, _, _) = self.missing_locales(&project, &root, value);
+                if !missing.is_empty() {
+                    out.push(
+                        Diagnostic::new(
+                            lines.range(text, arg.start + seg.start, arg.start + seg.end),
+                            Severity::Warning,
+                            format!("Translation '{value}' is missing in {}", missing.join(", ")),
+                        )
+                        .code("laravel.missing-translation"),
+                    );
+                }
+                continue;
+            }
             if !arg.closed || arg.concat || !enabled(kind) || !refs::checkable(kind, value) {
                 continue;
             }
@@ -2125,12 +2164,60 @@ impl Laravel {
         }
     }
 
+    fn missing_locales(
+        &mut self,
+        project: &Project,
+        root: &str,
+        key: &str,
+    ) -> (Vec<String>, Option<String>, bool) {
+        let entries = self.cache.get(RefKind::Translation, project, root);
+        let locale_of = |detail: &Option<String>| {
+            let d = detail.as_deref().unwrap_or_default();
+            d.split_once(": ").map_or(d, |(l, _)| l).to_owned()
+        };
+        let all: std::collections::BTreeSet<String> = entries
+            .iter()
+            .map(|e| locale_of(&e.detail))
+            .filter(|l| !l.is_empty())
+            .collect();
+        let mut have = std::collections::BTreeSet::new();
+        let mut text = None;
+        let mut json = false;
+        for e in entries.iter().filter(|e| e.key == key) {
+            have.insert(locale_of(&e.detail));
+            json |= e.location.path.ends_with(".json");
+            if text.is_none() {
+                text = e
+                    .detail
+                    .as_deref()
+                    .and_then(|d| d.split_once(": "))
+                    .map(|(_, v)| v.trim_matches(['\'', '"']).to_owned())
+                    .filter(|v| !v.is_empty());
+            }
+        }
+        if have.is_empty() || all.len() < 2 {
+            return (Vec::new(), None, json);
+        }
+        (all.difference(&have).cloned().collect(), text, json)
+    }
+
     fn translation_actions(&mut self, project: &Project, root: &str, key: &str) -> Vec<CodeAction> {
         let locale = if self.cache.locale.is_empty() {
             "en".to_owned()
         } else {
             self.cache.locale.clone()
         };
+        self.translation_actions_in(project, root, key, &locale, None)
+    }
+
+    fn translation_actions_in(
+        &mut self,
+        project: &Project,
+        root: &str,
+        key: &str,
+        locale: &str,
+        value: Option<&str>,
+    ) -> Vec<CodeAction> {
         let mut out = Vec::new();
         let existing = |name: String| {
             ["lang", "resources/lang"].iter().find_map(|dir| {
@@ -2154,6 +2241,7 @@ impl Laravel {
             };
             let insert_at = before.len();
             let escaped = rest.replace('\'', "\\'");
+            let shown = value.unwrap_or(rest).replace('\'', "\\'");
             let pos = position(&text, insert_at);
             out.push(CodeAction {
                 title: format!("Add '{key}' to {relative}"),
@@ -2164,7 +2252,7 @@ impl Laravel {
                     join(root, &relative),
                     vec![TextEdit {
                         range: Range::new(pos, pos),
-                        text: format!("{comma}\n    '{escaped}' => '{escaped}',"),
+                        text: format!("{comma}\n    '{escaped}' => '{shown}',"),
                     }],
                 )],
             });
@@ -2175,6 +2263,10 @@ impl Laravel {
             let before = text[..close].trim_end();
             let comma = if before.ends_with('{') { "" } else { "," };
             let escaped = key.replace('\\', "\\\\").replace('"', "\\\"");
+            let shown = value.map_or_else(
+                || escaped.clone(),
+                |v| v.replace('\\', "\\\\").replace('"', "\\\""),
+            );
             let pos = position(&text, before.len());
             out.push(CodeAction {
                 title: format!("Add '{key}' to {relative}"),
@@ -2185,7 +2277,7 @@ impl Laravel {
                     join(root, &relative),
                     vec![TextEdit {
                         range: Range::new(pos, pos),
-                        text: format!("{comma}\n    \"{escaped}\": \"{escaped}\""),
+                        text: format!("{comma}\n    \"{escaped}\": \"{shown}\""),
                     }],
                 )],
             });
@@ -2629,7 +2721,20 @@ impl Providers for Laravel {
             .iter()
             .any(|e| e.key == arg.value)
         {
-            return Vec::new();
+            let (missing, text, json) = self.missing_locales(&project, &root, &arg.value);
+            return missing
+                .iter()
+                .flat_map(|locale| {
+                    self.translation_actions_in(
+                        &project,
+                        &root,
+                        &arg.value,
+                        locale,
+                        text.as_deref(),
+                    )
+                })
+                .filter(|a| a.edits.iter().all(|(p, _)| p.ends_with(".json") == json))
+                .collect();
         }
         self.translation_actions(&project, &root, &arg.value)
     }
@@ -3956,6 +4061,62 @@ mod tests {
     }
 
     #[test]
+    fn reports_and_fills_translations_missing_in_a_locale() {
+        let host = setup();
+        host.add_file(
+            "lang/en/shop.php",
+            "<?php
+
+return [
+    'title' => 'Shop',
+    'cart' => 'Your cart',
+];
+",
+        );
+        host.add_file(
+            "lang/pt_BR/shop.php",
+            "<?php
+
+return [
+    'title' => 'Loja',
+];
+",
+        );
+        host.add_file(
+            "lang/pt_BR.json",
+            "{
+    \"Hello\": \"Olá\"
+}
+",
+        );
+        let mut plugin = Laravel::default();
+        let text = "<?php
+__('shop.cart');
+__('shop.title');
+__('Hello');
+";
+        let problems = plugin.inspect("/project/app/X.php", text);
+        let messages: Vec<&str> = problems.iter().map(|p| p.message.as_str()).collect();
+        assert_eq!(messages, ["Translation 'shop.cart' is missing in pt_BR"]);
+        let actions = plugin.code_actions(
+            &doc("app/X.php", text),
+            Range::new(at(text, "cart", 1), at(text, "cart", 1)),
+        );
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].title, "Add 'shop.cart' to lang/pt_BR/shop.php");
+        assert_eq!(
+            actions[0].edits[0].1[0].text,
+            "
+    'cart' => 'Your cart',"
+        );
+        let none = plugin.code_actions(
+            &doc("app/X.php", text),
+            Range::new(at(text, "title", 1), at(text, "title", 1)),
+        );
+        assert!(none.is_empty());
+    }
+
+    #[test]
     fn adds_missing_translations_to_resources_lang_on_older_laravel() {
         let host = setup();
         host.add_file(
@@ -3972,6 +4133,29 @@ mod tests {
             titles.contains(&"Add 'messages.brand_new' to resources/lang/en/messages.php"),
             "{titles:?}"
         );
+    }
+
+    #[test]
+    fn reports_unescaped_request_data_in_blade_when_files_open() {
+        let host = setup();
+        host.add_file(
+            "resources/views/search.blade.php",
+            "<p>{!! request('q') !!}</p>
+<p>{!! $post->body !!}</p>
+",
+        );
+        let mut plugin = Laravel::default();
+        plugin
+            .activate(&host.context("pedro.laravel-openidea"))
+            .unwrap();
+        let path = "/project/resources/views/search.blade.php";
+        plugin.handle_events(&[Event::FileOpened(path.into())], &host.invocation());
+        let diagnostics = host.diagnostics();
+        let codes: Vec<String> = diagnostics[path]
+            .iter()
+            .filter_map(|d| d.code.clone())
+            .collect();
+        assert_eq!(codes, ["laravel.unescaped-request"]);
     }
 
     #[test]

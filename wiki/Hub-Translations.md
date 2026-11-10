@@ -24,6 +24,7 @@ Search, filters, sorting and paging are described in [The hub](Hub.md).
 | **Locale** | The locale folder or JSON file name: `en`, `pt_BR`. |
 | **Text** | The translated string. Empty for a key whose value is a nested array (its children have their own rows) or anything other than a string literal. |
 | **Group** | The file the key lives in: the first segment of a PHP key (`auth`, `shop`), or `json` for keys from `lang/<locale>.json`. |
+| **Missing in** | The locales that don't have the key, comma separated, or `—` when every locale has it. A locale is any folder or JSON file of `lang/` or `resources/lang/`. |
 
 Rows are sorted by key. When a key exists in several locales, the row of the preferred locale (the `locale` setting, `en` by default) comes first, then the others.
 
@@ -33,6 +34,7 @@ Rows are sorted by key. When a key exists in several locales, the row of the pre
 | --- | --- |
 | **Locale** | Each locale with its number of keys. |
 | **Group** | Each translation file, plus `json`. |
+| **Missing in** | Each locale, with the number of rows whose key it lacks. Pick `pt_BR` to see everything still to translate into Portuguese. |
 
 ### Toolbar buttons
 
@@ -41,6 +43,11 @@ Rows are sorted by key. When a key exists in several locales, the row of the pre
 | **Publish language files** | `php artisan lang:publish` | Output drawer (*OUTPUT*) |
 
 Recent Laravel skeletons ship without a `lang/` folder; `lang:publish` copies the framework's `auth`, `pagination`, `passwords` and `validation` files into it, and they show up here. The drawer is described in [The hub](Hub.md).
+
+<p align="center"><img src="images/hub-translations-missing.webp" alt="Translations filtered by Missing in pt_BR: auth, pagination, passwords, shop.add_product, shop.back and validation keys with their English text" width="100%"></p>
+<p align="center"><sub>Every key still missing in <code>pt_BR</code></sub></p>
+
+In the editor, a key used in code that a locale lacks is underlined by the [missing translations](Inspection-Missing-Translations.md) inspection, with a fix that adds it.
 
 ## Details
 

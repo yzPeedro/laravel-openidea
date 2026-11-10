@@ -125,7 +125,14 @@ impl Laravel {
                 Err(_) => Vec::new(),
             };
         }
-        if !path.ends_with(".php") || path.ends_with(".blade.php") {
+        if path.ends_with(".blade.php") {
+            return if setting("securityInspection") {
+                crate::security::blade(text, path)
+            } else {
+                Vec::new()
+            };
+        }
+        if !path.ends_with(".php") {
             return Vec::new();
         }
         let enabled = Enabled {
@@ -135,20 +142,23 @@ impl Laravel {
             n_plus_one: setting("nPlusOneInspection"),
             duplicate_keys: setting("duplicateKeyInspection"),
             enum_values: setting("enumValueInspection"),
+            security: setting("securityInspection"),
         };
         if !(enabled.columns
             || enabled.env
             || enabled.fillable
             || enabled.n_plus_one
             || enabled.duplicate_keys
-            || enabled.enum_values)
+            || enabled.enum_values
+            || enabled.security
+            || setting("upgradeInspection"))
         {
             return Vec::new();
         }
         let facts = self.cached_facts(project, root);
         let (models, columns, config_env) = &*facts;
         let rel = crate::project::rel(root, path).replace('\\', "/");
-        checks::php(
+        let mut out = checks::php(
             text,
             &Facts {
                 path,
@@ -158,7 +168,33 @@ impl Laravel {
                 config_env,
                 enabled,
             },
-        )
+        );
+        if setting("upgradeInspection")
+            && let Some(installed) = self.installed_major(project, root)
+        {
+            let composer = if installed == 12 {
+                project.read_file("composer.json").unwrap_or_default()
+            } else {
+                String::new()
+            };
+            out.extend(crate::upgrade::findings(
+                text, path, &rel, &composer, installed,
+            ));
+            out.sort_by_key(|f| (f.start, f.end));
+        }
+        out
+    }
+
+    pub(crate) fn installed_major(&mut self, project: &Project, root: &str) -> Option<u32> {
+        let status = self
+            .statuses
+            .entry(root.to_owned())
+            .or_insert_with(|| {
+                crate::project::laravel_version(project)
+                    .map_or("Laravel".to_owned(), |v| format!("Laravel {v}"))
+            })
+            .clone();
+        crate::upgrade::major(status.strip_prefix("Laravel ")?)
     }
 
     pub(crate) fn finding_diagnostics(text: &str, findings: &[Finding]) -> Vec<Diagnostic> {

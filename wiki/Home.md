@@ -74,6 +74,9 @@ New here? Start with [Installation](Installation.md), then open the [hub](Hub.md
 | [`.env` keys](Inspection-Env-Keys.md) | Keys missing between `.env` and `.env.example` |
 | [Unknown middleware and abilities](Inspection-Unknown-Middleware.md) | Middleware aliases and abilities nobody defines |
 | [Unknown OpenAPI refs](Inspection-Unknown-OpenAPI-Refs.md) | swagger-php `$ref`s to missing components |
+| [Security](Inspection-Security.md) | Every input field mass assigned, variables in raw SQL, request data printed unescaped |
+| [Missing translations](Inspection-Missing-Translations.md) | Keys some locales have and others don't |
+| [Upgrade](Inspection-Upgrade.md) | Code that breaks on the next major Laravel version |
 
 ## Refactorings and actions
 
@@ -99,6 +102,7 @@ New here? Start with [Installation](Installation.md), then open the [hub](Hub.md
 | [The hub](Hub.md) | Opening it, the tool window, editor tabs, search, filters, sorting and paging |
 | [Overview](Hub-Overview.md) | Your app at a glance and the quick actions |
 | [Ecosystem](Hub-Ecosystem.md) | Starter kit, first-party and popular packages |
+| [Upgrade](Hub-Upgrade.md) | What breaks on each later Laravel version, from the upgrade guides |
 | [AI Agents](Hub-AI-Agents.md) | The MCP server, access levels and Laravel Boost |
 | [Artisan](Hub-Artisan.md) | Every command as a form, run in the terminal or captured |
 | [Tinker](Hub-Tinker.md) | PHP in tabs with Tinker-style output |
@@ -125,6 +129,8 @@ New here? Start with [Installation](Installation.md), then open the [hub](Hub.md
 | [Service Providers](Hub-Providers.md) | Providers and what they bind |
 | [Container Bindings](Hub-Bindings.md) | `bind`, `singleton`, `scoped` and `instance` |
 | [Validation Rules](Hub-Rules.md) | Custom rules |
+| [Security](Hub-Security.md) | Mass assignment, raw SQL, unescaped output, CSRF exceptions and write routes without auth |
+| [Unused](Hub-Unused.md) | Routes, views, translations, config keys, events and jobs nothing uses |
 | [Macros](Hub-Macros.md) | Macros and mixins |
 | [Config](Hub-Config.md) | Every config key and its value |
 | [Environment](Hub-Environment.md) | `.env` and `.env.example` |

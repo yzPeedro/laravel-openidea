@@ -63,6 +63,10 @@ Suggestions whose key starts with what you typed come first, then the ones that 
 
 Ctrl+click on a key lists the key in every locale that has it (`lang/en/shop.php`, `lang/pt_BR/shop.php`…), at the key's string, so you can jump to the translation you want to edit.
 
+## Keys missing in a locale
+
+When a key exists in some locales and not in others, `__('shop.back')` is underlined with *Translation 'shop.back' is missing in pt_BR*, and Alt+Enter adds it to `lang/pt_BR/shop.php` with the text of the other locale to translate. See [Missing translations](Inspection-Missing-Translations.md).
+
 ## Add a missing key
 
 When the key under the cursor exists in no locale, Alt+Enter offers to add it to the preferred locale:
