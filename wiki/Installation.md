@@ -22,7 +22,7 @@ Without `vendor/` (before `composer install`) the plugin still works, but falls 
 1. In OpenIDEA open **Settings › Plugins › Available**.
 2. Search for **Laravel OpenIDEA** and install it.
 
-Since 0.14.1 the plugin is listed with its own icon in the Frameworks, Tools and AI categories. Each release also ships `pedro.laravel-openidea-<version>.oiplugin`, the signed package the marketplace installs.
+Since 0.14.1 the plugin is listed with its own icon in the Frameworks, Tools and AI categories. Each release also ships `pedro.laravel-openidea-<version>.oiplugin`, the signed package the marketplace installs. A new version reaches the marketplace once the [OpenIDEA plugin registry](https://github.com/l0ng-ai/openidea-plugins) merges the pull request that lists it, which the release workflow opens (see [Development](Development.md#the-marketplace-registry)); until then the marketplace offers the previous version and the new one installs from its package file.
 
 ## Install from a package file
 
