@@ -1,6 +1,6 @@
 # Gutter usages
 
-A Laravel icon in the gutter, next to every class, enum, interface and trait declared in `app/` and `database/` and next to every local scope of a model, opens the list of every place in the project that uses it, so you can jump to one. The usages come from a document indexer that the IDE runs in the background, so the list follows your edits, saved or not. Ctrl+click on the class name lists the usages as well.
+A Laravel icon in the gutter, next to every class, enum, interface and trait declared in `app/` and `database/` (models excepted) and next to every local scope of a model, opens the list of every place in the project that uses it, so you can jump to one. A model's class line shows [Related files](Gutter-Related-Files.md) instead: what belongs to the model rather than where it is mentioned. The usages come from a document indexer that the IDE runs in the background, so the list follows your edits, saved or not. Ctrl+click on the class name lists the usages as well.
 
 <p align="center"><img src="images/gutter-usages-chooser.webp" alt="Clicking the Laravel icon next to class Product opens the Choose Mapping Target list with usages in controllers, models, providers, seeders, tests and policies" width="760"></p>
 <p align="center"><sub>The icon next to <code>class Product</code>: every usage with its line, file and folder</sub></p>

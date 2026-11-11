@@ -34,8 +34,8 @@ The hub is `web/hub.html`, one file of HTML, CSS and JavaScript shown as a web v
 | Languages | Blade (`languages/blade.toml`) and NEON (`languages/neon.toml`), with highlighting, structure and folding for Blade from the plugin |
 | View | The hub tool window (`laravel`, icon at the bottom of the left tool bar) |
 | Custom editor | `*.laravel-hub` files open as the hub in an editor tab |
-| Marker icon | The Laravel icon for `laravel-usages#` markers, tooltip "Where it's used" |
-| Document indexer | `php` files, for [gutter usages](Gutter-Usages.md) |
+| Marker icons | The Laravel icon for `laravel-usages#` markers, tooltip "Where it's used", and for `laravel-related#` markers, tooltip "Related files" |
+| Document indexer | `php` files, for [gutter usages](Gutter-Usages.md) and [related files](Gutter-Related-Files.md) |
 | Commands and menus | The eleven [commands](Commands.md), four of them in the editor's right-click menu |
 | File templates, run detectors, file icons | [File templates](File-Templates.md), [Run configurations](Run-Configurations.md), [File icons](File-Icons.md) |
 | Settings | `settings.schema.json` ([Settings](Settings.md)) |

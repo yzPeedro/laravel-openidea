@@ -26,7 +26,7 @@ use crate::framework::Framework;
 pub use classes::{Class, parse_class};
 
 const SLOW_INDEX_MS: u128 = 2000;
-pub use models::{is_model, plural, table_for};
+pub use models::{is_model, plural, relation_of, table_for};
 pub use routes::parse as parse_routes;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

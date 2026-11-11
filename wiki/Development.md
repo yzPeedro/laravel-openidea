@@ -53,6 +53,7 @@ The release build is small and fast: `opt-level = "s"`, `lto = true`, `strip = t
 | `src/framework.rs` | What the installed `laravel/framework` has |
 | `src/hierarchy.rs` | Trait, interface and base class completion |
 | `src/indexer.rs`, `src/usages.rs`, `src/projectfiles.rs` | The document indexer and the project file store behind gutter usages |
+| `src/related.rs` | The keys behind the related files icon: a model's family, controller actions, views and their renderers, events and listeners |
 | `src/checks.rs`, `src/inspections.rs`, `src/inspect.rs` | Inspections and quick fixes |
 | `src/renames.rs`, `src/formrequest.rs`, `src/modeldoc.rs`, `src/querysql.rs`, `src/queries.rs` | Refactorings, Extract Form Request, model PHPDoc, Laravel to SQL, the editor commands |
 | `src/resources.rs` | Reads classes, attributes and calls of the app (listeners, observers, bindings…) |
