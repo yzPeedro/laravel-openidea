@@ -38,6 +38,14 @@ const PROJECT_DIRS: [&str; 10] = [
 #[serde(tag = "type", rename_all = "lowercase")]
 enum Request {
     Overview,
+    Diagram,
+    Indexcheck {
+        sqls: Vec<String>,
+    },
+    Addindex {
+        table: String,
+        column: String,
+    },
     Hello,
     Openeditor {
         id: String,
@@ -115,6 +123,32 @@ enum Request {
         #[serde(default)]
         key: String,
     },
+    Schema {
+        action: String,
+        #[serde(default)]
+        table: String,
+        #[serde(default)]
+        page: u32,
+        #[serde(default)]
+        size: u32,
+        #[serde(default)]
+        sql: String,
+        #[serde(default)]
+        bindings: Vec<serde_json::Value>,
+        #[serde(default)]
+        connection: String,
+    },
+}
+
+#[derive(Serialize, Clone, Copy)]
+struct SchemaRequest<'a> {
+    action: &'a str,
+    table: &'a str,
+    page: u32,
+    size: u32,
+    sql: &'a str,
+    bindings: &'a [serde_json::Value],
+    connection: &'a str,
 }
 
 #[derive(Serialize)]
@@ -328,6 +362,28 @@ fn table(columns: Vec<&'static str>, rows: Vec<Row>, facets: Vec<Facet>) -> Opti
         rows,
         facets,
     })
+}
+
+fn table_keys(t: &crate::index::database::SchemaTable) -> (String, String) {
+    let join = |v: Vec<String>| {
+        if v.is_empty() {
+            "—".to_owned()
+        } else {
+            v.join(", ")
+        }
+    };
+    let indexes = t
+        .indexes
+        .iter()
+        .filter(|i| i.kind != "primary")
+        .map(|i| format!("{} ({})", i.columns.join("+"), i.kind))
+        .collect();
+    let foreigns = t
+        .foreigns
+        .iter()
+        .map(|f| format!("{} → {}.{}", f.column, f.on, f.references))
+        .collect();
+    (join(indexes), join(foreigns))
 }
 
 fn head(key: &str, sep: char) -> String {
@@ -910,6 +966,7 @@ impl Laravel {
             }
             "database" => {
                 let columns = self.cache.get(RefKind::Column, project, root);
+                let schema = crate::index::database::schema(project, root);
                 let rows = self.rows_of(project, root, RefKind::Table, |e| {
                     let prefix = format!("{}.", e.key);
                     let cols: Vec<&str> = columns
@@ -924,16 +981,29 @@ impl Laravel {
                         .filter(|y| y.chars().all(|c| c.is_ascii_digit()))
                         .unwrap_or("—")
                         .to_owned();
+                    let (indexes, foreigns) = schema
+                        .table(&e.key)
+                        .map_or_else(|| ("—".to_owned(), "—".to_owned()), table_keys);
                     vec![
                         e.key.clone(),
                         cols.len().to_string(),
                         cols.join(", "),
+                        indexes,
+                        foreigns,
                         detail,
                         year,
                     ]
                 });
                 table(
-                    vec!["Table", "Columns", "Fields", "Migration", "Year"],
+                    vec![
+                        "Table",
+                        "Columns",
+                        "Fields",
+                        "Indexes",
+                        "Foreign keys",
+                        "Migration",
+                        "Year",
+                    ],
                     rows,
                     vec![facet("Year")],
                 )
@@ -1256,6 +1326,113 @@ impl Laravel {
         };
         message["type"] = json!("cache");
         message["request"] = json!(request.action);
+        post(view, message);
+        Ok(())
+    }
+
+    fn add_index(
+        &mut self,
+        view: &str,
+        ctx: &Invocation,
+        table: &str,
+        column: &str,
+    ) -> Result<(), Error> {
+        let plain =
+            |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !plain(table) || !plain(column) {
+            return Err(Error::Invalid(format!(
+                "not a table and column: {table}.{column}"
+            )));
+        }
+        let (project, root) = project(ctx)?;
+        let major = laravel_version(&project)
+            .and_then(|v| v.split('.').next()?.parse().ok())
+            .unwrap_or(11);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+        let (file, content) = crate::indexadvice::migration(table, column, major, now);
+        crate::renames::create_file(&project, &file, &content, "the migration")?;
+        self.open_file(view, ctx, &crate::project::join(&root, &file), 1)?;
+        post(
+            view,
+            json!({ "type": "indexadded", "table": table, "column": column, "file": file }),
+        );
+        Ok(())
+    }
+
+    fn diagram(&mut self, project: &Project, root: &str) -> serde_json::Value {
+        let schema = crate::index::database::schema(project, root);
+        let table_of: std::collections::BTreeMap<String, String> = self
+            .cache
+            .get(RefKind::Model, project, root)
+            .iter()
+            .filter_map(|e| {
+                let table = e.detail.as_deref()?.strip_prefix("table ")?.to_owned();
+                Some((e.key.clone(), table))
+            })
+            .collect();
+        let relations: Vec<(String, String)> = self
+            .cache
+            .get(RefKind::Relation, project, root)
+            .iter()
+            .filter_map(|e| Some((e.key.clone(), e.detail.clone()?)))
+            .collect();
+        crate::schemadiff::diagram(root, &schema, &table_of, &relations)
+    }
+
+    fn schema_request(
+        &mut self,
+        view: &str,
+        ctx: &Invocation,
+        request: &SchemaRequest,
+    ) -> Result<(), Error> {
+        let script_action = match request.action {
+            "compare" => "live",
+            "rows" | "explain" => request.action,
+            other => return Err(Error::Invalid(format!("unknown schema action {other}"))),
+        };
+        let (project, root) = project(ctx)?;
+        let mode = runner::detect(&project);
+        let task = host::begin_task("Reading the database", true);
+        let args = mode.php_args(&["-r".into(), devtools::script(devtools::SCHEMA_PHP)]);
+        let input = serde_json::to_string(&SchemaRequest {
+            action: script_action,
+            ..*request
+        })
+        .map_err(|e| Error::Failed(e.to_string()))?;
+        let result = crate::runner::run(&project, &mode, &args, Some(&input));
+        drop(task);
+        let mut message = match result {
+            Ok(out) => devtools::schema_reply(&out.stdout).unwrap_or_else(|| {
+                let err = quiet(&out.stderr);
+                json!({ "error": if err.is_empty() { out.stdout.trim().chars().take(600).collect::<String>() } else { err } })
+            }),
+            Err(e) => {
+                audit::failed("hub schema", &e);
+                json!({ "error": denied(e, &mode) })
+            }
+        };
+        if request.action == "compare" && message.get("error").is_none() {
+            let live: crate::schemadiff::Live =
+                serde_json::from_value(message.clone()).unwrap_or_default();
+            let schema = crate::index::database::schema(&project, &root);
+            let rows = crate::schemadiff::compare(&root, &schema, &live);
+            let created = schema.tables.iter().filter(|t| t.created.is_some()).count();
+            let differing = rows
+                .iter()
+                .filter(|r| r.cells[0] != "—" && r.cells[1] != "Only in the database")
+                .count();
+            message["columns"] = json!(crate::schemadiff::COLUMNS);
+            message["rows"] = json!(rows);
+            message["synced"] = json!(created.saturating_sub(differing));
+            message["tables"] = json!(live.tables.len());
+        }
+        message["type"] = json!("schema");
+        message["request"] = json!(request.action);
+        if !request.sql.is_empty() {
+            message["sql"] = json!(request.sql);
+        }
         post(view, message);
         Ok(())
     }
@@ -1646,6 +1823,36 @@ impl Laravel {
     fn dispatch(&mut self, view: &str, ctx: &Invocation, request: Request) -> Result<(), Error> {
         match request {
             Request::Overview => self.overview(view, ctx),
+            Request::Indexcheck { sqls } => {
+                let (project, root) = project(ctx)?;
+                let schema = crate::index::database::schema(&project, &root);
+                let results: serde_json::Map<String, serde_json::Value> = sqls
+                    .iter()
+                    .take(200)
+                    .map(|sql| {
+                        let advice = crate::indexadvice::advise(&schema, sql).map(|mut a| {
+                            a.migration = a.migration.map(|m| rel(&root, &m).to_owned());
+                            a
+                        });
+                        (sql.clone(), json!(advice))
+                    })
+                    .collect();
+                post(view, json!({ "type": "indexcheck", "results": results }));
+                Ok(())
+            }
+            Request::Addindex { table, column } => {
+                let result = self.add_index(view, ctx, &table, &column);
+                if let Err(e) = &result {
+                    post(view, json!({ "type": "error", "message": e.to_string() }));
+                }
+                result
+            }
+            Request::Diagram => {
+                let (project, root) = project(ctx)?;
+                let message = self.diagram(&project, &root);
+                post(view, message);
+                Ok(())
+            }
             Request::Hello => self.hub_hello(view, ctx),
             Request::Search { query } => self.hub_search(view, ctx, &query),
             Request::Model { name } => self.model_overview(view, ctx, &name),
@@ -1693,6 +1900,27 @@ impl Laravel {
                     size,
                     search: &search,
                     key: &key,
+                },
+            ),
+            Request::Schema {
+                action,
+                table,
+                page,
+                size,
+                sql,
+                bindings,
+                connection,
+            } => self.schema_request(
+                view,
+                ctx,
+                &SchemaRequest {
+                    action: &action,
+                    table: &table,
+                    page,
+                    size,
+                    sql: &sql,
+                    bindings: &bindings,
+                    connection: &connection,
                 },
             ),
             Request::Sqlload => {

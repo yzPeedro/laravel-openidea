@@ -36,8 +36,9 @@ Nothing runs unless you allow `process:php`, `process:php-win` or `process:docke
 | `artisan <command>` | You run a command from the hub, the [commands](Commands.md) or a quick action |
 | Tinker scripts (`php/tinker.php`) | You run code in the hub's Tinker, *Run Selection in Tinker*, or SQL to Laravel's run button |
 | `php/cache.php` | You open the hub's Cache section, *Forget* a key or *Flush store* |
+| `php/schema.php` | You click **Compare with database** or **Rows** in the Database section, or **EXPLAIN** in Live Audit. It only reads: rows are fetched with `select` and `limit`, secret and personal data columns come back as `•••`, and `EXPLAIN` takes a single `SELECT` inside a transaction that is rolled back |
 | `php/install.php` | You turn Live Audit on or off, connect or disconnect AI agents, and when the plugin syncs `storage/openidea` |
-| `php/create_file.php` | You extract a Form Request |
+| `php/create_file.php` | You extract a Form Request, or click **Create migration** on a missing index in Live Audit |
 | `php/tools.php` running `vendor/bin/pint`, `vendor/bin/php-cs-fixer`, `vendor/bin/phpstan` | You turned on [tools on save](Tools-on-Save.md) (off by default) |
 | `storage/openidea/mcp.php` | An AI agent you connected starts the MCP server |
 | `composer require …` (in a terminal) | You install a package from the Ecosystem or AI Agents section |

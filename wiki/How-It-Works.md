@@ -16,7 +16,7 @@ OpenIDEA ── WIT plugin API 1.4 ──► dist/plugin.wasm (Rust, sandboxed)
   │  web view messages ◄───────────► ├─ panels.rs, sections.rs      the hub and its sections
   │                                  ├─ devtools.rs    Tinker, Live Audit, debug tools, ecosystem, AI agents
   │                                  └─ runner.rs      php, php-win or Docker Compose
-  └─ processes (php / docker) ──► php/tinker.php · Recorder.php · install.php · mcp.php · cache.php · tools.php…
+  └─ processes (php / docker) ──► php/tinker.php · Recorder.php · install.php · mcp.php · cache.php · schema.php · tools.php…
 ```
 
 The hub is `web/hub.html`, one file of HTML, CSS and JavaScript shown as a web view. It talks to the plugin with JSON messages (`{"type": "section", "id": "routes"}`); `panels.rs` answers each one. Live Audit updates are kept under about 900 KB, dropping the oldest records of a very large first load, so the IDE accepts them.
@@ -116,7 +116,8 @@ The plugin carries its PHP scripts inside the WebAssembly file and passes them t
 | `php/install.php` | Installs and removes the recorder and its `vendor/autoload.php` hook, writes the IDE helper stub and the hub tab files, connects and disconnects AI agents, syncs the MCP server files and clears the audit log |
 | `php/mcp.php` | The `laravel-openidea` MCP server, copied to `storage/openidea/mcp.php` and started by your AI agent; every call boots the app again |
 | `php/cache.php` | Lists, reads, forgets and flushes cache keys for the hub's Cache section |
-| `php/create_file.php` | Creates a new file with the content on stdin, refusing to overwrite (used by Extract Form Request) |
+| `php/schema.php` | Reads the live schema and pending migrations, the rows of a table (masked) and the `EXPLAIN` of a query for the hub's Database section and Live Audit |
+| `php/create_file.php` | Creates a new file with the content on stdin, refusing to overwrite (used by Extract Form Request and Create migration) |
 | `php/selection.php` | Writes `storage/openidea/selection.php` for *Run Selection in Tinker* |
 | `php/tools.php` | Runs Pint, PHP CS Fixer and PHPStan for tools on save, one after the other, stopping at a shared deadline |
 | `php/guidelines.md` | The guide written to `AGENTS.md` (or `.ai/guidelines` with Laravel Boost) when you connect AI agents |

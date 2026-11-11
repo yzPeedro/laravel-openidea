@@ -48,6 +48,20 @@ Above the list, up to 12 insight cards point at problems in the loaded records. 
 
 Each card shows the SQL (with `?` placeholders) or the message, then ` · ` and the request, job or run it happened in, such as `GET /products`. Insights are computed from every loaded record, whatever the type chips and search show. When there are more than 12, the last 12 are kept.
 
+#### Missing indexes and EXPLAIN
+
+The **N+1?** and **Slow query** cards also check the indexes of your migrations, the same ones the [Database](Hub-Database.md) section shows. When none of the columns the query filters on in `where` starts an index of its table (its primary key, an index, a unique index or a foreign key), the card adds *No index on orders.status* and a **Create migration** link. Columns are matched to tables through `table.column`, aliases and joins; filters inside sub-queries are left out.
+
+<p align="center"><img src="images/hub-audit-missing-index.webp" alt="An N+1 card saying No index on orders.status with Create migration and EXPLAIN links, a slow query card with EXPLAIN, and the output drawer showing SCAN orders and USE TEMP B-TREE FOR ORDER BY" width="100%"></p>
+<p align="center"><sub>A query repeated 8 times on a column without an index, and its plan</sub></p>
+
+| Link | What it does |
+| --- | --- |
+| **Create migration** | Writes `database/migrations/<now>_add_status_index_to_orders_table.php` with `$table->index('status')` in `up()` and `$table->dropIndex(['status'])` in `down()` (a named class on Laravel 8 and older), opens it, and stops reporting the missing index. It refuses to overwrite a file. Run `migrate` to add the index |
+| **EXPLAIN** | Runs `EXPLAIN` (`EXPLAIN QUERY PLAN` on SQLite) for the query with its bindings on the connection that ran it, and shows the plan in the output drawer. Only a single `SELECT` is explained, inside a transaction that is rolled back; MySQL, MariaDB, PostgreSQL and SQLite are supported |
+
+Every `select` query also has an **EXPLAIN** link when you expand it.
+
 ### Groups
 
 Records are grouped by the PHP process (or the job) that wrote them. Each group starts with a header row:

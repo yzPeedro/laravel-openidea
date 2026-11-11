@@ -113,7 +113,8 @@ New here? Start with [Installation](Installation.md), then open the [hub](Hub.md
 | [Observers](Hub-Observers.md) | Observers, their models and hooks |
 | [Casts](Hub-Casts.md) | Custom casts |
 | [Enums](Hub-Enums.md) | Enums and their cases |
-| [Database](Hub-Database.md) | Tables and columns from your migrations |
+| [Database](Hub-Database.md) | Tables, columns, indexes and foreign keys from your migrations, compared with the live database, and the rows of a table |
+| [Schema diagram](Hub-Schema-Diagram.md) | Tables, keys and how they connect |
 | [Cache](Hub-Cache.md) | Keys and values of every store |
 | [Factories & Seeders](Hub-Factories.md) | Factories and seeders |
 | [Views](Hub-Views.md) | Blade views by name |

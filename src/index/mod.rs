@@ -3,7 +3,7 @@ mod auth;
 mod blade;
 mod classes;
 mod config;
-mod database;
+pub mod database;
 mod env;
 pub mod folio;
 mod lang;
