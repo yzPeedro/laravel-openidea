@@ -50,6 +50,14 @@ Completion and inspections follow the Laravel version in `vendor/laravel/framewo
 
 The feature runs PHP and the permission is off. Allow `process:php` (or `process:docker` with a Docker runner) in **Settings › Plugins › Laravel OpenIDEA**. Other messages name `clipboard`, `editor.read` or `editor.write`. See [Permissions](Permissions.md).
 
+### Overview says *PHP not found*
+
+The plugin couldn't start PHP with the project's runner, and the **Runtime** card under the banner says why. Usually `php` isn't on the `PATH` OpenIDEA was started with: install PHP (or Laravel Herd, which adds it), then quit and reopen OpenIDEA so it sees the new `PATH`. With Laravel Sail or a Docker Compose file, set `artisanRunner` to `docker` instead; with the Docker runner, start Docker or check `dockerService`. When it works, the chip shows the install and version, such as `Herd · PHP 8.3.12`, and its tooltip the binary and `php.ini`. See [Overview](Hub-Overview.md#the-runtime-chip).
+
+### A request from the hub returns 419, 401 or 403
+
+The [request panel](Send-Request.md) already turns CSRF checks off, so a 419 comes from your own middleware. 401 and 403 usually mean the route needs a user: type an id in **Act as user id**. A 302 to `/login` is the same thing for a web route without **Accept JSON**.
+
 ### A console window flashes on Windows
 
 Each background PHP call starts `php.exe`, which opens a console. Allow `process:php-win`: the plugin then uses `php-win.exe`, which has none.

@@ -58,12 +58,13 @@ The release build is small and fast: `opt-level = "s"`, `lto = true`, `strip = t
 | `src/resources.rs` | Reads classes, attributes and calls of the app (listeners, observers, bindings…) |
 | `src/sections.rs` | Hub sections built from code |
 | `src/security.rs`, `src/securityscan.rs`, `src/unused.rs`, `src/upgrade.rs` | Security inspections and the Security section, the Unused section, and the upgrade rules taken from the official guides |
+| `src/routetools.rs`, `src/runtime.rs` | Route fields, bindings and sample bodies for the request panel, the feature test generator, and naming the PHP runtime |
 | `src/schemadiff.rs`, `src/indexadvice.rs` | Comparing the migrations with the live database, the schema diagram, and missing index advice for Live Audit |
 | `src/panels.rs` | The hub view and its message protocol |
 | `src/devtools.rs` | Tinker, Live Audit, debug tools, ecosystem and AI agents |
 | `src/runner.rs` | Running PHP directly, through `php-win`, or through Docker Compose |
 | `src/tools.rs`, `src/helpers.rs`, `src/mcp.rs`, `src/hubtabs.rs` | Tools on save, IDE helpers and path completion, the MCP sync, hub editor tabs |
-| `php/` | Scripts run inside the app: `tinker.php`, `Recorder.php`, `install.php`, `mcp.php`, `cache.php`, `schema.php`, `create_file.php`, `selection.php`, `tools.php`, `guidelines.md` |
+| `php/` | Scripts run inside the app: `tinker.php`, `Recorder.php`, `install.php`, `mcp.php`, `cache.php`, `schema.php`, `request.php`, `create_file.php`, `selection.php`, `tools.php`, `guidelines.md` |
 | `web/hub.html` | The hub's UI (one file: HTML, CSS and JavaScript), served as a web view with its icons from `web/icons/` |
 | `templates/`, `icons/`, `languages/` | File templates, file and gutter icons, the Blade and NEON languages |
 | `docs/snippets.md` | The list of snippets, generated from the same table as the code |

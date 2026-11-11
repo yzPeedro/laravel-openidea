@@ -2,8 +2,8 @@
 
 Every route of the app in one table: method, URI, name, action, prefix, controller and the tests that call it. Clicking a route opens its controller method.
 
-<p align="center"><img src="images/hub-routes.webp" alt="The Routes section with six routes, coloured method badges, the four facets and the Tests and Tested columns" width="100%"></p>
-<p align="center"><sub>Routes of the demo shop, three of them covered by ProductTest.php</sub></p>
+<p align="center"><img src="images/hub-routes.webp" alt="The Routes section with six routes, coloured method badges including two RESOURCE rows, the facets, the Tests and Tested columns and the Request and Test links of each row" width="100%"></p>
+<p align="center"><sub>Routes of the demo shop, each with its Request and Test links</sub></p>
 
 ## How to use it
 
@@ -39,6 +39,17 @@ The method badge is green for GET (and HEAD), blue for POST, orange for PUT and 
 | **Clear route cache** | `route:clear` | Output |
 
 `route:list` shows what Laravel itself registered, including package routes; the table shows what the plugin reads from your files.
+
+### Request and Test
+
+Each row ends with two links, which don't open the row's code:
+
+| Link | What it does |
+| --- | --- |
+| **Request** | Opens the request panel for the route: parameters, query, a body prefilled from its validation rules, act as a user, then the response with status, time, queries, headers and body. See [Send request](Send-Request.md) |
+| **Test** | Writes `tests/Feature/<Controller><Method>Test.php` for the route (Pest or PHPUnit) and opens it. See [Generate test](Generate-Test.md) |
+
+On a `RESOURCE` row, both use the verb and URI of the row's action, such as `PUT /products/{product}` for `update`.
 
 ## Details
 
@@ -78,10 +89,12 @@ The route index is rebuilt after a change under `routes/`, in `bootstrap/app.php
 
 ## Settings and permissions
 
-Reading routes needs only `project.read`. The three buttons run Artisan with the project's runner and need `process:php` or `process:docker`. See [Settings](Settings.md) and [Permissions](Permissions.md).
+Reading routes needs only `project.read`. The three buttons, **Request** and **Test** run PHP with the project's runner and need `process:php` or `process:docker`; *Copy as cURL* in the request panel needs `clipboard`. See [Settings](Settings.md) and [Permissions](Permissions.md).
 
 ## Related
 
+- [Send request](Send-Request.md)
+- [Generate test](Generate-Test.md)
 - [Route names](Route-Names.md)
 - [Gutter markers](Gutter-Markers.md)
 - [Rename route](Rename-Route.md)

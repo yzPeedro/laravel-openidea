@@ -28,6 +28,14 @@ pub fn schema_reply(stdout: &str) -> Option<Value> {
     serde_json::from_str(line).ok()
 }
 
+pub const REQUEST_PHP: &str = include_str!("../php/request.php");
+
+pub fn marked_reply(stdout: &str, marker: &str) -> Option<Value> {
+    let at = stdout.rfind(marker)?;
+    let line = stdout[at + marker.len()..].lines().next()?;
+    serde_json::from_str(line).ok()
+}
+
 pub const GUIDELINES: &str = include_str!("../php/guidelines.md");
 pub const AUDIT_LOG: &str = "storage/logs/openidea-audit.jsonl";
 const MARKER: &str = "@@openidea@@";

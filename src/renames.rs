@@ -4,9 +4,10 @@ use crate::index::RefKind;
 use crate::php::{self, Kind, is_blade};
 use crate::project::{Lines, find, rel};
 use crate::refs::{self, Want};
+use openidea_plugin::file_actions::{FileAction, FileActions, FileOperation};
 use openidea_plugin::providers::{CodeAction, Document};
 use openidea_plugin::text::offset;
-use openidea_plugin::{Error, Invocation, Location, Project, TextEdit, host};
+use openidea_plugin::{Error, Invocation, Location, Project, Range, TextEdit, host};
 use serde::{Deserialize, Serialize};
 
 fn text_edits(text: &str, edits: Vec<(usize, usize, String)>) -> Vec<TextEdit> {
@@ -68,6 +69,31 @@ pub enum Pending {
     FormRequest {
         at: usize,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteTarget {
+    pub method: String,
+    pub uri: String,
+    pub name: String,
+    pub action: String,
+    pub file: String,
+    pub exists: bool,
+}
+
+impl RouteTarget {
+    pub fn title(&self) -> String {
+        if self.exists {
+            format!("Open the feature test ({})", self.file)
+        } else {
+            format!(
+                "Generate a feature test for {} /{} ({})",
+                self.method,
+                self.uri.trim_start_matches('/'),
+                self.file
+            )
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -595,6 +621,117 @@ impl Laravel {
         }
     }
 
+    pub(crate) fn method_routes(
+        &mut self,
+        project: &Project,
+        root: &str,
+        path: &str,
+        text: &str,
+        cursor: usize,
+    ) -> Vec<RouteTarget> {
+        if !path.replace('\\', "/").contains("/Http/Controllers/") {
+            return Vec::new();
+        }
+        let Some(class) = crate::index::parse_class(text) else {
+            return Vec::new();
+        };
+        let Some(method) = class.methods.iter().find(|m| {
+            let line_start = text[..m.start].rfind('\n').map_or(0, |i| i + 1);
+            m.public && line_start <= cursor && cursor <= m.body.0
+        }) else {
+            return Vec::new();
+        };
+        let wanted = |key: &str| {
+            key.split_once('@').is_some_and(|(c, f)| {
+                f == method.name && c.rsplit('\\').next() == Some(class.name.as_str())
+            })
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        self.cache
+            .get(RefKind::RouteAction, project, root)
+            .iter()
+            .filter(|e| wanted(&e.key))
+            .filter_map(|e| {
+                let detail = e.detail.clone().unwrap_or_default();
+                let (head, name) = detail.split_once(" · ").unwrap_or((detail.as_str(), ""));
+                let (verb, uri) = head.split_once(' ')?;
+                let (verb, uri) = if verb == "resource" {
+                    crate::routetools::resource_route(uri, &method.name)?
+                } else {
+                    (
+                        verb.split('|').next().unwrap_or(verb).to_owned(),
+                        uri.to_owned(),
+                    )
+                };
+                let action = e.key.replace('@', "::");
+                let file = crate::routetools::test_path(&action, &verb, &uri);
+                seen.insert(file.clone()).then(|| RouteTarget {
+                    exists: project.read_file(&file).is_ok(),
+                    method: verb,
+                    uri,
+                    name: name.to_owned(),
+                    action,
+                    file,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn generate_test_command(
+        &mut self,
+        ctx: &Invocation,
+    ) -> Result<Option<String>, Error> {
+        let editor = ctx
+            .editor()
+            .ok_or_else(|| Error::Invalid("Open the controller in the editor first.".into()))?;
+        let path = editor.path();
+        let (project, root) = self
+            .laravel_project(&path)
+            .ok_or("this file is not in a Laravel project")?;
+        let doc = editor.document()?;
+        let sel = editor.selections()?.into_iter().next().ok_or_else(|| {
+            Error::Invalid("Place the cursor on a controller method first.".into())
+        })?;
+        let cursor = offset(&doc.text, sel.start).unwrap_or(0);
+        let mut routes = self.method_routes(&project, &root, &path, &doc.text, cursor);
+        let target = match routes.len() {
+            0 => {
+                return Err(Error::Invalid(
+                    "Place the cursor on the signature of a controller method that a route calls."
+                        .into(),
+                ));
+            }
+            1 => routes.remove(0),
+            _ => {
+                let items: Vec<openidea_plugin::PickItem> = routes
+                    .iter()
+                    .map(|r| openidea_plugin::PickItem::new(&r.file, &r.title()))
+                    .collect();
+                let Some(chosen) = host::pick("Feature test for which route?", &items)? else {
+                    return Ok(None);
+                };
+                let at = routes.iter().position(|r| r.file == chosen).unwrap_or(0);
+                routes.remove(at)
+            }
+        };
+        if !target.exists {
+            self.write_route_test(
+                &project,
+                &root,
+                &target.method,
+                &target.uri,
+                &target.name,
+                &target.action,
+            )?;
+        }
+        host::open_location(&crate::project::join(&root, &target.file), 0, 0)?;
+        Ok(Some(if target.exists {
+            format!("Opened {}", target.file)
+        } else {
+            format!("Created {}", target.file)
+        }))
+    }
+
     fn resolve_form_request(
         &mut self,
         project: &Project,
@@ -885,5 +1022,73 @@ mod tests {
         let text = serde_json::to_string(&p).unwrap();
         assert!(text.contains("\"op\":\"rename\""), "{text}");
         assert_eq!(serde_json::from_str::<Pending>(&text).unwrap(), p);
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct RouteTestRef {
+    method: String,
+    uri: String,
+    name: String,
+    action: String,
+}
+
+impl FileActions for Laravel {
+    fn file_actions(&mut self, doc: &Document, selection: Range) -> Vec<FileAction> {
+        let Some((project, root)) = self.laravel_project(&doc.path) else {
+            return Vec::new();
+        };
+        let Some(cursor) = offset(&doc.text, selection.start) else {
+            return Vec::new();
+        };
+        self.method_routes(&project, &root, &doc.path, &doc.text, cursor)
+            .into_iter()
+            .map(|r| FileAction {
+                title: r.title(),
+                kind: Some("refactor".into()),
+                data: serde_json::to_string(&RouteTestRef {
+                    method: r.method,
+                    uri: r.uri,
+                    name: r.name,
+                    action: r.action,
+                })
+                .ok(),
+                ..FileAction::default()
+            })
+            .collect()
+    }
+
+    fn resolve_file_action(
+        &mut self,
+        doc: &Document,
+        action: FileAction,
+    ) -> Result<FileAction, Error> {
+        let Some(r) = action
+            .data
+            .as_deref()
+            .and_then(|d| serde_json::from_str::<RouteTestRef>(d).ok())
+        else {
+            return Ok(action);
+        };
+        let (project, root) = self
+            .laravel_project(&doc.path)
+            .ok_or_else(|| Error::Invalid("this file is not in a Laravel project".into()))?;
+        let file = crate::routetools::test_path(&r.action, &r.method, &r.uri);
+        let operations = if project.read_file(&file).is_ok() {
+            Vec::new()
+        } else {
+            let test = self.route_test(&project, &root, &r.method, &r.uri, &r.name, &r.action);
+            vec![FileOperation::Create {
+                path: test.file,
+                text: test.content,
+                overwrite: false,
+            }]
+        };
+        Ok(FileAction {
+            operations,
+            open: Some(file),
+            data: None,
+            ..action
+        })
     }
 }

@@ -16,6 +16,13 @@ use serde_json::json;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
+pub struct RouteTest {
+    pub file: String,
+    pub content: String,
+    pub pest: bool,
+    pub auth: bool,
+}
+
 const HISTORY_KEY: &str = "artisan.history";
 const HISTORY_SIZE: usize = 20;
 const MAX_ROWS: usize = 5000;
@@ -38,6 +45,40 @@ const PROJECT_DIRS: [&str; 10] = [
 #[serde(tag = "type", rename_all = "lowercase")]
 enum Request {
     Overview,
+    Runtime,
+    Routeinfo {
+        method: String,
+        uri: String,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        action: String,
+    },
+    Sendrequest {
+        method: String,
+        uri: String,
+        #[serde(default)]
+        query: String,
+        #[serde(default)]
+        body: serde_json::Value,
+        #[serde(default)]
+        user: String,
+        #[serde(default)]
+        json: bool,
+        #[serde(default)]
+        rollback: bool,
+    },
+    Gentest {
+        method: String,
+        uri: String,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        action: String,
+    },
+    Copy {
+        text: String,
+    },
     Diagram,
     Securityroutes,
     Indexcheck {
@@ -1397,6 +1438,171 @@ impl Laravel {
         Ok(())
     }
 
+    fn runtime(&mut self, view: &str, ctx: &Invocation) -> Result<(), Error> {
+        let (project, _) = project(ctx)?;
+        let mode = runner::detect(&project);
+        let sail = project.read_file("vendor/bin/sail").is_ok();
+        let compose = runner::compose_file(&project).is_some();
+        let args = mode.php_args(&["-r".into(), crate::runtime::PROBE.into()]);
+        let result = crate::runner::run(&project, &mode, &args, None);
+        let reply = result
+            .as_ref()
+            .ok()
+            .and_then(|out| devtools::marked_reply(&out.stdout, crate::runtime::MARKER));
+        let message = match (reply, result) {
+            (Some(v), _) => {
+                let binary = v[0].as_str().unwrap_or_default();
+                json!({
+                    "type": "runtime",
+                    "ok": true,
+                    "label": crate::runtime::label(&mode, binary, sail),
+                    "version": v[1],
+                    "os": v[2],
+                    "binary": binary,
+                    "ini": v[3],
+                    "runner": mode.label(),
+                })
+            }
+            (None, Err(Error::Denied(cap))) => json!({
+                "type": "runtime",
+                "ok": false,
+                "runner": mode.label(),
+                "advice": format!("Allow \"{cap}\" for Laravel OpenIDEA in Settings › Plugins to run PHP."),
+            }),
+            (None, other) => {
+                if let Err(e) = &other {
+                    audit::failed("hub runtime", e);
+                }
+                json!({
+                    "type": "runtime",
+                    "ok": false,
+                    "runner": mode.label(),
+                    "advice": crate::runtime::advice(&mode, compose, sail),
+                })
+            }
+        };
+        post(view, message);
+        Ok(())
+    }
+
+    fn send_request(
+        &mut self,
+        view: &str,
+        ctx: &Invocation,
+        input: &serde_json::Value,
+    ) -> Result<(), Error> {
+        let (project, _) = project(ctx)?;
+        let mode = runner::detect(&project);
+        let label = format!(
+            "{} {}",
+            input["method"].as_str().unwrap_or("GET"),
+            input["uri"].as_str().unwrap_or("/")
+        );
+        let task = host::begin_task(&format!("Sending {label}"), true);
+        let args = mode.php_args(&["-r".into(), devtools::script(devtools::REQUEST_PHP)]);
+        let stdin = input.to_string();
+        let result = crate::runner::run(&project, &mode, &args, Some(&stdin));
+        drop(task);
+        let mut message = match result {
+            Ok(out) => devtools::marked_reply(&out.stdout, "@@openidea-request@@").unwrap_or_else(|| {
+                let err = quiet(&out.stderr);
+                json!({ "error": if err.is_empty() { out.stdout.trim().chars().take(600).collect::<String>() } else { err } })
+            }),
+            Err(e) => {
+                audit::failed("hub send request", &e);
+                json!({ "error": denied(e, &mode) })
+            }
+        };
+        message["type"] = json!("response");
+        message["request"] = json!(label);
+        post(view, message);
+        Ok(())
+    }
+
+    fn generate_test(
+        &mut self,
+        view: &str,
+        ctx: &Invocation,
+        method: &str,
+        uri: &str,
+        name: &str,
+        action: &str,
+    ) -> Result<(), Error> {
+        let (project, root) = project(ctx)?;
+        let (file, pest, auth) =
+            self.write_route_test(&project, &root, method, uri, name, action)?;
+        self.open_file(view, ctx, &crate::project::join(&root, &file), 1)?;
+        post(
+            view,
+            json!({ "type": "testcreated", "file": file, "pest": pest, "auth": auth }),
+        );
+        Ok(())
+    }
+
+    pub(crate) fn write_route_test(
+        &mut self,
+        project: &Project,
+        root: &str,
+        method: &str,
+        uri: &str,
+        name: &str,
+        action: &str,
+    ) -> Result<(String, bool, bool), Error> {
+        let test = self.route_test(project, root, method, uri, name, action);
+        crate::renames::create_file(project, &test.file, &test.content, "the test")?;
+        Ok((test.file, test.pest, test.auth))
+    }
+
+    pub(crate) fn route_test(
+        &mut self,
+        project: &Project,
+        root: &str,
+        method: &str,
+        uri: &str,
+        name: &str,
+        action: &str,
+    ) -> RouteTest {
+        let scan = self.cached_scan(project, root);
+        let info = crate::routetools::info(&scan, method, uri, name, action);
+        let composer = project.read_file("composer.json").unwrap_or_default();
+        let pest = composer.contains("\"pestphp/pest\"");
+        let user_model = project
+            .read_file("app/Models/User.php")
+            .is_ok()
+            .then_some("User");
+        let has_factory = |model: &str| {
+            project
+                .read_file(&format!("database/factories/{model}Factory.php"))
+                .is_ok()
+        };
+        let mode = runner::detect(project);
+        let task = host::begin_task("php artisan route:list --json", true);
+        let argv: Vec<String> = ["route:list", "--json"].map(str::to_owned).to_vec();
+        let listed = crate::runner::run(project, &mode, &mode.args(&argv, false), None);
+        drop(task);
+        let auth = listed
+            .ok()
+            .and_then(|out| {
+                crate::routetools::middleware_of(&out.stdout, &info.methods[0], &info.uri)
+            })
+            .is_some_and(|m| crate::routetools::needs_auth(&m));
+        let (file, content) = crate::routetools::test_file(
+            &info,
+            &crate::routetools::TestOptions {
+                pest,
+                auth,
+                user_model,
+                has_factory: &has_factory,
+            },
+        );
+        RouteTest {
+            file,
+            content,
+            pest,
+            auth,
+        }
+    }
+
     fn unused_section(&mut self, project: &Project, root: &str) -> Table {
         let _task = host::begin_task("Laravel: looking for unused code", false);
         let used = crate::unused::collect(project, root, crate::string_refs);
@@ -1950,6 +2156,68 @@ impl Laravel {
     fn dispatch(&mut self, view: &str, ctx: &Invocation, request: Request) -> Result<(), Error> {
         match request {
             Request::Overview => self.overview(view, ctx),
+            Request::Runtime => self.runtime(view, ctx),
+            Request::Routeinfo {
+                method,
+                uri,
+                name,
+                action,
+            } => {
+                let (project, root) = project(ctx)?;
+                let scan = self.cached_scan(&project, &root);
+                let info = crate::routetools::info(&scan, &method, &uri, &name, &action);
+                let body = crate::routetools::sample_body(&info);
+                post(
+                    view,
+                    json!({ "type": "routeinfo", "info": info, "body": body }),
+                );
+                Ok(())
+            }
+            Request::Sendrequest {
+                method,
+                uri,
+                query,
+                body,
+                user,
+                json: as_json,
+                rollback,
+            } => {
+                let input = json!({
+                    "method": method,
+                    "uri": uri,
+                    "query": query,
+                    "body": body,
+                    "user": if user.trim().is_empty() { serde_json::Value::Null } else { json!(user.trim()) },
+                    "json": as_json,
+                    "rollback": rollback,
+                });
+                self.send_request(view, ctx, &input)
+            }
+            Request::Gentest {
+                method,
+                uri,
+                name,
+                action,
+            } => {
+                let result = self.generate_test(view, ctx, &method, &uri, &name, &action);
+                if let Err(e) = &result {
+                    post(view, json!({ "type": "error", "message": e.to_string() }));
+                }
+                result
+            }
+            Request::Copy { text } => {
+                let message = match host::copy_to_clipboard(&text) {
+                    Ok(()) => {
+                        json!({ "type": "copied", "ok": true, "message": "Copied to the clipboard." })
+                    }
+                    Err(Error::Denied(cap)) => {
+                        json!({ "type": "copied", "ok": false, "message": format!("Allow \"{cap}\" for Laravel OpenIDEA in Settings › Plugins to copy from the hub.") })
+                    }
+                    Err(e) => json!({ "type": "copied", "ok": false, "message": e.to_string() }),
+                };
+                post(view, message);
+                Ok(())
+            }
             Request::Indexcheck { sqls } => {
                 let (project, root) = project(ctx)?;
                 let schema = crate::index::database::schema(&project, &root);

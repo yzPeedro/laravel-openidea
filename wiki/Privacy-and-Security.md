@@ -37,8 +37,11 @@ Nothing runs unless you allow `process:php`, `process:php-win` or `process:docke
 | Tinker scripts (`php/tinker.php`) | You run code in the hub's Tinker, *Run Selection in Tinker*, or SQL to Laravel's run button |
 | `php/cache.php` | You open the hub's Cache section, *Forget* a key or *Flush store* |
 | `php/schema.php` | You click **Compare with database** or **Rows** in the Database section, or **EXPLAIN** in Live Audit. It only reads: rows are fetched with `select` and `limit`, secret and personal data columns come back as `•••`, and `EXPLAIN` takes a single `SELECT` inside a transaction that is rolled back |
+| `php/request.php` | You click **Send** in the hub's [request panel](Send-Request.md). It runs one real request inside your app through its HTTP kernel, with CSRF checks off for that call only, as a guest or as the user id you typed. Database changes on the default connection are rolled back unless you turn that off (a second click then confirms a write); other side effects (mail, queues not on `sync`, files, external calls) happen for real. `Set-Cookie` headers come back as `•••` |
+| `php -r` runtime probe | You open the hub's Overview: it prints `PHP_BINARY`, `PHP_VERSION`, `PHP_OS_FAMILY` and the loaded `php.ini` path, nothing else |
+| `artisan route:list --json` | You generate a test, to find the route's middleware |
 | `php/install.php` | You turn Live Audit on or off, connect or disconnect AI agents, and when the plugin syncs `storage/openidea` |
-| `php/create_file.php` | You extract a Form Request, or click **Create migration** on a missing index in Live Audit |
+| `php/create_file.php` | You extract a Form Request, generate a test from the hub or the *Generate Feature Test…* command, or click **Create migration** on a missing index in Live Audit |
 | `php/tools.php` running `vendor/bin/pint`, `vendor/bin/php-cs-fixer`, `vendor/bin/phpstan` | You turned on [tools on save](Tools-on-Save.md) (off by default) |
 | `storage/openidea/mcp.php` | An AI agent you connected starts the MCP server |
 | `composer require …` (in a terminal) | You install a package from the Ecosystem or AI Agents section |
@@ -66,11 +69,13 @@ When the folder ends up with only its `.gitignore`, it is removed.
 | --- | --- |
 | A code action or quick fix you pick | The edits it names (rename, extract, add to `$fillable`, PHPDoc…), applied by the IDE so you can undo them |
 | [Extract Form Request](Extract-Form-Request.md) | `app/Http/Requests/<Name>.php`. The script refuses paths with `..` or starting with `/`, and never overwrites an existing file |
+| [Generate test](Generate-Test.md) | `tests/Feature/<Name>Test.php`, through the same script, never over an existing file |
+| [Send request](Send-Request.md) with *Roll back database changes* off | Whatever the route writes, after you confirm with a second click |
 | [Tools on save](Tools-on-Save.md) with `formatOnSave` | The saved file, reformatted by Pint or PHP CS Fixer. In `docker-run` mode the tools' temporary files go to `storage/framework/cache/openidea` |
 | Live Audit *Turn on recorder* | `storage/openidea/Recorder.php` and a hook in `vendor/autoload.php` between two `/* openidea-recorder */` markers. Both are checked with `php -l` first, and *Turn off* removes them. Records go to `storage/logs/openidea-audit.jsonl` |
 | AI Agents *Connect* | A `laravel-openidea` entry in `.mcp.json` and, when their folders exist, `.cursor/mcp.json`, `.vscode/mcp.json`, `.junie/mcp/mcp.json` and `.gemini/settings.json`; a block between `<!-- laravel-openidea:start -->` and `<!-- laravel-openidea:end -->` markers in each agent guideline file that exists (`AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.junie/guidelines.md` and the other agents' root guideline file) (a new `AGENTS.md` when none does); with Laravel Boost, `.ai/guidelines/laravel-openidea.md` instead. *Disconnect* removes exactly these entries and blocks |
 | SQL to Laravel *copy* / *insert* | The clipboard / the editor at the cursor |
-| *Copy Query as MySQL* | The clipboard |
+| *Copy Query as MySQL*, *Copy as cURL* | The clipboard |
 
 The installer, the recorder and the MCP files never touch tracked files, apart from the agent configs and guideline files you asked for with *Connect*. When a script runs as root (typical in Docker), it hands the files it creates back to the owner of the project folder.
 
