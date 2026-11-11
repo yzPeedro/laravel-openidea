@@ -46,6 +46,7 @@ pub struct Enabled {
     pub n_plus_one: bool,
     pub duplicate_keys: bool,
     pub enum_values: bool,
+    pub security: bool,
 }
 
 pub struct Facts<'a> {
@@ -969,6 +970,9 @@ pub fn php(text: &str, facts: &Facts) -> Vec<Finding> {
     if facts.enabled.duplicate_keys {
         duplicate_keys(text, &toks, facts, &mut out);
     }
+    if facts.enabled.security {
+        out.extend(crate::security::php(text, facts.path));
+    }
     out.sort_by_key(|f| (f.start, f.end));
     out
 }
@@ -1082,6 +1086,7 @@ mod tests {
                 n_plus_one: true,
                 duplicate_keys: true,
                 enum_values: true,
+                security: false,
             },
         }
     }

@@ -39,6 +39,7 @@ const PROJECT_DIRS: [&str; 10] = [
 enum Request {
     Overview,
     Diagram,
+    Securityroutes,
     Indexcheck {
         sqls: Vec<String>,
     },
@@ -1056,6 +1057,30 @@ impl Laravel {
                 )
             }
             "translations" => {
+                let locale_of = |e: &Entry| {
+                    let d = e.detail.as_deref().unwrap_or_default();
+                    d.split_once(": ").map_or(d, |(l, _)| l).to_owned()
+                };
+                let entries = self.cache.get(RefKind::Translation, project, root);
+                let all: BTreeSet<String> = entries.iter().map(locale_of).collect();
+                let mut have: std::collections::BTreeMap<String, BTreeSet<String>> =
+                    std::collections::BTreeMap::new();
+                for e in entries.iter() {
+                    have.entry(e.key.clone()).or_default().insert(locale_of(e));
+                }
+                let missing: std::collections::BTreeMap<String, String> = have
+                    .into_iter()
+                    .map(|(k, locales)| {
+                        let gone: Vec<&str> =
+                            all.difference(&locales).map(String::as_str).collect();
+                        let shown = if gone.is_empty() {
+                            "—".to_owned()
+                        } else {
+                            gone.join(", ")
+                        };
+                        (k, shown)
+                    })
+                    .collect();
                 let rows = self.rows_of(project, root, RefKind::Translation, |e| {
                     let detail = text(&e.detail);
                     let (locale, value) = detail.split_once(": ").unwrap_or((detail.as_str(), ""));
@@ -1069,12 +1094,13 @@ impl Laravel {
                         locale.into(),
                         value.trim_matches('\'').into(),
                         group,
+                        missing.get(&e.key).cloned().unwrap_or_else(|| "—".into()),
                     ]
                 });
                 table(
-                    vec!["Key", "Locale", "Text", "Group"],
+                    vec!["Key", "Locale", "Text", "Group", "Missing in"],
                     rows,
-                    vec![facet("Locale"), facet("Group")],
+                    vec![facet("Locale"), facet("Group"), split("Missing in")],
                 )
             }
             "middleware" => {
@@ -1207,6 +1233,16 @@ impl Laravel {
         scan: &mut Option<Rc<resources::Scan>>,
     ) -> Option<Table> {
         let (project, root) = (project, root.to_owned());
+        if id == "security" {
+            return Some(crate::securityscan::section(project, &root));
+        }
+        if id == "unused" {
+            return Some(self.unused_section(project, &root));
+        }
+        if id == "upgrade" {
+            let installed = self.installed_major(project, &root);
+            return Some(crate::upgrade::section(project, &root, installed));
+        }
         if DEV_SECTIONS.contains(&id) {
             Some(match id {
                 "debug-tools" => devtools::tools(project),
@@ -1358,6 +1394,97 @@ impl Laravel {
             view,
             json!({ "type": "indexadded", "table": table, "column": column, "file": file }),
         );
+        Ok(())
+    }
+
+    fn unused_section(&mut self, project: &Project, root: &str) -> Table {
+        let _task = host::begin_task("Laravel: looking for unused code", false);
+        let used = crate::unused::collect(project, root, crate::string_refs);
+        let routes = self.cache.get(RefKind::Route, project, root);
+        let views = self.cache.get(RefKind::View, project, root);
+        let translations = self.cache.get(RefKind::Translation, project, root);
+        let config = self.cache.get(RefKind::Config, project, root);
+        let folio = project
+            .read_file("composer.json")
+            .is_ok_and(|c| c.contains("\"laravel/folio\""));
+        let mut rows = crate::unused::rows(
+            root,
+            &crate::unused::Indexes {
+                routes: &routes,
+                views: &views,
+                translations: &translations,
+                config: &config,
+                folio,
+            },
+            &used,
+        );
+        let scan = self.cached_scan(project, root);
+        if let Some(events) = sections::build("events", &scan, project, root, &mut self.cache) {
+            for r in events.rows {
+                if r.cells.get(1).map(String::as_str) == Some("app")
+                    && r.cells.get(2).map(String::as_str) == Some("0")
+                {
+                    let place = r
+                        .open
+                        .as_ref()
+                        .map(|t| format!("{}:{}", t.path, t.line))
+                        .unwrap_or_default();
+                    rows.push(Row {
+                        cells: vec![
+                            "Event".into(),
+                            r.cells[0].clone(),
+                            place,
+                            "No listener handles it and it isn't broadcast".into(),
+                        ],
+                        open: r.open.clone(),
+                    });
+                }
+            }
+        }
+        let jobs: Vec<(String, String, u32)> = inspect::jobs(project, root)
+            .into_iter()
+            .filter(|f| f.cells.get(1).map(String::as_str) == Some("job"))
+            .map(|f| (f.cells[0].clone(), f.path, f.line))
+            .collect();
+        let store = self.store(root);
+        rows.extend(crate::unused::class_rows(
+            root,
+            "Job",
+            &jobs,
+            |name, path| {
+                let own = rel(root, path).replace('\\', "/");
+                !store.files_using(name, &own).is_empty()
+            },
+            "No other file names the class, so nothing dispatches it",
+        ));
+        Table {
+            columns: crate::unused::COLUMNS.to_vec(),
+            rows,
+            facets: vec![facet("Kind")],
+        }
+    }
+
+    fn security_routes(&mut self, view: &str, ctx: &Invocation) -> Result<(), Error> {
+        let (project, _) = project(ctx)?;
+        let mode = runner::detect(&project);
+        let task = host::begin_task("php artisan route:list --json", true);
+        let argv: Vec<String> = ["route:list", "--json"].map(str::to_owned).to_vec();
+        let result = crate::runner::run(&project, &mode, &mode.args(&argv, false), None);
+        drop(task);
+        let message = match result {
+            Ok(out) => match crate::securityscan::open_routes(&out.stdout) {
+                Ok(rows) => json!({ "type": "securityroutes", "rows": rows }),
+                Err(e) => {
+                    let err = quiet(&out.stderr);
+                    json!({ "type": "securityroutes", "error": if err.is_empty() { e } else { format!("{e}: {err}") } })
+                }
+            },
+            Err(e) => {
+                audit::failed("hub security routes", &e);
+                json!({ "type": "securityroutes", "error": denied(e, &mode) })
+            }
+        };
+        post(view, message);
         Ok(())
     }
 
@@ -1847,6 +1974,7 @@ impl Laravel {
                 }
                 result
             }
+            Request::Securityroutes => self.security_routes(view, ctx),
             Request::Diagram => {
                 let (project, root) = project(ctx)?;
                 let message = self.diagram(&project, &root);

@@ -40,6 +40,21 @@
       "title": "Report relations loaded once per item in a foreach (N+1 queries)",
       "default": true
     },
+    "missingTranslationInspection": {
+      "type": "boolean",
+      "title": "Report translation keys that exist in some locales but not in others",
+      "default": true
+    },
+    "upgradeInspection": {
+      "type": "boolean",
+      "title": "Point at code that breaks on the next major Laravel version, from the official upgrade guide",
+      "default": true
+    },
+    "securityInspection": {
+      "type": "boolean",
+      "title": "Report every input field passed to create() or update(), variables in raw SQL and request data printed with {!! !!}",
+      "default": true
+    },
     "duplicateKeyInspection": {
       "type": "boolean",
       "title": "Report keys repeated in the same array (the last value wins)",

@@ -21,6 +21,9 @@ Laravel OpenIDEA checks your PHP, Blade and `.env` files against what it knows a
 | [`.env` keys](Inspection-Env-Keys.md) | `laravel.env-keys` | Warning in `.env`, Info in `.env.example` | `.env`, `.env.example` | `envKeysInspection` | on | Add the key to the other file |
 | [Unknown middleware and abilities](Inspection-Unknown-Middleware.md) | `laravel.unknown-middleware`, `laravel.unknown-ability` | Warning | PHP, Blade | `unknownAuthInspection` | **off** | none |
 | [Unknown OpenAPI refs](Inspection-Unknown-OpenAPI-Refs.md) | `laravel.unknown-openapi-ref` | Warning | PHP | `unknownOpenApiRefInspection` | on | none |
+| [Security](Inspection-Security.md) | `laravel.mass-assign-input`, `laravel.raw-sql-variable`, `laravel.unescaped-request` | Warning | PHP, Blade | `securityInspection` | on | Use `validated()`; escape with `{{ }}` |
+| [Missing translations](Inspection-Missing-Translations.md) | `laravel.missing-translation` | Warning | PHP, Blade | `missingTranslationInspection` | on | Add the key to each missing locale's file |
+| [Upgrade](Inspection-Upgrade.md) | `laravel.upgrade` | Info | PHP, Blade | `upgradeInspection` | on | Replace with the new name, for plain renames |
 
 "PHP" means `.php` files that are not Blade templates. "Blade" means `.blade.php` files.
 

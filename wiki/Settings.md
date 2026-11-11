@@ -35,6 +35,9 @@ The settings are declared in `settings.schema.json`, and the page is generated f
 | `envKeysInspection` | Report keys that are in .env but not in .env.example, and the other way around | checkbox | on |
 | `unknownAuthInspection` | Report unknown middleware and abilities | checkbox | **off** |
 | `unknownOpenApiRefInspection` | Report unknown OpenAPI $ref components | checkbox | on |
+| `securityInspection` | Report every input field passed to create() or update(), variables in raw SQL and request data printed with {!! !!} | checkbox | on |
+| `missingTranslationInspection` | Report translation keys that exist in some locales but not in others | checkbox | on |
+| `upgradeInspection` | Point at code that breaks on the next major Laravel version, from the official upgrade guide | checkbox | on |
 | `locale` | Preferred translation locale | text | `en` |
 | `artisanRunner` | Run Artisan with | `auto`, `php`, `docker-run`, `docker` | `auto` |
 | `formatOnSave` | Format PHP files on save with | `off`, `pint`, `php-cs-fixer` | `off` |
@@ -71,6 +74,9 @@ Each inspection has its own page with examples and quick fixes:
 | `envKeysInspection` | [`.env` keys](Inspection-Env-Keys.md) |
 | `unknownAuthInspection` | [Unknown middleware and abilities](Inspection-Unknown-Middleware.md) |
 | `unknownOpenApiRefInspection` | [Unknown OpenAPI refs](Inspection-Unknown-OpenAPI-Refs.md) |
+| `securityInspection` | [Security](Inspection-Security.md) |
+| `missingTranslationInspection` | [Missing translations](Inspection-Missing-Translations.md) |
+| `upgradeInspection` | [Upgrade](Inspection-Upgrade.md) |
 
 `unknownRouteInspection` and `unknownAuthInspection` are the two that start off. Turning an inspection off only hides its warnings; completion and navigation for the same strings keep working. See [Inspections overview](Inspections.md).
 

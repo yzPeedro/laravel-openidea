@@ -375,6 +375,7 @@ const loadIcons = () => Promise.all(Object.entries(ICON_FILES).map(([name, file]
 const SECTIONS = [
   { group: "Project", id: "overview", title: "Overview", icon: "laravel", desc: "Your application at a glance" },
   { group: "Project", id: "ecosystem", title: "Ecosystem", icon: "packages", desc: "Starter kit, Sanctum, Wayfinder, Horizon, Reverb, Octane, Pulse and every first-party and popular package" },
+  { group: "Project", id: "upgrade", title: "Upgrade", icon: "laravel", desc: "Code that breaks on the next major Laravel versions, from the official upgrade guides" },
   { group: "Project", id: "ai", title: "AI Agents", icon: "robot", desc: "Give Claude Code, Codex, Cursor, Copilot, Junie and Gemini the hub through MCP, with Laravel Boost" },
   { group: "Develop", id: "artisan", title: "Artisan", icon: "console", desc: "Every command of the app and its packages, with its arguments and options" },
   { group: "Develop", id: "tinker", title: "Tinker", icon: "php", desc: "Run PHP inside your app, in as many tabs as you like · Ctrl+Enter runs" },
@@ -401,6 +402,8 @@ const SECTIONS = [
   { group: "App", id: "providers", title: "Service Providers", icon: "plugin", desc: "Providers, whether they are registered and what they bind", count: "providers" },
   { group: "App", id: "bindings", title: "Container Bindings", icon: "container", desc: "bind, singleton, scoped and instance registrations", count: "bindings" },
   { group: "App", id: "rules", title: "Validation Rules", icon: "rules", desc: "Custom validation rules", count: "rules" },
+  { group: "App", id: "security", title: "Security", icon: "secure", desc: "Every input field mass assigned, variables in raw SQL, unescaped request data, open mass assignment, CSRF exceptions and write routes without auth" },
+  { group: "App", id: "unused", title: "Unused", icon: "filter", desc: "Routes, views, translation keys, config keys, events and jobs nothing in the project seems to use" },
   { group: "App", id: "macros", title: "Macros", icon: "functions", desc: "Macros and mixins added to framework classes", count: "macros" },
   { group: "Configure", id: "config", title: "Config", icon: "settings", desc: "Every config key and its value", count: "config" },
   { group: "Configure", id: "env", title: "Environment", icon: "tune", desc: "Variables from .env and .env.example" },
@@ -784,6 +787,12 @@ function renderSection(id) {
   if (!data || state.section !== id) return;
   if (id === "database" && state.db.view) { renderDb(); return; }
   $("toolbar").replaceChildren(...data.actions.map(actionButton));
+  if (id === "security") {
+    const check = el("button", { className: "btn primary", title: "Run php artisan route:list --json and list POST, PUT, PATCH and DELETE routes without an auth middleware" }, el("span", { textContent: state.securityRoutes === "busy" ? "Checking routes…" : "Check routes" }));
+    check.disabled = state.securityRoutes === "busy";
+    check.addEventListener("click", () => { state.securityRoutes = "busy"; send({ type: "securityroutes" }); renderSection("security"); });
+    $("toolbar").prepend(check);
+  }
   if (id === "database") {
     const compare = el("button", { className: "btn primary", title: "Read the live database and compare it with your migrations" }, el("span", { textContent: "Compare with database" }));
     compare.addEventListener("click", () => dbCompare());
@@ -3194,6 +3203,17 @@ openidea.onMessage((text) => {
     case "schema":
       onSchema(msg);
       break;
+    case "securityroutes": {
+      state.securityRoutes = "done";
+      const data = state.data.security;
+      if (msg.error) toast(msg.error);
+      else if (data) {
+        data.rows = data.rows.filter((r) => r.cells[3] !== "laravel.route-without-auth").concat(msg.rows || []);
+        if (!(msg.rows || []).length) toast("Every POST, PUT, PATCH and DELETE route has an auth, guest, can or signed middleware.");
+      }
+      if (state.section === "security") renderSection("security");
+      break;
+    }
     case "indexcheck":
       onIndexCheck(msg);
       break;
