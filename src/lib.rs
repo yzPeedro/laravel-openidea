@@ -39,6 +39,7 @@ mod querysql;
 mod refs;
 mod relations;
 use relations::Shape;
+mod related;
 mod relsnips;
 mod renames;
 mod resources;
@@ -2035,42 +2036,6 @@ impl Laravel {
         Ok(None)
     }
 
-    fn controller_markers(
-        &mut self,
-        doc: &Document,
-        project: &Project,
-        root: &str,
-    ) -> Vec<LineMarker> {
-        if !doc.path.replace('\\', "/").contains("/Http/Controllers/") {
-            return Vec::new();
-        }
-        let Some(class) = parse_class(&doc.text) else {
-            return Vec::new();
-        };
-        let actions = self.cache.get(RefKind::RouteAction, project, root);
-        let lines = Lines::new(&doc.text);
-        class
-            .methods
-            .iter()
-            .filter_map(|m| {
-                let key = format!("{}@{}", class.name, m.name);
-                let routes: Vec<&Entry> = actions.iter().filter(|e| e.key == key).collect();
-                let first = routes.first()?;
-                let tooltip = routes
-                    .iter()
-                    .filter_map(|e| e.detail.clone())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                Some(LineMarker {
-                    line: lines.position(&doc.text, m.start).line,
-                    icon: Some("implementing".into()),
-                    tooltip: format!("Route: {tooltip}"),
-                    target: Some(first.location.clone()),
-                })
-            })
-            .collect()
-    }
-
     fn model_doc_action(
         &mut self,
         doc: &Document,
@@ -2676,7 +2641,6 @@ impl Providers for Laravel {
                 target: Some(entry.location.clone()),
             });
         }
-        out.extend(self.controller_markers(doc, &project, &root));
         out
     }
 
@@ -4153,7 +4117,7 @@ mod tests {
     }
 
     #[test]
-    fn marks_views_and_controller_routes_in_the_gutter() {
+    fn marks_views_in_the_gutter() {
         let _host = setup();
         let markers = Laravel::default()
             .line_markers(&doc("app/Http/Controllers/UsersController.php", CONTROLLER));
@@ -4163,11 +4127,7 @@ mod tests {
             .collect();
         assert_eq!(
             summary,
-            [
-                (5, "Go to view resources/views/users/index.blade.php"),
-                (3, "Route: GET /users · admin.users.index"),
-                (8, "Route: POST /users"),
-            ]
+            [(5, "Go to view resources/views/users/index.blade.php")]
         );
     }
 
@@ -4690,12 +4650,28 @@ Blade::if('admin', fn () => true);
             .map(|a| (a.key.as_str(), a.range.start.line))
             .collect();
         assert!(
-            markers.contains(&("laravel-usages#App\\Models\\User", 3)),
-            "{markers:?}"
+            !markers.contains(&("laravel-usages#App\\Models\\User", 3)),
+            "a model's gutter lists what belongs to it, not its usages: {markers:?}"
         );
         assert!(
             markers.contains(&("laravel-usages#scope:User.active", 7)),
             "{markers:?}"
+        );
+        let related = plugin.related_edges("/project/app/Models/User.php", model_text);
+        let anchors = |list: &[openidea_plugin::indexing::Anchor]| -> Vec<(String, u32)> {
+            list.iter()
+                .map(|a| (a.key.clone(), a.range.start.line))
+                .collect()
+        };
+        assert_eq!(
+            anchors(&related.markers),
+            related::ZONES.map(|zone| (format!("laravel-related#model:User|{zone}"), 3))
+        );
+        assert!(
+            anchors(&related.definitions)
+                .contains(&("laravel-related#model:User|src".to_owned(), 7)),
+            "the scope is listed: {:?}",
+            anchors(&related.definitions)
         );
         let edges = plugin.usage_edges(
             "/project/app/Http/Controllers/ProfileController.php",

@@ -47,6 +47,12 @@ icon = "icons/laravel.svg"
 markers = ["laravel-usages#"]
 tooltip = "Where it's used"
 
+[[contributes.markerIcons]]
+id = "laravel-related"
+icon = "icons/laravel.svg"
+markers = ["laravel-related#"]
+tooltip = "Related files"
+
 [[contributes.documentIndexers]]
 extensions = ["php"]
 

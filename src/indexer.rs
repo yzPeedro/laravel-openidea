@@ -2,7 +2,8 @@ use crate::Laravel;
 use crate::index::RefKind;
 use crate::php::{Kind, Token, tokenize};
 use crate::project::{Lines, rel};
-use crate::{casts, eloquent, resources, usages};
+use crate::{casts, eloquent, related, resources, usages};
+use openidea_plugin::Project;
 use openidea_plugin::indexing::{Anchor, Document, DocumentIndexer, Edges};
 use std::collections::BTreeMap;
 
@@ -223,12 +224,13 @@ impl Laravel {
             } else {
                 format!("{}\\{}", symbol.namespace, symbol.name)
             };
-            if let Some(at) = word_in_line(text, symbol.line, &symbol.name) {
+            let is_model = model.as_deref() == Some(symbol.name.as_str());
+            if !is_model && let Some(at) = word_in_line(text, symbol.line, &symbol.name) {
                 edges
                     .markers
                     .push(anchor(class_key(&fqn), at, at + symbol.name.len()));
             }
-            if model.as_deref() != Some(symbol.name.as_str()) {
+            if !is_model {
                 continue;
             }
             for method in &symbol.methods {
@@ -248,10 +250,86 @@ impl Laravel {
     }
 }
 
+impl Laravel {
+    pub(crate) fn related_context(&mut self, project: &Project, root: &str) -> related::Context {
+        let models: BTreeMap<String, String> = self
+            .cache
+            .get(RefKind::Model, project, root)
+            .iter()
+            .map(|e| {
+                let table = e
+                    .detail
+                    .as_deref()
+                    .map(|d| d.trim_start_matches("table ").to_owned())
+                    .unwrap_or_default();
+                (e.key.clone(), table)
+            })
+            .collect();
+        let routes = self
+            .cache
+            .get(RefKind::RouteAction, project, root)
+            .iter()
+            .filter_map(|e| {
+                let (class, method) = e.key.split_once('@')?;
+                let detail = e.detail.clone().unwrap_or_default();
+                let (head, name) = detail.split_once(" · ").unwrap_or((detail.as_str(), ""));
+                let (verb, uri) = head.split_once(' ').unwrap_or((head, ""));
+                let uri = if verb == "resource" {
+                    crate::routetools::resource_route(uri, method)
+                        .map(|(_, u)| u)
+                        .unwrap_or_default()
+                } else {
+                    uri.to_owned()
+                };
+                let class = class.rsplit('\\').next().unwrap_or(class);
+                Some(related::RouteRef {
+                    name: name.to_owned(),
+                    uri,
+                    action: format!("{class}@{method}"),
+                })
+            })
+            .collect();
+        let scan = self.cached_scan(project, root);
+        let event_models = related::event_models(&scan, &models);
+        let cast_models = related::cast_models(&scan, &models);
+        related::Context {
+            models,
+            routes,
+            event_models,
+            cast_models,
+        }
+    }
+
+    pub(crate) fn related_edges(&mut self, path: &str, text: &str) -> Edges {
+        let mut edges = Edges::default();
+        let Some((project, root)) = self.laravel_project(path) else {
+            return edges;
+        };
+        let own = rel(&root, path).replace('\\', "/");
+        if !usages::indexed(&own) {
+            return edges;
+        }
+        let ctx = self.related_context(&project, &root);
+        let found = related::zoned(related::find(&own, text, &ctx), &own);
+        let lines = Lines::new(text);
+        let anchor = |(key, start, end): (String, usize, usize)| Anchor {
+            key,
+            range: lines.range(text, start, end),
+        };
+        edges.markers = found.markers.into_iter().map(anchor).collect();
+        edges.definitions = found.definitions.into_iter().map(anchor).collect();
+        edges
+    }
+}
+
 impl DocumentIndexer for Laravel {
     fn index(&mut self, doc: &Document) -> Edges {
         let path = crate::project::plain_path(&doc.path).into_owned();
-        self.usage_edges(&path, &doc.text)
+        let mut edges = self.usage_edges(&path, &doc.text);
+        let related = self.related_edges(&path, &doc.text);
+        edges.markers.extend(related.markers);
+        edges.definitions.extend(related.definitions);
+        edges
     }
 }
 
