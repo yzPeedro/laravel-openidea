@@ -126,6 +126,17 @@ menu = "editor.context"
 command = "extract-form-request"
 when = "editorLangId == php"
 
+[[contributes.commands]]
+id = "generate-test"
+title = "Laravel: Generate Feature Test…"
+category = "Laravel"
+when = "editorLangId == php"
+
+[[contributes.menus]]
+menu = "editor.context"
+command = "generate-test"
+when = "editorLangId == php"
+
 [[contributes.fileTemplates]]
 id = "laravel-model"
 name = "Laravel Model"

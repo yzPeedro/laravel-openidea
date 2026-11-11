@@ -15,8 +15,9 @@ OpenIDEA ── WIT plugin API 1.4 ──► dist/plugin.wasm (Rust, sandboxed)
   │                                  ├─ renames.rs, formrequest.rs, modeldoc.rs, querysql.rs   refactorings and actions
   │  web view messages ◄───────────► ├─ panels.rs, sections.rs      the hub and its sections
   │                                  ├─ devtools.rs    Tinker, Live Audit, debug tools, ecosystem, AI agents
+  │                                  ├─ routetools.rs, runtime.rs   send request, generate test, the PHP runtime
   │                                  └─ runner.rs      php, php-win or Docker Compose
-  └─ processes (php / docker) ──► php/tinker.php · Recorder.php · install.php · mcp.php · cache.php · schema.php · tools.php…
+  └─ processes (php / docker) ──► php/tinker.php · Recorder.php · install.php · mcp.php · cache.php · schema.php · request.php · tools.php…
 ```
 
 The hub is `web/hub.html`, one file of HTML, CSS and JavaScript shown as a web view. It talks to the plugin with JSON messages (`{"type": "section", "id": "routes"}`); `panels.rs` answers each one. Live Audit updates are kept under about 900 KB, dropping the oldest records of a very large first load, so the IDE accepts them.
@@ -27,7 +28,7 @@ The hub is `web/hub.html`, one file of HTML, CSS and JavaScript shown as a web v
 
 | Contribution | For |
 | --- | --- |
-| Providers: completion, definition, line markers, code actions | `php`, `blade` and `dotenv` files |
+| Providers: completion, definition, line markers, code actions | `php`, `blade` and `dotenv` files; the code actions include file actions (`file-actions` export), which create a file and open it, as *Generate a feature test* does |
 | Providers: completion and code actions | `json` and `neon` files (`composer.json`, `pint.json`, translation JSON, `phpstan.neon`) |
 | Provider: completion | `xml` (`phpunit.xml`), `javascript`, `typescript`, `javascriptreact`, `typescriptreact`, `vue`, `svelte` |
 | Languages | Blade (`languages/blade.toml`) and NEON (`languages/neon.toml`), with highlighting, structure and folding for Blade from the plugin |
@@ -35,7 +36,7 @@ The hub is `web/hub.html`, one file of HTML, CSS and JavaScript shown as a web v
 | Custom editor | `*.laravel-hub` files open as the hub in an editor tab |
 | Marker icon | The Laravel icon for `laravel-usages#` markers, tooltip "Where it's used" |
 | Document indexer | `php` files, for [gutter usages](Gutter-Usages.md) |
-| Commands and menus | The ten [commands](Commands.md), three of them in the editor's right-click menu |
+| Commands and menus | The eleven [commands](Commands.md), four of them in the editor's right-click menu |
 | File templates, run detectors, file icons | [File templates](File-Templates.md), [Run configurations](Run-Configurations.md), [File icons](File-Icons.md) |
 | Settings | `settings.schema.json` ([Settings](Settings.md)) |
 
@@ -117,10 +118,13 @@ The plugin carries its PHP scripts inside the WebAssembly file and passes them t
 | `php/mcp.php` | The `laravel-openidea` MCP server, copied to `storage/openidea/mcp.php` and started by your AI agent; every call boots the app again |
 | `php/cache.php` | Lists, reads, forgets and flushes cache keys for the hub's Cache section |
 | `php/schema.php` | Reads the live schema and pending migrations, the rows of a table (masked) and the `EXPLAIN` of a query for the hub's Database section and Live Audit |
-| `php/create_file.php` | Creates a new file with the content on stdin, refusing to overwrite (used by Extract Form Request and Create migration) |
+| `php/request.php` | Runs one request inside the app through the HTTP kernel for the hub's request panel: CSRF middleware swapped for a pass-through, optional user on the default guard, a rolled-back transaction on the default connection, and the status, headers (cookies masked), body (up to 200 KB), time and query count as the reply |
+| `php/create_file.php` | Creates a new file with the content on stdin, refusing to overwrite (used by Extract Form Request, Generate test from the hub or the command, and Create migration; from Alt+Enter the IDE creates the test file itself) |
 | `php/selection.php` | Writes `storage/openidea/selection.php` for *Run Selection in Tinker* |
 | `php/tools.php` | Runs Pint, PHP CS Fixer and PHPStan for tools on save, one after the other, stopping at a shared deadline |
 | `php/guidelines.md` | The guide written to `AGENTS.md` (or `.ai/guidelines` with Laravel Boost) when you connect AI agents |
+
+`src/routetools.rs` reads what a route expects without running PHP: the fields of its Form Request `rules()` or inline `validate([...])`, its route model bindings and sample values, and writes the Pest or PHPUnit test; only the route's middleware comes from `route:list --json`. `src/runtime.rs` names the PHP install from the probe's `PHP_BINARY` and words the advice when PHP doesn't start.
 
 When a script runs as root (as in many Docker images), it gives the files it creates back to the owner of the project folder.
 

@@ -85,6 +85,8 @@ New here? Start with [Installation](Installation.md), then open the [hub](Hub.md
 | [Rename route](Rename-Route.md) | Updates every usage after you change a route's name |
 | [Rename translation](Rename-Translation.md) | Updates every usage and the other locales after you change a key |
 | [Extract Form Request](Extract-Form-Request.md) | Turns `$request->validate([…])` into a Form Request class |
+| [Generate test](Generate-Test.md) | Writes a Pest or PHPUnit feature test for a route, from a controller method or the hub |
+| [Send request](Send-Request.md) | Calls a route inside the app from the hub, with rollback, act as user and Copy as cURL |
 | [Copy Query as MySQL](Copy-Query-as-MySQL.md) | Copies the SQL an Eloquent chain runs |
 | [Run Selection in Tinker](Run-Selection-in-Tinker.md) | Runs the selected PHP in an `artisan tinker` terminal |
 | [Generate model PHPDoc](Generate-Model-PHPDoc.md) | Writes `@property` tags from migrations, casts and relations |
@@ -107,7 +109,7 @@ New here? Start with [Installation](Installation.md), then open the [hub](Hub.md
 | [Artisan](Hub-Artisan.md) | Every command as a form, run in the terminal or captured |
 | [Tinker](Hub-Tinker.md) | PHP in tabs with Tinker-style output |
 | [SQL to Laravel](Hub-SQL-to-Laravel.md) | SQL to Eloquent or the query builder, and Laravel back to MySQL |
-| [Routes](Hub-Routes.md) | Every route with method, URI, name, action and tests |
+| [Routes](Hub-Routes.md) | Every route with method, URI, name, action and tests, a request panel and a test generator |
 | [Controllers](Hub-Controllers.md) | Controllers and their actions |
 | [Form Requests](Hub-Form-Requests.md) | Requests and their validated fields |
 | [API Resources](Hub-API-Resources.md) | JSON resources and collections |

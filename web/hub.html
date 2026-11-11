@@ -88,6 +88,20 @@
   .dg-link.dim { opacity: .08; }
   .dg-link.on { stroke: var(--openidea-accent); opacity: 1; stroke-width: 2; }
   .dg-legend { position: absolute; left: 12px; bottom: 10px; display: flex; gap: 12px; font-size: .85em; color: var(--openidea-fg-muted); background: var(--openidea-bg-elevated); border: 1px solid var(--openidea-border); border-radius: 6px; padding: 4px 10px; }
+  .req-form { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 12px; padding: 12px 14px; align-items: center; }
+  .req-form label { color: var(--openidea-fg-muted); }
+  .req-form input[type=text], .req-form select, .req-form textarea { width: 100%; box-sizing: border-box; background: var(--openidea-bg-input); color: var(--openidea-fg); border: 1px solid var(--openidea-border); border-radius: 4px; padding: 4px 8px; font: inherit; }
+  .req-form textarea { min-height: 140px; font-family: var(--mono, monospace); }
+  .req-form .checks { display: flex; gap: 16px; flex-wrap: wrap; }
+  .req-form .hint { color: var(--openidea-fg-muted); font-size: .88em; grid-column: 2; margin-top: -4px; }
+  .req-actions { display: flex; gap: 8px; padding: 0 14px 12px; flex-wrap: wrap; }
+  .req-result { border-top: 1px solid var(--openidea-border); padding: 10px 14px; }
+  .req-result .line { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .req-status { font-weight: 600; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--openidea-border); }
+  .req-status.ok { color: var(--openidea-success); border-color: var(--openidea-success); }
+  .req-status.redirect { color: var(--openidea-info); border-color: var(--openidea-info); }
+  .req-status.fail { color: var(--openidea-danger); border-color: var(--openidea-danger); }
+  .req-result pre { white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; background: var(--openidea-bg-input); padding: 8px; border-radius: 4px; margin: 6px 0 0; }
   td.masked { color: var(--openidea-fg-muted); }
   td.null { color: var(--openidea-fg-muted); font-style: italic; }
   thead th.sortable { cursor: pointer; user-select: none; }
@@ -450,7 +464,7 @@ const icon = (name, size = "") => {
   span.innerHTML = ICONS[name] || "";
   return span;
 };
-const state = { db: { view: null, busy: false, compare: null, rows: null }, section: "overview", file: null, overview: null, data: {}, facetSel: {}, sort: {}, pages: {}, commands: [], globals: [], history: [], runner: "", current: null, values: {},
+const state = { req: { view: false }, db: { view: null, busy: false, compare: null, rows: null }, section: "overview", file: null, overview: null, data: {}, facetSel: {}, sort: {}, pages: {}, commands: [], globals: [], history: [], runner: "", current: null, values: {},
   logs: { files: [], path: null, size: -1, entries: [], levels: new Set(LEVELS), expanded: false, hiddenBefore: 0 }, lastCapture: null };
 
 function toast(text) {
@@ -612,7 +626,7 @@ function go(id) {
   $("filters").replaceChildren();
   $("count").hidden = true;
   renderNav();
-  if (id === "overview") { renderOverview(); send({ type: "overview" }); }
+  if (id === "overview") { renderOverview(); send({ type: "overview" }); if (!state.runtime) send({ type: "runtime" }); }
   else if (id === "artisan") { renderArtisan(); send({ type: "init" }); }
   else if (id === "logs") { renderLogs(); send({ type: "files" }); }
   else if (id === "tinker") { renderTinker(); }
@@ -621,6 +635,7 @@ function go(id) {
   else if (id === "cache") { renderCache(); requestCache("list"); }
   else if (id === "ai") { renderAgents(); }
   else if (id === "database") { state.db.view = null; loading(); send({ type: "section", id }); }
+  else if (id === "routes") { state.req.view = false; loading(); send({ type: "section", id }); }
   else if (id === "diagram") { loading(); send({ type: "diagram" }); }
   else { loading(); send({ type: "section", id }); }
 }
@@ -710,8 +725,12 @@ function renderOverview() {
   if (o.laravel) chips.append(el("span", { className: "chip" }, icon("laravel"), "Laravel " + o.laravel));
   if (o.php) chips.append(el("span", { className: "chip" }, icon("php"), "PHP " + o.php));
   chips.append(el("span", { className: "chip", title: "How Artisan runs" }, icon(o.docker ? "docker" : "console"), o.runner));
+  const rt = state.runtime;
+  if (rt && rt.ok) chips.append(el("span", { className: "chip", title: "PHP that runs the app: " + rt.binary + (rt.ini ? "\nphp.ini: " + rt.ini : "") }, icon("php"), rt.label + " · PHP " + rt.version));
+  else if (rt) chips.append(el("span", { className: "chip env", title: rt.advice }, icon("php"), "PHP not found"));
   if (o.url) chips.append(el("span", { className: "chip" }, icon("http"), o.url));
   pad.append(el("div", { className: "hero" }, icon("laravel", "xl"), el("div", {}, el("h2", { textContent: o.name }), chips)));
+  if (rt && !rt.ok) pad.append(el("div", { className: "insights" }, el("div", { className: "insight bad" }, el("b", { textContent: "Runtime" }), el("span", { textContent: rt.advice, style: "white-space:normal" }))));
   const grid = el("div", { className: "grid" });
   const stats = [["routes", "Routes", "routing", "routes"], ["models", "Models", "database", "models"], ["tables", "Tables", "migrations", "database"],
     ["views", "Views", "views", "views"], ["components", "Components", "components", "components"], ["config", "Config keys", "settings", "config"],
@@ -786,6 +805,7 @@ function renderSection(id) {
   const data = state.data[id];
   if (!data || state.section !== id) return;
   if (id === "database" && state.db.view) { renderDb(); return; }
+  if (id === "routes" && state.req.view) { renderRequest(); return; }
   $("toolbar").replaceChildren(...data.actions.map(actionButton));
   if (id === "security") {
     const check = el("button", { className: "btn primary", title: "Run php artisan route:list --json and list POST, PUT, PATCH and DELETE routes without an auth middleware" }, el("span", { textContent: state.securityRoutes === "busy" ? "Checking routes…" : "Check routes" }));
@@ -845,6 +865,14 @@ function renderSection(id) {
     });
     const go = r.open ? el("span", { className: "go", textContent: "Open ›" }) : null;
     const lastCell = el("td", {}, go);
+    if (id === "routes") {
+      const route = { method: r.cells[0] || "GET", uri: r.cells[1] || "/", name: r.cells[2] || "", action: r.cells[3] || "" };
+      const reqLink = el("button", { className: "linkbtn", textContent: "Request", title: "Send a request to " + route.uri + " inside the app" });
+      reqLink.addEventListener("click", (e) => { e.stopPropagation(); openRequest(route); });
+      const testLink = el("button", { className: "linkbtn", textContent: "Test", title: "Write a feature test for " + route.uri });
+      testLink.addEventListener("click", (e) => { e.stopPropagation(); send({ type: "gentest", ...route }); toast("Writing a test for " + (/^resource$/i.test(route.method) ? route.action : route.method.split("|")[0] + " /" + route.uri.replace(/^\//, "")) + "…"); });
+      lastCell.prepend(reqLink, testLink);
+    }
     if (id === "database") {
       const rowsLink = el("button", { className: "linkbtn", textContent: "Rows", title: "Show the rows of " + r.cells[0] + " (read only)" });
       rowsLink.addEventListener("click", (e) => { e.stopPropagation(); dbRows(r.cells[0], 0); });
@@ -980,6 +1008,138 @@ function onSchema(msg) {
   if (msg.request === "compare") D.compare = msg;
   else if (msg.request === "rows") D.rows = msg;
   if (state.section === "database" && D.view) renderDb();
+}
+
+/* ---------- send request ---------- */
+function openRequest(route) {
+  const methods = route.method.split("|").filter((m) => m && m !== "HEAD");
+  state.req = { view: true, route, info: null, method: methods[0] || "GET", params: {}, query: "", body: "", user: "", json: /^\/?api(\/|$)/.test(route.uri), rollback: true, busy: false, response: null, confirm: false };
+  send({ type: "routeinfo", ...route });
+  renderSection("routes");
+}
+
+function onRouteInfo(msg) {
+  const R = state.req;
+  if (!R.view) return;
+  R.info = msg.info;
+  if (/^resource$/i.test(R.route.method) && msg.info && msg.info.methods.length) {
+    R.route = { ...R.route, method: msg.info.methods.join("|"), uri: msg.info.uri };
+    R.method = msg.info.methods[0];
+    R.json = /^\/?api(\/|$)/.test(msg.info.uri);
+  }
+  R.body = msg.body && Object.keys(msg.body).length ? JSON.stringify(msg.body, null, 2) : "{}";
+  if (state.section === "routes") renderRequest();
+}
+
+function requestUri() {
+  const R = state.req;
+  return "/" + R.route.uri.replace(/^\//, "").replace(/\{([^}?:]+)(?::[^}?]*)?\??\}/g, (all, name) => encodeURIComponent(R.params[name] ?? ""));
+}
+
+function requestBody() {
+  const R = state.req;
+  if (R.method === "GET" || R.method === "DELETE" && !R.body.trim()) return null;
+  try { return R.body.trim() ? JSON.parse(R.body) : {}; } catch (e) { throw new Error("The body isn't valid JSON: " + e.message); }
+}
+
+function curlOf() {
+  const R = state.req;
+  const base = (state.overview && state.overview.url) || "http://localhost";
+  const url = base.replace(/\/$/, "") + requestUri() + (R.query.trim() ? "?" + R.query.trim().replace(/^\?/, "") : "");
+  const q = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
+  const parts = ["curl", "-X", R.method, q(url), "-H", q("Accept: " + (R.json ? "application/json" : "text/html"))];
+  const body = requestBody();
+  if (body !== null && R.method !== "GET") parts.push("-H", q("Content-Type: application/json"), "--data", q(JSON.stringify(body)));
+  return parts.join(" ");
+}
+
+function sendRequest() {
+  const R = state.req;
+  let body;
+  try { body = requestBody(); } catch (e) { toast(e.message); return; }
+  if (R.method !== "GET" && !R.rollback && !R.confirm) {
+    R.confirm = true;
+    clearTimeout(R.confirmTimer);
+    R.confirmTimer = setTimeout(() => { R.confirm = false; if (state.section === "routes") renderRequest(); }, 4000);
+    renderRequest();
+    return;
+  }
+  R.confirm = false;
+  R.busy = true;
+  send({ type: "sendrequest", method: R.method, uri: requestUri(), query: R.query.trim(), body: body ?? null, user: R.user.trim(), json: R.json, rollback: R.rollback });
+  renderRequest();
+}
+
+function renderRequest() {
+  const R = state.req;
+  $("filters").replaceChildren();
+  $("count").hidden = true;
+  $("toolbar").replaceChildren();
+  const back = el("button", { className: "btn ghost", textContent: "‹ Routes" });
+  back.addEventListener("click", () => { state.req.view = false; renderSection("routes"); });
+  const info = R.info;
+  const target = info ? (info.form_request ? "Form Request " + info.form_request + " · " + counted(info.fields.length, "field", "fields") : info.fields.length ? counted(info.fields.length, "field", "fields") + " from validate()" : "no validation found") : "Reading the route…";
+  const head = el("div", { className: "db-head" }, back, el("strong", { textContent: R.method + " /" + R.route.uri.replace(/^\//, "") }), el("span", { className: "muted grow", textContent: (R.route.name ? R.route.name + " · " : "") + target }));
+  const form = el("div", { className: "req-form" });
+  const methods = R.route.method.split("|").filter((m) => m && m !== "HEAD");
+  const methodSel = el("select", { "aria-label": "Method" });
+  for (const m of methods.length ? methods : ["GET"]) methodSel.append(el("option", { value: m, textContent: m }));
+  methodSel.value = R.method;
+  methodSel.addEventListener("change", () => { R.method = methodSel.value; renderRequest(); });
+  form.append(el("label", { textContent: "Method" }), methodSel);
+  for (const b of info ? info.bindings : []) {
+    const input = el("input", { type: "text", value: R.params[b.param] ?? "", placeholder: b.model ? b.model + " id" : "value" });
+    input.addEventListener("input", () => { R.params[b.param] = input.value; });
+    form.append(el("label", { textContent: "{" + b.param + "}" }), input);
+  }
+  const query = el("input", { type: "text", value: R.query, placeholder: "page=2&sort=name" });
+  query.addEventListener("input", () => { R.query = query.value; });
+  form.append(el("label", { textContent: "Query" }), query);
+  if (R.method !== "GET") {
+    const body = el("textarea", { spellcheck: false });
+    body.value = R.body;
+    body.addEventListener("input", () => { R.body = body.value; });
+    form.append(el("label", { textContent: "Body (JSON)" }), body);
+    if (info && info.fields.length) form.append(el("div", { className: "hint", textContent: info.fields.map((f) => f.name + ": " + (f.rules || "—")).join(" · ") }));
+  }
+  const user = el("input", { type: "text", value: R.user, placeholder: "empty: a guest" });
+  user.addEventListener("input", () => { R.user = user.value; });
+  form.append(el("label", { textContent: "Act as user id" }), user);
+  const check = (label, key, title) => {
+    const box = el("input", { type: "checkbox" });
+    box.checked = R[key];
+    box.addEventListener("change", () => { R[key] = box.checked; renderRequest(); });
+    return el("label", { title }, box, " " + label);
+  };
+  form.append(el("label", { textContent: "Options" }), el("div", { className: "checks" },
+    check("Accept JSON", "json", "Send Accept: application/json (and a JSON body)"),
+    check("Roll back database changes", "rollback", "Run the request inside a transaction of the default connection and roll it back")));
+  const sendBtn = el("button", { className: "btn primary", disabled: R.busy || !info });
+  sendBtn.textContent = R.busy ? "Sending…" : R.confirm ? "Click again to send " + R.method + ": it writes to your database" : "Send";
+  sendBtn.addEventListener("click", sendRequest);
+  const curl = el("button", { className: "btn", textContent: "Copy as cURL" });
+  curl.addEventListener("click", () => { try { send({ type: "copy", text: curlOf() }); } catch (e) { toast(e.message); } });
+  const test = el("button", { className: "btn", textContent: "Generate test" });
+  test.addEventListener("click", () => send({ type: "gentest", ...R.route }));
+  const parts = [head, form, el("div", { className: "req-actions" }, sendBtn, curl, test)];
+  const res = R.response;
+  if (res) {
+    const box = el("div", { className: "req-result" });
+    if (res.error) box.append(el("div", { className: "line" }, el("span", { className: "req-status fail", textContent: "Error" }), el("span", { textContent: res.error })));
+    else {
+      const cls = res.status >= 400 ? "fail" : res.status >= 300 ? "redirect" : "ok";
+      box.append(el("div", { className: "line" },
+        el("span", { className: "req-status " + cls, textContent: res.status + " " + (res.reason || "") }),
+        el("span", { className: "muted", textContent: res.ms + " ms · " + counted(res.queries || 0, "query", "queries") + " · " + bytesText(res.size || 0) + (res.rolledBack ? " · database changes rolled back" : "") + (res.user ? " · as user " + res.user : "") }),
+        res.redirect ? el("span", { textContent: "→ " + res.redirect }) : null));
+      const headers = el("details", {}, el("summary", { textContent: "Headers" }), el("pre", { textContent: Object.entries(res.headers || {}).map(([k, v]) => k + ": " + v).join("\n") }));
+      let shown = res.body || "";
+      try { shown = JSON.stringify(JSON.parse(shown), null, 2); } catch (e) {}
+      box.append(headers, el("pre", { textContent: shown || "(empty body)" }));
+    }
+    parts.push(box);
+  }
+  $("content").replaceChildren(...parts);
 }
 
 /* ---------- schema diagram ---------- */
@@ -3202,6 +3362,24 @@ openidea.onMessage((text) => {
       break;
     case "schema":
       onSchema(msg);
+      break;
+    case "runtime":
+      state.runtime = msg;
+      if (state.section === "overview") renderOverview();
+      break;
+    case "routeinfo":
+      onRouteInfo(msg);
+      break;
+    case "response":
+      state.req.busy = false;
+      state.req.response = msg;
+      if (state.section === "routes" && state.req.view) renderRequest();
+      break;
+    case "testcreated":
+      toast("Created " + msg.file + (msg.auth ? " (acting as a user, the route needs auth)" : "") + ". Run it from the Tests section or with php artisan test.");
+      break;
+    case "copied":
+      toast(msg.message);
       break;
     case "securityroutes": {
       state.securityRoutes = "done";

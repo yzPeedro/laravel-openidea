@@ -42,7 +42,9 @@ use relations::Shape;
 mod relsnips;
 mod renames;
 mod resources;
+mod routetools;
 mod runner;
+mod runtime;
 mod schemadiff;
 mod sections;
 mod security;
@@ -2806,6 +2808,7 @@ impl Laravel {
             "copy-query-sql" => self.copy_query_sql(ctx),
             "run-in-tinker" => self.run_selection_in_tinker(ctx),
             "extract-form-request" => self.extract_form_request(ctx),
+            "generate-test" => self.generate_test_command(ctx),
             "artisan-serve" => self.artisan_terminal(ctx, "serve"),
             _ => Err(Error::NotFound(format!("command {id}"))),
         }
@@ -2982,6 +2985,7 @@ const _: () = {
     openidea_plugin::__providers_exports!(Laravel, Component);
     openidea_plugin::__views_exports!(Laravel, Component);
     openidea_plugin::__indexing_exports!(Laravel, Component);
+    openidea_plugin::__file_actions_exports!(Laravel, Component);
 
     impl syntax::Guest for Component {
         fn highlights(language: String, text: String) -> Vec<syntax::Token> {
@@ -3362,6 +3366,129 @@ mod tests {
                 "StoreOrderRequest",
                 "use App\\Http\\Requests\\StoreOrderRequest;"
             ]
+        );
+    }
+
+    #[test]
+    fn a_controller_method_offers_a_feature_test_for_its_routes() {
+        use openidea_plugin::file_actions::{FileActions, FileOperation};
+        let host = setup().with_capabilities(&["project.read", "editor.read", "process:php"]);
+        host.add_file(
+            "routes/web.php",
+            "<?php\nuse App\\Http\\Controllers\\ProductController;\nRoute::post('/products', [ProductController::class, 'store'])->name('products.store');\nRoute::resource('products', ProductController::class)->only(['update']);\n",
+        );
+        let runs = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = runs.clone();
+        host.on_process("php", move |args, stdin| {
+            sink.borrow_mut()
+                .push((args.to_vec(), stdin.unwrap_or_default().to_owned()));
+            Ok(openidea_plugin::ProcessOutput {
+                status: Some(0),
+                stdout: "[]".into(),
+                stderr: String::new(),
+            })
+        });
+        let mut plugin = Laravel::default();
+        let text = "<?php\nnamespace App\\Http\\Controllers;\n\nclass ProductController\n{\n    public function store()\n    {\n        return 1;\n    }\n\n    public function update()\n    {\n        return 2;\n    }\n\n    private function helper()\n    {\n    }\n}\n";
+        let d = doc("app/Http/Controllers/ProductController.php", text);
+        let actions = |plugin: &mut Laravel, needle: &str| {
+            let p = at(text, needle, 0);
+            plugin.file_actions(&d, Range { start: p, end: p })
+        };
+        let titles = |plugin: &mut Laravel, needle: &str| -> Vec<String> {
+            actions(plugin, needle)
+                .into_iter()
+                .map(|a| a.title)
+                .collect()
+        };
+        assert_eq!(
+            titles(&mut plugin, "public function store"),
+            ["Generate a feature test for POST /products (tests/Feature/ProductStoreTest.php)"]
+        );
+        assert_eq!(
+            titles(&mut plugin, "public function update"),
+            [
+                "Generate a feature test for PUT /products/{product} (tests/Feature/ProductUpdateTest.php)"
+            ]
+        );
+        assert!(titles(&mut plugin, "return 1").is_empty());
+        assert!(titles(&mut plugin, "private function helper").is_empty());
+        assert!(
+            refactor(&mut plugin, &d, "public function store", 0)
+                .iter()
+                .all(|a| !a.title.contains("feature test")),
+            "offered once, as a file action"
+        );
+
+        let action = actions(&mut plugin, "public function store").remove(0);
+        let resolved = plugin.resolve_file_action(&d, action).unwrap();
+        assert_eq!(
+            resolved.open.as_deref(),
+            Some("tests/Feature/ProductStoreTest.php")
+        );
+        let [
+            FileOperation::Create {
+                path,
+                text: content,
+                overwrite: false,
+            },
+        ] = resolved.operations.as_slice()
+        else {
+            panic!("one create operation: {:?}", resolved.operations);
+        };
+        assert_eq!(path, "tests/Feature/ProductStoreTest.php");
+        assert!(content.contains("class ProductStoreTest extends TestCase"));
+        assert!(content.contains("route('products.store')"));
+        assert!(
+            runs.borrow()
+                .iter()
+                .all(|(args, _)| !args.iter().any(|a| a.contains("ProductStoreTest"))),
+            "the IDE writes the file, not PHP"
+        );
+
+        host.add_file("tests/Feature/ProductStoreTest.php", "<?php\n");
+        let open = actions(&mut plugin, "public function store").remove(0);
+        assert_eq!(
+            open.title,
+            "Open the feature test (tests/Feature/ProductStoreTest.php)"
+        );
+        let resolved = plugin.resolve_file_action(&d, open).unwrap();
+        assert!(resolved.operations.is_empty());
+        assert_eq!(
+            resolved.open.as_deref(),
+            Some("tests/Feature/ProductStoreTest.php")
+        );
+
+        host.open_editor(
+            "/project/app/Http/Controllers/ProductController.php",
+            "php",
+            text,
+            &[(10, 8, 10, 8)],
+        );
+        let said = plugin
+            .run_command("generate-test", &host.invocation(), None)
+            .unwrap();
+        assert_eq!(
+            said.as_deref(),
+            Some("Created tests/Feature/ProductUpdateTest.php")
+        );
+        assert_eq!(
+            host.opened_locations()
+                .into_iter()
+                .map(|(p, _, _)| p.trim_start_matches("/project/").to_owned())
+                .collect::<Vec<_>>(),
+            ["tests/Feature/ProductUpdateTest.php"]
+        );
+        host.open_editor(
+            "/project/app/Http/Controllers/ProductController.php",
+            "php",
+            text,
+            &[(7, 8, 7, 8)],
+        );
+        assert!(
+            plugin
+                .run_command("generate-test", &host.invocation(), None)
+                .is_err()
         );
     }
 

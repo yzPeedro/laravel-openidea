@@ -1,6 +1,6 @@
 # Commands and shortcuts
 
-Laravel OpenIDEA adds ten `Laravel:` commands to OpenIDEA. They run from the action search, from the editor's right-click menu (three of them) or from a key you bind in Settings › Keymap. This page lists every command, where it shows up, what it needs and what it does.
+Laravel OpenIDEA adds eleven `Laravel:` commands to OpenIDEA. They run from the action search, from the editor's right-click menu (four of them) or from a key you bind in Settings › Keymap. This page lists every command, where it shows up, what it needs and what it does.
 
 <p align="center"><img src="images/commands-find-action.webp" alt="The action search with Laravel: typed, listing the plugin's commands" width="100%"></p>
 <p align="center"><sub>Search for "Laravel:" in the Actions tab of the search popup</sub></p>
@@ -26,11 +26,12 @@ Laravel OpenIDEA adds ten `Laravel:` commands to OpenIDEA. They run from the act
 | **Laravel: Copy Query as MySQL** | `copy-query-sql` | PHP editor | Copies the query under the cursor, or the selection, as MySQL ([page](Copy-Query-as-MySQL.md)) |
 | **Laravel: Run Selection in Tinker** | `run-in-tinker` | PHP editor with a selection | Runs the selected PHP in an `artisan tinker` terminal ([page](Run-Selection-in-Tinker.md)) |
 | **Laravel: Extract Form Request…** | `extract-form-request` | PHP editor | Turns the `validate([…])` call at the cursor into a Form Request class ([page](Extract-Form-Request.md)) |
+| **Laravel: Generate Feature Test…** | `generate-test` | PHP editor | Writes (or opens) the feature test of the route that calls the controller method at the cursor, asking which route when several do ([page](Generate-Test.md)) |
 
 "PHP editor" is the command's `when` condition `editorLangId == php`; *Run Selection in Tinker* adds `editorHasSelection`. Outside those contexts the command is hidden from the action search and the menu.
 
-<p align="center"><img src="images/context-menu-laravel.webp" alt="The editor's right-click menu with Laravel: Copy Query as MySQL, Laravel: Run Selection in Tinker and Laravel: Extract Form Request…" width="760"></p>
-<p align="center"><sub>The three editor commands in the right-click menu of a PHP file, with a selection</sub></p>
+<p align="center"><img src="images/context-menu-laravel.webp" alt="The editor's right-click menu with Laravel: Copy Query as MySQL, Laravel: Run Selection in Tinker, Laravel: Extract Form Request… and Laravel: Generate Feature Test…" width="760"></p>
+<p align="center"><sub>The four editor commands in the right-click menu of a PHP file, with a selection</sub></p>
 
 ## Details
 
@@ -72,7 +73,7 @@ The hub's Artisan section runs any command, with a form for its arguments and op
 Open **Settings › Keymap** and search for "Laravel OpenIdea" (or "Laravel:"):
 
 - **Tool Windows › Laravel OpenIDEA** toggles the hub's tool window.
-- **Plugins › Laravel** holds the ten commands, in alphabetical order.
+- **Plugins › Laravel** holds the eleven commands, in alphabetical order.
 
 Pick one and assign a shortcut the way you would for any IDE action. The binding belongs to the keymap you have selected (*Windows* in the screenshot).
 
