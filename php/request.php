@@ -57,25 +57,47 @@ if (is_array($body) && $method !== 'GET' && $method !== 'HEAD') {
     }
 }
 
-$queries = 0;
 $connection = null;
-try {
-    $connection = $app['db']->connection();
-    $connection->listen(static function () use (&$queries): void {
-        $queries++;
-    });
-    if ($rollback) {
+if ($rollback) {
+    try {
+        $connection = $app['db']->connection();
         $connection->beginTransaction();
+        if ($connection->transactionLevel() < 1) {
+            throw new RuntimeException('the connection reports no open transaction');
+        }
+    } catch (Throwable $e) {
+        try {
+            while ($connection !== null && $connection->transactionLevel() > 0) {
+                $connection->rollBack();
+            }
+        } catch (Throwable $ignored) {
+        }
+        $__openideaReply(['error' => 'Nothing was sent: Roll back database changes is on, but no transaction could be started on the default connection (' . $e->getMessage() . '). Turn Roll back database changes off to send the request for real.']);
+        exit(0);
     }
-} catch (Throwable $e) {
-    $connection = null;
 }
 
-$finish = static function () use (&$connection, $rollback): void {
-    if ($connection !== null && $rollback) {
+$queries = null;
+try {
+    ($connection ?? $app['db']->connection())->listen(static function () use (&$queries): void {
+        $queries++;
+    });
+    $queries = 0;
+} catch (Throwable $e) {
+    $queries = null;
+}
+
+$finish = static function () use (&$connection): bool {
+    if ($connection === null) {
+        return false;
+    }
+    try {
         while ($connection->transactionLevel() > 0) {
             $connection->rollBack();
         }
+        return true;
+    } catch (Throwable $e) {
+        return false;
     }
 };
 
@@ -117,7 +139,7 @@ try {
     }
 
     $kernel->terminate($request, $response);
-    $finish();
+    $rolledBack = $finish();
 
     $__openideaReply([
         'status' => $response->getStatusCode(),
@@ -128,7 +150,7 @@ try {
         'ms' => $ms,
         'queries' => $queries,
         'redirect' => $response->headers->get('Location'),
-        'rolledBack' => $rollback && $connection !== null,
+        'rolledBack' => $rolledBack,
         'user' => $userId,
     ]);
 } catch (Throwable $e) {

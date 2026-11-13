@@ -2,6 +2,10 @@
 
 All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+- Send request: when **Roll back database changes** is on and no transaction can be started on the default connection, the request is no longer sent. The panel says *Nothing was sent: …* with the reason, and turning the option off sends it for real after the second click. Before, the failure was ignored and the route ran without a transaction, so a `POST`, `PUT`, `PATCH` or `DELETE` could write to the database while rollback was on. A failure to count the queries no longer turns the rollback off: the response then says *queries not counted*.
+
 ## 0.16.0
 
 - The migrations are followed in order: columns removed by `dropColumn()`, `dropMorphs()`, `dropTimestamps()`, `dropSoftDeletes()`, `dropRememberToken()` and `dropConstrainedForeignId()`, columns renamed by `renameColumn()` and tables removed or renamed by `Schema::drop()`, `Schema::dropIfExists()` and `Schema::rename()` leave completion, the unknown column inspection, the hub and *Generate @property PHPDoc*. The `down()` method of a migration is ignored. Columns are listed in the order the migrations add them, so `id` comes first.

@@ -1130,7 +1130,7 @@ function renderRequest() {
       const cls = res.status >= 400 ? "fail" : res.status >= 300 ? "redirect" : "ok";
       box.append(el("div", { className: "line" },
         el("span", { className: "req-status " + cls, textContent: res.status + " " + (res.reason || "") }),
-        el("span", { className: "muted", textContent: res.ms + " ms · " + counted(res.queries || 0, "query", "queries") + " · " + bytesText(res.size || 0) + (res.rolledBack ? " · database changes rolled back" : "") + (res.user ? " · as user " + res.user : "") }),
+        el("span", { className: "muted", textContent: res.ms + " ms · " + (res.queries == null ? "queries not counted" : counted(res.queries, "query", "queries")) + " · " + bytesText(res.size || 0) + (res.rolledBack ? " · database changes rolled back" : "") + (res.user ? " · as user " + res.user : "") }),
         res.redirect ? el("span", { textContent: "→ " + res.redirect }) : null));
       const headers = el("details", {}, el("summary", { textContent: "Headers" }), el("pre", { textContent: Object.entries(res.headers || {}).map(([k, v]) => k + ": " + v).join("\n") }));
       let shown = res.body || "";
