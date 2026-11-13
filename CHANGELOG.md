@@ -2,7 +2,7 @@
 
 All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [semantic versioning](https://semver.org/).
 
-## Unreleased
+## 0.16.2
 
 - A file that ends in an unfinished call or block no longer stops completion, inspections and the gutter icons. A migration saved while it ends in `->index(`, `->unique(` or `->constrained(` panicked the schema reader, so column completion failed in every file; the unfinished modifier is now skipped and the column it follows is kept. A class or method whose `{` isn't closed yet, as while typing a new method in a model or controller, panicked the class reader and the related files icon; its body now runs to the end of the file.
 
