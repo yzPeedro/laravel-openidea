@@ -342,7 +342,7 @@ fn indexes_a_real_project() {
         println!(
             "section {id}: {rows} rows in {ms} ms, facets {}, first {}",
             value["facets"],
-            &first[..first.len().min(110)]
+            first.chars().take(110).collect::<String>()
         );
     }
     let model_files: Vec<String> = std::env::var("LARAVEL_MODEL_FILES")

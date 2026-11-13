@@ -2,6 +2,10 @@
 
 All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+- A file that ends in an unfinished call or block no longer stops completion, inspections and the gutter icons. A migration saved while it ends in `->index(`, `->unique(` or `->constrained(` panicked the schema reader, so column completion failed in every file; the unfinished modifier is now skipped and the column it follows is kept. A class or method whose `{` isn't closed yet, as while typing a new method in a model or controller, panicked the class reader and the related files icon; its body now runs to the end of the file.
+
 ## 0.16.1
 
 - Send request: when **Roll back database changes** is on and no transaction can be started on the default connection, the request is no longer sent. The panel says *Nothing was sent: …* with the reason, and turning the option off sends it for real after the second click. Before, the failure was ignored and the route ran without a transaction, so a `POST`, `PUT`, `PATCH` or `DELETE` could write to the database while rollback was on. A failure to count the queries no longer turns the rollback off: the response then says *queries not counted*.

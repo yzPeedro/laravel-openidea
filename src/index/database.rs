@@ -151,7 +151,7 @@ struct Call {
     args: Vec<(usize, String, usize, usize)>,
 }
 
-fn matching_close(tokens: &[Token], open: usize) -> usize {
+fn matching_close(tokens: &[Token], open: usize) -> Option<usize> {
     let mut depth = 0usize;
     for (k, t) in tokens.iter().enumerate().skip(open) {
         match t.kind {
@@ -159,13 +159,13 @@ fn matching_close(tokens: &[Token], open: usize) -> usize {
             Kind::Close(_) => {
                 depth = depth.saturating_sub(1);
                 if depth == 0 {
-                    return k;
+                    return Some(k);
                 }
             }
             _ => {}
         }
     }
-    tokens.len().saturating_sub(1)
+    None
 }
 
 fn down_body(tokens: &[Token]) -> Option<(usize, usize)> {
@@ -174,7 +174,7 @@ fn down_body(tokens: &[Token]) -> Option<(usize, usize)> {
             && matches!(&w[1].kind, Kind::Ident(n) if n == "down")
     })?;
     let open = (at..tokens.len()).find(|&k| tokens[k].kind == Kind::Open('{'))?;
-    let close = matching_close(tokens, open);
+    let close = matching_close(tokens, open).unwrap_or(tokens.len() - 1);
     Some((tokens[open].start, tokens[close].end))
 }
 
@@ -210,13 +210,17 @@ fn strings_in(tokens: &[Token], open: usize, close: usize) -> Vec<String> {
 
 fn chain(tokens: &[Token], open: usize) -> Vec<(String, Vec<String>)> {
     let mut out = Vec::new();
-    let mut close = matching_close(tokens, open);
+    let Some(mut close) = matching_close(tokens, open) else {
+        return out;
+    };
     while tokens.get(close + 1).map(|t| &t.kind) == Some(&Kind::ObjectOp)
         && let Some(Kind::Ident(name)) = tokens.get(close + 2).map(|t| &t.kind)
         && tokens.get(close + 3).map(|t| &t.kind) == Some(&Kind::Open('('))
     {
         let next_open = close + 3;
-        let next_close = matching_close(tokens, next_open);
+        let Some(next_close) = matching_close(tokens, next_open) else {
+            break;
+        };
         out.push((name.clone(), strings_in(tokens, next_open, next_close)));
         close = next_close;
     }
@@ -854,6 +858,38 @@ mod tests {
         let purchases = schema.table("purchases").unwrap();
         assert!(purchases.leads_an_index("reference"));
         assert!(!purchases.leads_an_index("owner_type"));
+    }
+
+    #[test]
+    fn an_unfinished_modifier_at_the_end_of_a_migration_is_skipped() {
+        for modifier in [
+            "index(",
+            "unique(",
+            "constrained(",
+            "index('posts_title",
+            "unique()->index(",
+        ] {
+            let text = format!(
+                "<?php
+Schema::create('posts', function (Blueprint $table) {{
+    $table->id();
+    $table->string('title')->{modifier}"
+            );
+            let schema = schema_of(&[&text]);
+            assert_eq!(columns_of(&schema, "posts"), ["id", "title"], "{modifier}");
+            assert!(
+                schema.table("posts").unwrap().foreigns.is_empty(),
+                "{modifier}"
+            );
+        }
+        let finished = "<?php
+Schema::create('posts', function (Blueprint $table) {
+    $table->string('title')->index();
+    $table->string('slug')->index(";
+        let schema = schema_of(&[finished]);
+        let posts = schema.table("posts").unwrap();
+        assert!(posts.leads_an_index("title"));
+        assert!(!posts.leads_an_index("slug"));
     }
 
     #[test]

@@ -35,7 +35,7 @@ fn matching_close(tokens: &[Token], open: usize) -> usize {
         match t.kind {
             Kind::Open(_) => depth += 1,
             Kind::Close(_) => {
-                depth -= 1;
+                depth = depth.saturating_sub(1);
                 if depth == 0 {
                     return j;
                 }
@@ -43,7 +43,7 @@ fn matching_close(tokens: &[Token], open: usize) -> usize {
             _ => {}
         }
     }
-    tokens.len().saturating_sub(1)
+    tokens.len()
 }
 
 pub fn parse_class(text: &str) -> Option<Class> {
@@ -133,7 +133,10 @@ pub fn parse_class(text: &str) -> Option<Class> {
                     }
                     let body = if tokens.get(b).is_some_and(|t| t.kind == Kind::Open('{')) {
                         let close = matching_close(&tokens, b);
-                        let body = (tokens[b].end, tokens[close].start);
+                        let body = (
+                            tokens[b].end,
+                            tokens.get(close).map_or(text.len(), |t| t.start),
+                        );
                         j = close + 1;
                         body
                     } else {

@@ -86,7 +86,11 @@ fn matching(tokens: &[Token], open: usize) -> usize {
             _ => {}
         }
     }
-    tokens.len().saturating_sub(1)
+    tokens.len()
+}
+
+fn start_of(text: &str, tokens: &[Token], k: usize) -> usize {
+    tokens.get(k).map_or(text.len(), |t| t.start)
 }
 
 fn attributes(text: &str, tokens: &[Token], hash: usize) -> (Vec<Attribute>, usize) {
@@ -99,7 +103,9 @@ fn attributes(text: &str, tokens: &[Token], hash: usize) -> (Vec<Attribute>, usi
             let mut next = j + 1;
             if tokens.get(j + 1).is_some_and(|t| t.kind == Kind::Open('(')) {
                 let end = matching(tokens, j + 1);
-                args = text[tokens[j + 1].end..tokens[end].start].trim().to_owned();
+                args = text[tokens[j + 1].end..start_of(text, tokens, end)]
+                    .trim()
+                    .to_owned();
                 next = end + 1;
             }
             out.push(Attribute {
@@ -186,10 +192,10 @@ fn call_args(text: &str, tokens: &[Token], open: usize) -> (Vec<String>, Vec<Str
             && types.is_empty()
         {
             let end = matching(tokens, j + 1);
-            types = param_types(&text[tokens[j + 1].end..tokens[end].start]);
+            types = param_types(&text[tokens[j + 1].end..start_of(text, tokens, end)]);
         }
     }
-    let last = text[start..tokens[close].start.max(start)].trim();
+    let last = text[start..start_of(text, tokens, close).max(start)].trim();
     if !last.is_empty() {
         args.push(last.to_owned());
     }
@@ -403,7 +409,7 @@ pub fn scan_text(path: &str, text: &str) -> Scan {
                         }
                         let body = if tokens.get(e).is_some_and(|t| t.kind == Kind::Open('{')) {
                             let end = matching(&tokens, e);
-                            let b = text[tokens[e].end..tokens[end].start].to_owned();
+                            let b = text[tokens[e].end..start_of(text, &tokens, end)].to_owned();
                             e = end;
                             b
                         } else {
@@ -414,7 +420,7 @@ pub fn scan_text(path: &str, text: &str) -> Scan {
                             line: line(tokens[k + 1].start),
                             public,
                             is_static,
-                            params: text[tokens[k + 2].end..tokens[params_end].start]
+                            params: text[tokens[k + 2].end..start_of(text, &tokens, params_end)]
                                 .trim()
                                 .to_owned(),
                             body,
@@ -783,7 +789,7 @@ pub fn listen_property(project: &Project, root: &str) -> Vec<Listener> {
             continue;
         }
         let close = matching(&tokens, 0);
-        let body = &text[open..tokens[close].end];
+        let body = &text[open..tokens.get(close).map_or(text.len(), |t| t.end)];
         let lines = Lines::new(&text);
         let line = lines.position(&text, at).line + 1;
         let inner = tokenize(body, 0, body.len());
