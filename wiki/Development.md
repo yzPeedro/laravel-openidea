@@ -81,13 +81,18 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 cargo build --release --target wasm32-wasip2
-for f in php/*.php; do php -l "$f"; done
+for f in php/*.php tests/php/*.php; do php -l "$f"; done
+php tests/php/request_test.php
 ./scripts/package.sh          # builds the release zip in build/
 ```
 
 ### Unit tests
 
 `cargo test` runs the `#[test]` functions in `src/` against the SDK's `MockHost`, which fakes the IDE: files, settings, capabilities, editors, terminals, process runs, the clipboard, status items and the log. They need neither OpenIDEA nor PHP. Most features have a test that reads like a spec, for example `renaming_a_route_updates_its_usages_before_and_after_saving`, `each_window_shows_its_own_laravel_version` or `a_healthy_project_logs_nothing`.
+
+### The Send request test
+
+`php tests/php/request_test.php` runs `php/request.php` against a fake app in `tests/php/request/` (stub kernel, request, response and connection over a real SQLite file in a temporary folder) and checks, with the transaction, the connection and the query listener made to fail one at a time, whether the route ran and whether its write was kept. Pass another copy of the script as the first argument to test it instead. It needs PHP with `pdo_sqlite`.
 
 ### The MCP server test
 
@@ -143,7 +148,7 @@ The hub page posts JSON messages (`{"type": "section", "id": "routes"}`) through
 | Job | Steps |
 | --- | --- |
 | Rust (fmt, clippy, tests, wasm) | Sparse checkout of the SDK at `SDK_REF`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `package.sh`, `oiplugin.sh`, and the zip, `.oiplugin` and checksums as an artifact |
-| PHP scripts | `php -l` on every `php/*.php` with PHP 8.3 |
+| PHP scripts | `php -l` on every `php/*.php` and `tests/php/*.php` with PHP 8.3, and `tests/php/request_test.php` |
 | Hub script | Extracts the `<script>` of `web/hub.html` and runs `node --check` on it |
 
 `.github/workflows/release.yml` runs on a `v*` tag: it checks the tag matches `version` in `plugin.toml`, runs the tests, packages, signs the marketplace package with the `OPENIDEA_PUBLISHER_KEY` secret, takes the release notes from the tag's section of `CHANGELOG.md` and publishes the GitHub release. A second job, *Open the registry pull request*, then lists the version in the marketplace.

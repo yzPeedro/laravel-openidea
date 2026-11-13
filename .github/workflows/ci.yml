@@ -81,9 +81,12 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.3"
+          extensions: pdo_sqlite
           coverage: none
       - name: Lint
-        run: for f in php/*.php; do php -l "$f"; done
+        run: for f in php/*.php tests/php/*.php; do php -l "$f"; done
+      - name: Send request rollback
+        run: php tests/php/request_test.php
 
   hub:
     name: Hub script

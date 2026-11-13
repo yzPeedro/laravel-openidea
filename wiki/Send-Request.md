@@ -26,7 +26,7 @@ Call a route of your app from the hub without starting a server: pick a route, f
 | Option | Default | Effect |
 | --- | --- | --- |
 | **Accept JSON** | on for URIs under `/api`, off otherwise | Sends `Accept: application/json` and the body as JSON; off sends `Accept: text/html` and the body as form fields |
-| **Roll back database changes** | on | Runs the request inside a transaction on the default connection and rolls it back afterwards |
+| **Roll back database changes** | on | Runs the request inside a transaction on the default connection and rolls it back afterwards. When no transaction can be started, nothing is sent |
 
 With **Roll back database changes** off, a request other than `GET` writes for real. The first click on **Send** then turns the button into *Click again to send POST: it writes to your database*; a second click within four seconds sends it.
 
@@ -71,7 +71,7 @@ A status badge (`200 OK`, `422 Unprocessable Content`…), then the time in mill
 
 1. boots the app (`vendor/autoload.php`, `bootstrap/app.php`, the HTTP kernel's bootstrappers);
 2. swaps the CSRF middleware (`VerifyCsrfToken`, `ValidateCsrfToken`, `PreventRequestForgery` and `App\Http\Middleware\VerifyCsrfToken`) for a pass-through, for this call only;
-3. opens a transaction on the default connection when rolling back, and counts the queries;
+3. opens a transaction on the default connection when rolling back and checks that it is open, or stops there with *Nothing was sent: …*; then counts the queries, and shows *queries not counted* when the connection doesn't allow it;
 4. builds the request with `Request::create()`, logs in the user (`auth.providers.users.model::find($id)` on the default guard) when an id is given;
 5. runs `$kernel->handle()` and `$kernel->terminate()`, then rolls back every open transaction level.
 
@@ -92,6 +92,7 @@ Only the default database connection is in the transaction. Writes to other conn
 | *The app did not boot: …* | `vendor/` is missing or the app throws while booting |
 | *No user with id 999 in App\Models\User.* | The **Act as user id** doesn't exist |
 | *The body isn't valid JSON: …* | The body box doesn't parse; nothing is sent |
+| *Nothing was sent: Roll back database changes is on, but no transaction could be started on the default connection (…)* | The default connection can't be reached or doesn't start a transaction; turn the option off to send the request for real |
 | The exception class and message | The request threw outside Laravel's exception handler |
 
 ## Settings and permissions
