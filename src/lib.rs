@@ -3860,6 +3860,105 @@ mod tests {
     }
 
     #[test]
+    fn every_prefix_of_a_project_file_is_handled_without_panicking() {
+        const SCHEMA: &str = "<?php
+return new class extends Migration {
+    public function up(): void
+    {
+        Schema::create('comments', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('post_id')->constrained()->cascadeOnDelete();
+            $table->foreignId('author_id')->constrained('users');
+            $table->foreign('category_id')->references('id')->on('categories');
+            $table->string('slug')->unique('comments_slug_unique');
+            $table->index(['status', 'email']);
+            $table->dropColumn(['legacy', 'note']);
+            $table->renameColumn('code', 'reference');
+            $table->dropMorphs('owner');
+        });
+        Schema::rename('orders', 'purchases');
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('comments');
+    }
+};
+";
+        let files = [
+            (
+                "database/migrations/2024_01_01_000000_create_tables.php",
+                MIGRATION,
+            ),
+            (
+                "database/migrations/2024_03_01_000000_create_comments.php",
+                SCHEMA,
+            ),
+            ("app/Models/User.php", USER),
+            ("app/Models/Post.php", POST),
+            ("app/Http/Controllers/UsersController.php", CONTROLLER),
+            ("routes/web.php", ROUTES),
+        ];
+        let mut failures = Vec::new();
+        for (path, full) in files {
+            for end in (0..=full.len()).filter(|&e| full.is_char_boundary(e)) {
+                let prefix = &full[..end];
+                let run = std::panic::catch_unwind(|| {
+                    let host = setup();
+                    host.add_file(path, prefix);
+                    let mut plugin = Laravel::default();
+                    let other = "<?php
+Post::where('');
+User::where('');
+";
+                    plugin.completion(&doc("app/X.php", other), at(other, "where('", 7), None);
+                    let d = doc(path, prefix);
+                    let pos = position(prefix, prefix.len());
+                    plugin.inspect(&d.path, prefix);
+                    plugin.line_markers(&d);
+                    plugin.completion(&d, pos, None);
+                    plugin.definition(&d, pos);
+                    plugin.related_edges(&d.path, prefix);
+                    plugin.usage_edges(&d.path, prefix);
+                });
+                if run.is_err() {
+                    failures.push(format!("{path} cut at byte {end}"));
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "panicked on:
+{}",
+            failures.join(
+                "
+"
+            )
+        );
+    }
+
+    #[test]
+    fn columns_complete_while_a_migration_ends_in_an_unfinished_call() {
+        for modifier in ["index(", "unique(", "constrained("] {
+            let host = setup();
+            host.add_file(
+                "database/migrations/2024_02_01_000000_add_subtitle_to_posts.php",
+                &format!(
+                    "<?php
+Schema::table('posts', function (Blueprint $table) {{
+    $table->string('subtitle')->{modifier}"
+                ),
+            );
+            let mut plugin = Laravel::default();
+            let text = "<?php
+Post::where('');
+";
+            let cols = plugin.completion(&doc("app/X.php", text), at(text, "where('", 7), None);
+            assert_eq!(labels(&cols), ["id", "title", "subtitle"], "{modifier}");
+        }
+    }
+
+    #[test]
     fn untyped_closure_parameters_get_their_model() {
         let _host = setup();
         let mut plugin = Laravel::default();
