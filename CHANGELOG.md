@@ -2,7 +2,7 @@
 
 All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [semantic versioning](https://semver.org/).
 
-## Unreleased
+## 0.16.0
 
 - The migrations are followed in order: columns removed by `dropColumn()`, `dropMorphs()`, `dropTimestamps()`, `dropSoftDeletes()`, `dropRememberToken()` and `dropConstrainedForeignId()`, columns renamed by `renameColumn()` and tables removed or renamed by `Schema::drop()`, `Schema::dropIfExists()` and `Schema::rename()` leave completion, the unknown column inspection, the hub and *Generate @property PHPDoc*. The `down()` method of a migration is ignored. Columns are listed in the order the migrations add them, so `id` comes first.
 - Hub › Database: **Indexes** and **Foreign keys** columns, read from `index()`, `unique()`, `primary()`, `fullText()`, `foreignId()->constrained()`, `foreign()->references()->on()` and the rest. **Compare with database** boots the app and lists pending migrations, tables only in the migrations or only in the database, and missing columns and indexes. **Rows** shows the rows of a table, read only and paged, with secret and personal data columns masked.
