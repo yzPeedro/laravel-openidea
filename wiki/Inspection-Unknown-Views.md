@@ -53,7 +53,9 @@ The candidates are chosen like this:
 1. **Moved views first.** A view whose name ends with `.<old>` (the file was moved into a folder: `orders.index` → `shop.orders.index`), or whose name is the end of the old one (moved out of a folder: `admin.orders.index` → `orders.index`).
 2. **Otherwise the closest names.** Views within an edit distance of a third of the name's length (at least 2), closest first, then alphabetically.
 
-At most two candidates are kept. When nothing is close enough there is no quick fix.
+At most two candidates are kept. When nothing is close enough there is no candidate.
+
+**Create the view.** Alt+Enter also offers *Create view '&lt;name&gt;' (resources/views/….blade.php)*, which writes the file with an empty `<div>` and opens it. Names with `::` and names that can't be a path (empty segments, spaces) don't get it. Other warnings that pointed to the view go away once it exists.
 
 ## Details
 

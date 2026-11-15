@@ -9,7 +9,11 @@ Laravel OpenIDEA checks your PHP, Blade and `.env` files against what it knows a
 
 | Inspection | Diagnostic code | Severity | Files | Setting | Default | Quick fix |
 | --- | --- | --- | --- | --- | --- | --- |
-| [Unknown views](Inspection-Unknown-Views.md) | `laravel.unknown-view` | Warning | PHP, Blade | `unknownViewInspection` | on | Change to the closest view, here or in every usage |
+| [Unknown views](Inspection-Unknown-Views.md) | `laravel.unknown-view` | Warning | PHP, Blade | `unknownViewInspection` | on | Change to the closest view, here or in every usage; create the view |
+| [Unknown config keys](Inspection-Unknown-Config-Keys.md) | `laravel.unknown-config-key` | Warning | PHP, Blade | `unknownConfigInspection` | on | none |
+| [Missing controller methods](Inspection-Missing-Controller-Methods.md) | `laravel.missing-controller-method` | Warning | Route files | `missingControllerMethodInspection` | on | Create the methods in the controller |
+| [Unknown Livewire components](Inspection-Unknown-Livewire-Components.md) | `laravel.unknown-livewire-component` | Warning | PHP, Blade | `unknownLivewireInspection` | on | Create the component class and view |
+| [Unknown Inertia pages](Inspection-Unknown-Inertia-Pages.md) | `laravel.unknown-inertia-page` | Warning | PHP | `unknownInertiaInspection` | on | Create the page |
 | [Unknown route names](Inspection-Unknown-Routes.md) | `laravel.unknown-route` | Warning | PHP, Blade | `unknownRouteInspection` | **off** | none |
 | [Unknown validation rules](Inspection-Unknown-Rules.md) | `laravel.unknown-validation-rule` | Warning | PHP, Blade | `unknownRuleInspection` | on | none |
 | [Unknown columns](Inspection-Unknown-Columns.md) | `laravel.unknown-column` | Warning | PHP | `unknownColumnInspection` | on | Change to the closest column |

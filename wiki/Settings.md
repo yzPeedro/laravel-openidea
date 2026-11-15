@@ -1,6 +1,6 @@
 # Settings
 
-Laravel OpenIDEA has 22 settings: twelve inspection switches, three inlay hint switches, the translation locale, how to run PHP, the Docker Compose service, tools on save, the IDE helper stub and what AI agents may do. Each one can be set globally and overridden per project.
+Laravel OpenIDEA has 26 settings: sixteen inspection switches, three inlay hint switches, the translation locale, how to run PHP, the Docker Compose service, tools on save, the IDE helper stub and what AI agents may do. Each one can be set globally and overridden per project.
 
 <p align="center"><img src="images/settings-laravel-1.webp" alt="Settings, Plugins, Laravel OpenIdea: the inspection checkboxes, the preferred translation locale, Run Artisan with and Format PHP files on save with, and the Global / This project switch" width="720"></p>
 <p align="center"><sub>Settings › Plugins › Laravel OpenIdea, first half (the demo project has every inspection turned on)</sub></p>
@@ -38,6 +38,10 @@ The settings are declared in `settings.schema.json`, and the page is generated f
 | `securityInspection` | Report every input field passed to create() or update(), variables in raw SQL and request data printed with {!! !!} | checkbox | on |
 | `missingTranslationInspection` | Report translation keys that exist in some locales but not in others | checkbox | on |
 | `upgradeInspection` | Point at code that breaks on the next major Laravel version, from the official upgrade guide | checkbox | on |
+| `unknownConfigInspection` | Report unknown config keys | checkbox | on |
+| `missingControllerMethodInspection` | Report routes that point to controller methods that don't exist | checkbox | on |
+| `unknownLivewireInspection` | Report unknown Livewire components (Livewire 3 and older) | checkbox | on |
+| `unknownInertiaInspection` | Report unknown Inertia pages | checkbox | on |
 | `locale` | Preferred translation locale | text | `en` |
 | `artisanRunner` | Run Artisan with | `auto`, `php`, `docker-run`, `docker` | `auto` |
 | `formatOnSave` | Format PHP files on save with | `off`, `pint`, `php-cs-fixer` | `off` |
@@ -81,6 +85,10 @@ Each inspection has its own page with examples and quick fixes:
 | `securityInspection` | [Security](Inspection-Security.md) |
 | `missingTranslationInspection` | [Missing translations](Inspection-Missing-Translations.md) |
 | `upgradeInspection` | [Upgrade](Inspection-Upgrade.md) |
+| `unknownConfigInspection` | [Unknown config keys](Inspection-Unknown-Config-Keys.md) |
+| `missingControllerMethodInspection` | [Missing controller methods](Inspection-Missing-Controller-Methods.md) |
+| `unknownLivewireInspection` | [Unknown Livewire components](Inspection-Unknown-Livewire-Components.md) |
+| `unknownInertiaInspection` | [Unknown Inertia pages](Inspection-Unknown-Inertia-Pages.md) |
 
 `unknownRouteInspection` and `unknownAuthInspection` are the two that start off. Turning an inspection off only hides its warnings; completion and navigation for the same strings keep working. See [Inspections overview](Inspections.md).
 
