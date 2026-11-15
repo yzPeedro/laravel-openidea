@@ -186,6 +186,16 @@ fn strings(text: &str) -> Vec<(String, usize, usize)> {
         .collect()
 }
 
+fn callee_before(text: &str, start: usize) -> Option<(usize, usize)> {
+    let quote = start.checked_sub(1)?;
+    if !matches!(text.as_bytes().get(quote), Some(b'\'' | b'"')) {
+        return None;
+    }
+    let open = text.get(..quote)?.trim_end().strip_suffix('(')?.trim_end();
+    let name = open.trim_end_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
+    (name.len() < open.len()).then_some((name.len(), open.len()))
+}
+
 fn uri_matches(pattern: &str, literal: &str) -> bool {
     let literal = literal.split('?').next().unwrap_or_default();
     let p: Vec<&str> = pattern.trim_matches('/').split('/').collect();
@@ -273,9 +283,10 @@ pub fn find(rel_path: &str, text: &str, ctx: &Context) -> Found {
     if rel_path.starts_with("routes/") {
         for route in parse_routes(text) {
             if let Some((class, method)) = &route.action {
+                let (start, end) = route.uri.unwrap_or((route.start, route.end));
                 found
                     .definitions
-                    .push((action_key(class, method), route.start, route.end));
+                    .push((action_key(class, method), start, end));
             }
         }
         return found;
@@ -289,6 +300,11 @@ pub fn find(rel_path: &str, text: &str, ctx: &Context) -> Found {
                     && !value.contains(' ')
                     && uri_matches(&route.uri, &value);
                 if named || hits_uri {
+                    let (start, end) = if named {
+                        callee_before(text, start).unwrap_or((start, end))
+                    } else {
+                        (start, end)
+                    };
                     found
                         .definitions
                         .push((format!("{KEY}action:{}", route.action), start, end));
@@ -765,9 +781,11 @@ mod tests {
             "{defs:?}"
         );
         assert!(
-            defs.iter()
-                .any(|(k, _)| k == "laravel-related#action:OrderController@store"),
-            "{defs:?}"
+            defs.contains(&pair(
+                "laravel-related#action:OrderController@store",
+                "/orders"
+            )),
+            "the route's link sits on its URI, off the name Find Usages renames: {defs:?}"
         );
         assert!(found.markers.is_empty());
 
@@ -776,10 +794,7 @@ mod tests {
         assert_eq!(
             keys(&found.definitions, test),
             [
-                pair(
-                    "laravel-related#action:OrderController@store",
-                    "orders.store"
-                ),
+                pair("laravel-related#action:OrderController@store", "route"),
                 pair("laravel-related#action:OrderController@show", "/orders/7"),
             ]
         );

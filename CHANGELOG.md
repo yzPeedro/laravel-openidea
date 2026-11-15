@@ -2,6 +2,12 @@
 
 All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+- Hover: the editor's hover on a Laravel string says what it is and where it's defined: a route's controller method, verb and URI, a config key's value, a translation's text in each locale, a view's file, and the detail of middleware, abilities, disks and the other names the plugin completes. Built from the plugin's index, it never starts PHP and never shows `.env` values. Works in PHP and Blade.
+- Find Usages and Rename on route names, config keys and translation keys: with the cursor on the last segment of a key (`index` in `route('admin.users.index')`, `name` in `config('app.name')`) or on its definition, Find Usages lists the definition and every usage in PHP and Blade, and Rename changes them together, with a preview. Only keys the project defines literally are indexed, so resource routes, keys from packages, JSON translations and views are left out and keep their Ctrl+click.
+- Related files: a controller method's link to its route opens at the route's URI, and its link to a test at the call that names the route (`route(`), instead of on the route name. Find Usages and Rename on a route name in `routes/` or `tests/` no longer pick up the controller method and the other targets of the related-files icon.
+
 ## 0.16.2
 
 - A file that ends in an unfinished call or block no longer stops completion, inspections and the gutter icons. A migration saved while it ends in `->index(`, `->unique(` or `->constrained(` panicked the schema reader, so column completion failed in every file; the unfinished modifier is now skipped and the column it follows is kept. A class or method whose `{` isn't closed yet, as while typing a new method in a model or controller, panicked the class reader and the related files icon; its body now runs to the end of the file.

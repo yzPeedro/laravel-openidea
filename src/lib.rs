@@ -16,12 +16,14 @@ mod formrequest;
 mod framework;
 mod helpers;
 mod hierarchy;
+mod hovers;
 mod hubtabs;
 mod index;
 mod indexadvice;
 mod indexer;
 mod inspect;
 mod inspections;
+mod keyrefs;
 mod logs;
 mod mcp;
 mod members;
@@ -60,6 +62,7 @@ mod usages;
 
 use audit::Logged;
 use index::{Cache, Entry, RefKind, is_model, parse_class};
+use openidea_plugin::hover::{Hover, HoverProvider};
 use openidea_plugin::providers::{CodeAction, CompletionItem, Document, LineMarker, Providers};
 use openidea_plugin::text::{offset, position};
 use openidea_plugin::{
@@ -1887,6 +1890,76 @@ impl Laravel {
         }
     }
 
+    fn key_at(
+        &mut self,
+        project: &Project,
+        root: &str,
+        doc: &Document,
+        cursor: usize,
+    ) -> Option<(Want, String, usize, usize)> {
+        let blade = is_blade(&doc.path);
+        if blade && let Some((kind, start, end)) = tag_at(&doc.text, cursor, &TAGS) {
+            return Some((
+                Want::Kind(kind),
+                doc.text[start..end].to_owned(),
+                start,
+                end,
+            ));
+        }
+        let mut arg = php::arg_at(&doc.text, blade, cursor)?;
+        if !blade {
+            self.infer_head(project, root, &doc.text, &mut arg);
+        }
+        let scope = scope_of(&doc.text);
+        let seg = refs::segment(&arg, cursor.checked_sub(arg.start)?, &scope)?;
+        let key = arg
+            .value
+            .get(seg.start..seg.end)
+            .unwrap_or_default()
+            .to_owned();
+        Some((seg.want, key, arg.start + seg.start, arg.start + seg.end))
+    }
+
+    fn hover_at(&mut self, doc: &Document, at: Position) -> Option<Hover> {
+        if is_env_file(&doc.path) {
+            return None;
+        }
+        let (project, root) = self.laravel_project(&doc.path)?;
+        let cursor = offset(&doc.text, at)?;
+        let (want, key, start, end) = self.key_at(&project, &root, doc, cursor)?;
+        let Want::Kind(kind) = want else {
+            return None;
+        };
+        if key.is_empty() || doc.text.get(start..end) != Some(key.as_str()) {
+            return None;
+        }
+        self.unreported_changes(&project, &root);
+        let (_, entries) = self.resolve(&want, &project, &root, doc);
+        let found: Vec<Entry> = entries.into_iter().filter(|e| e.key == key).collect();
+        let actions: Vec<String> = if kind == RefKind::Route {
+            let suffix = format!(" · {key}");
+            self.cache
+                .get(RefKind::RouteAction, &project, &root)
+                .iter()
+                .filter(|e| e.detail.as_deref().is_some_and(|d| d.ends_with(&suffix)))
+                .map(|e| {
+                    let (class, method) = e.key.split_once('@').unwrap_or((&e.key, ""));
+                    let class = class.rsplit('\\').next().unwrap_or(class);
+                    if method.is_empty() {
+                        class.to_owned()
+                    } else {
+                        format!("{class}@{method}")
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let markdown = hovers::markdown(kind, &key, &found, &actions, &root)?;
+        let lines = Lines::new(&doc.text);
+        Some(Hover::new(markdown).range(lines.range(&doc.text, start, end)))
+    }
+
     fn references(&mut self, doc: &Document) -> Option<(Project, String, References)> {
         let (project, root) = self.laravel_project(&doc.path)?;
         let scope = scope_of(&doc.text);
@@ -2569,27 +2642,9 @@ impl Providers for Laravel {
         {
             return found;
         }
-        let (want, key) =
-            if blade && let Some((kind, start, end)) = tag_at(&doc.text, cursor, &TAGS) {
-                (Want::Kind(kind), doc.text[start..end].to_owned())
-            } else {
-                let Some(mut arg) = php::arg_at(&doc.text, blade, cursor) else {
-                    return Vec::new();
-                };
-                if !blade {
-                    self.infer_head(&project, &root, &doc.text, &mut arg);
-                }
-                let scope = scope_of(&doc.text);
-                let Some(seg) = refs::segment(&arg, cursor - arg.start, &scope) else {
-                    return Vec::new();
-                };
-                let key = arg
-                    .value
-                    .get(seg.start..seg.end)
-                    .unwrap_or_default()
-                    .to_owned();
-                (seg.want, key)
-            };
+        let Some((want, key, ..)) = self.key_at(&project, &root, doc, cursor) else {
+            return Vec::new();
+        };
         let (_, entries) = self.resolve(&want, &project, &root, doc);
         entries
             .into_iter()
@@ -2923,6 +2978,12 @@ impl openidea_plugin::Plugin for Laravel {
     }
 }
 
+impl HoverProvider for Laravel {
+    fn hover(&mut self, doc: &Document, at: Position) -> Option<Hover> {
+        self.hover_at(doc, at)
+    }
+}
+
 impl openidea_plugin::syntax::SyntaxProvider for Laravel {
     fn highlights(&mut self, _language: &str, text: &str) -> Vec<openidea_plugin::syntax::Token> {
         blade_syntax::highlights(text)
@@ -2949,6 +3010,7 @@ const _: () = {
     openidea_plugin::__providers_exports!(Laravel, Component);
     openidea_plugin::__views_exports!(Laravel, Component);
     openidea_plugin::__indexing_exports!(Laravel, Component);
+    openidea_plugin::__hover_exports!(Laravel, Component);
     openidea_plugin::__file_actions_exports!(Laravel, Component);
 
     impl syntax::Guest for Component {
@@ -5456,5 +5518,191 @@ PHP Fatal error: Allowed memory size"
             level,
             openidea_plugin::LogLevel::Warn | openidea_plugin::LogLevel::Error
         )));
+    }
+
+    #[test]
+    fn indexes_route_config_and_translation_keys_for_find_usages() {
+        let host = setup();
+        host.add_file(
+            "lang/en/messages.php",
+            "<?php\nreturn ['welcome' => 'Welcome', 'nav' => ['home' => 'Home']];\n",
+        );
+        host.add_file(
+            "lang/pt_BR/messages.php",
+            "<?php\nreturn ['welcome' => 'Bem-vindo'];\n",
+        );
+        host.add_file(
+            "routes/api.php",
+            "<?php\nRoute::apiResource('photos', PhotoController::class);\n",
+        );
+        let page = "<?php\nclass Page\n{\n    public function show()\n    {\n        route('admin.users.index');\n        route('photos.index');\n        config('app.name');\n        config('queue.default');\n        __('messages.nav.home');\n        return to_route('home');\n    }\n}\n";
+        host.add_file("app/Http/Controllers/Page.php", page);
+        let mut plugin = Laravel::default();
+        let spans =
+            |edges: &[openidea_plugin::indexing::Anchor], text: &str| -> Vec<(String, String)> {
+                edges
+                    .iter()
+                    .map(|a| {
+                        let line = text
+                            .lines()
+                            .nth(a.range.start.line as usize)
+                            .unwrap_or_default();
+                        let s = a.range.start.character as usize;
+                        let e = a.range.end.character as usize;
+                        (a.key.clone(), line.get(s..e).unwrap_or_default().to_owned())
+                    })
+                    .collect()
+            };
+        let used = plugin.key_edges("/project/app/Http/Controllers/Page.php", page);
+        assert!(used.definitions.is_empty());
+        assert_eq!(
+            spans(&used.references, page),
+            [
+                (
+                    "laravel-route#admin.users.index".to_owned(),
+                    "index".to_owned()
+                ),
+                ("laravel-config#app.name".to_owned(), "name".to_owned()),
+                (
+                    "laravel-trans#messages.nav.home".to_owned(),
+                    "home".to_owned()
+                ),
+                ("laravel-route#home".to_owned(), "home".to_owned()),
+            ],
+            "resource routes and keys only in vendor/ are left out"
+        );
+        let routes = plugin.key_edges("/project/routes/web.php", ROUTES);
+        assert_eq!(
+            spans(&routes.definitions, ROUTES),
+            [
+                ("laravel-route#home".to_owned(), "home".to_owned()),
+                (
+                    "laravel-route#admin.users.index".to_owned(),
+                    "index".to_owned()
+                ),
+            ]
+        );
+        let config = "<?php
+return [
+    'name' => env('APP_NAME', 'Laravel'),
+    'env' => 'local',
+];
+";
+        let defs = plugin.key_edges("/project/config/app.php", config);
+        assert_eq!(
+            spans(&defs.definitions, config),
+            [
+                ("laravel-config#app.name".to_owned(), "name".to_owned()),
+                ("laravel-config#app.env".to_owned(), "env".to_owned()),
+            ]
+        );
+        let lang = "<?php\nreturn ['welcome' => 'Bem-vindo'];\n";
+        let defs = plugin.key_edges("/project/lang/pt_BR/messages.php", lang);
+        assert_eq!(
+            spans(&defs.definitions, lang),
+            [(
+                "laravel-trans#messages.welcome".to_owned(),
+                "welcome".to_owned()
+            )]
+        );
+        assert!(defs.references.is_empty());
+    }
+
+    #[test]
+    fn hovers_on_routes_config_and_translations() {
+        let host = setup();
+        host.add_file(
+            "lang/en/messages.php",
+            "<?php\nreturn ['welcome' => 'Welcome'];\n",
+        );
+        host.add_file("app/Http/Controllers/UsersController.php", CONTROLLER);
+        let mut plugin = Laravel::default();
+        let hover = |plugin: &mut Laravel, path: &str, text: &str, needle: &str| {
+            let at = text.find(needle).expect("needle") + 1;
+            let d = doc(path, text);
+            let pos = openidea_plugin::text::position(text, at);
+            plugin.hover(&d, pos).map(|h| h.markdown)
+        };
+        let page = "<?php\nroute('admin.users.index');\nconfig('app.env');\n__('messages.welcome');\nview('nope.missing');\n$x = 'admin.users.index';\n";
+        let route = hover(
+            &mut plugin,
+            "app/Http/Controllers/Page.php",
+            page,
+            "admin.users.index'",
+        )
+        .unwrap();
+        assert!(
+            route.starts_with("**Route** `admin.users.index`"),
+            "{route}"
+        );
+        assert!(route.contains("→ `UsersController@__invoke`"), "{route}");
+        assert!(
+            route.contains("`GET /users` · `routes/web.php:4`"),
+            "{route}"
+        );
+        let config = hover(
+            &mut plugin,
+            "app/Http/Controllers/Page.php",
+            page,
+            "app.env",
+        )
+        .unwrap();
+        assert_eq!(
+            config,
+            "**Config** `app.env`\n\n- `'local'` · `config/app.php:4`"
+        );
+        let trans = hover(
+            &mut plugin,
+            "app/Http/Controllers/Page.php",
+            page,
+            "messages.welcome",
+        )
+        .unwrap();
+        assert!(
+            trans.contains("`en: 'Welcome'` · `lang/en/messages.php:2`"),
+            "{trans}"
+        );
+        assert_eq!(
+            hover(
+                &mut plugin,
+                "app/Http/Controllers/Page.php",
+                page,
+                "nope.missing"
+            ),
+            None
+        );
+        assert_eq!(
+            hover(&mut plugin, "app/Http/Controllers/Page.php", page, "$x"),
+            None
+        );
+        let blade = "<a href=\"{{ route('home') }}\">x</a>\n";
+        let home = hover(&mut plugin, "resources/views/nav.blade.php", blade, "home").unwrap();
+        assert!(home.starts_with("**Route** `home`"), "{home}");
+    }
+
+    #[test]
+    fn related_links_never_share_a_range_with_renamable_keys() {
+        let host = setup();
+        host.add_file("app/Http/Controllers/UsersController.php", CONTROLLER);
+        let test = "<?php\nit('lists', function () {\n    $this->get(route('home'));\n    $this->get(route('admin.users.index'))->assertOk();\n    $this->get('/users');\n});\n";
+        host.add_file("tests/Feature/UsersTest.php", test);
+        let mut plugin = Laravel::default();
+        for (path, text) in [
+            ("/project/routes/web.php", ROUTES),
+            ("/project/tests/Feature/UsersTest.php", test),
+        ] {
+            let keys = plugin.key_edges(path, text);
+            let anchors: Vec<_> = keys.definitions.iter().chain(&keys.references).collect();
+            assert!(!anchors.is_empty(), "{path}");
+            let related = plugin.related_edges(path, text);
+            for link in &related.definitions {
+                for anchor in &anchors {
+                    let (a, b) = (link.range, anchor.range);
+                    let overlap = (a.start.line, a.start.character) < (b.end.line, b.end.character)
+                        && (b.start.line, b.start.character) < (a.end.line, a.end.character);
+                    assert!(!overlap, "{path}: {} overlaps {}", link.key, anchor.key);
+                }
+            }
+        }
     }
 }

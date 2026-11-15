@@ -2,10 +2,10 @@ use crate::Laravel;
 use crate::index::RefKind;
 use crate::php::{Kind, Token, tokenize};
 use crate::project::{Lines, rel};
-use crate::{casts, eloquent, related, resources, usages};
+use crate::{casts, eloquent, keyrefs, related, resources, usages};
 use openidea_plugin::Project;
 use openidea_plugin::indexing::{Anchor, Document, DocumentIndexer, Edges};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const KEY: &str = "laravel-usages#";
 
@@ -322,6 +322,83 @@ impl Laravel {
     }
 }
 
+impl Laravel {
+    pub(crate) fn key_edges(&mut self, path: &str, text: &str) -> Edges {
+        let mut edges = Edges::default();
+        let Some((project, root)) = self.laravel_project(path) else {
+            return edges;
+        };
+        let own = rel(&root, path).replace('\\', "/");
+        let lines = Lines::new(text);
+        let anchor = |(key, start, end): keyrefs::Found| Anchor {
+            key,
+            range: lines.range(text, start, end),
+        };
+        let mut definitions = Vec::new();
+        if own.starts_with("routes/") {
+            definitions.extend(keyrefs::route_definitions(text));
+        } else if let Some(file) = keyrefs::config_file(&own) {
+            definitions.extend(keyrefs::array_definitions(keyrefs::CONFIG, &file, text));
+        } else if let Some(file) = keyrefs::translation_file(&own) {
+            definitions.extend(keyrefs::array_definitions(
+                keyrefs::TRANSLATION,
+                &file,
+                text,
+            ));
+            edges.definitions = definitions.into_iter().map(anchor).collect();
+            return edges;
+        }
+        edges.definitions = definitions.into_iter().map(anchor).collect();
+        if !usages::indexed(&own) {
+            return edges;
+        }
+        let blade = own.ends_with(".blade.php");
+        let scope = crate::scope_of(text);
+        let mut known: BTreeMap<RefKind, BTreeSet<String>> = BTreeMap::new();
+        let found = keyrefs::references(text, blade, &scope, |kind, key| {
+            known
+                .entry(kind)
+                .or_insert_with(|| self.literal_keys(kind, &project, &root))
+                .contains(key)
+        });
+        edges.references = found.into_iter().map(anchor).collect();
+        edges
+    }
+
+    fn literal_keys(&mut self, kind: RefKind, project: &Project, root: &str) -> BTreeSet<String> {
+        self.cache
+            .get(kind, project, root)
+            .iter()
+            .filter(|e| {
+                let own = rel(root, &e.location.path).replace('\\', "/");
+                let range = e.location.range;
+                match kind {
+                    RefKind::Route => {
+                        own.starts_with("routes/")
+                            && !e
+                                .detail
+                                .as_deref()
+                                .is_some_and(|d| d.starts_with("resource "))
+                            && range.start.line == range.end.line
+                            && keyrefs::route_literal_holds(
+                                &e.key,
+                                range.end.character.saturating_sub(range.start.character),
+                            )
+                    }
+                    RefKind::Config => {
+                        keyrefs::config_file(&own).is_some()
+                            && range != Default::default()
+                            && !keyrefs::last_segment(&e.key).is_empty()
+                    }
+                    RefKind::Translation => keyrefs::translation_file(&own).is_some(),
+                    _ => false,
+                }
+            })
+            .map(|e| e.key.clone())
+            .collect()
+    }
+}
+
 impl DocumentIndexer for Laravel {
     fn index(&mut self, doc: &Document) -> Edges {
         let path = crate::project::plain_path(&doc.path).into_owned();
@@ -329,6 +406,9 @@ impl DocumentIndexer for Laravel {
         let related = self.related_edges(&path, &doc.text);
         edges.markers.extend(related.markers);
         edges.definitions.extend(related.definitions);
+        let keys = self.key_edges(&path, &doc.text);
+        edges.definitions.extend(keys.definitions);
+        edges.references.extend(keys.references);
         edges
     }
 }
