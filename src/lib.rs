@@ -21,6 +21,7 @@ mod hubtabs;
 mod index;
 mod indexadvice;
 mod indexer;
+mod inlays;
 mod inspect;
 mod inspections;
 mod keyrefs;
@@ -63,6 +64,7 @@ mod usages;
 use audit::Logged;
 use index::{Cache, Entry, RefKind, is_model, parse_class};
 use openidea_plugin::hover::{Hover, HoverProvider};
+use openidea_plugin::inlay_hints::{InlayHint, InlayHints};
 use openidea_plugin::providers::{CodeAction, CompletionItem, Document, LineMarker, Providers};
 use openidea_plugin::text::{offset, position};
 use openidea_plugin::{
@@ -1920,6 +1922,119 @@ impl Laravel {
         Some((seg.want, key, arg.start + seg.start, arg.start + seg.end))
     }
 
+    fn inlay_hints_at(&mut self, doc: &Document, range: Range) -> Vec<InlayHint> {
+        if is_env_file(&doc.path) {
+            return Vec::new();
+        }
+        let Some((project, root)) = self.laravel_project(&doc.path) else {
+            return Vec::new();
+        };
+        let on = |key: &str| host::setting_bool(key).unwrap_or(true);
+        let (routes_on, config_on, trans_on) = (
+            on("inlayRoutes"),
+            on("inlayConfig"),
+            on("inlayTranslations"),
+        );
+        if !routes_on && !config_on && !trans_on {
+            return Vec::new();
+        }
+        self.unreported_changes(&project, &root);
+        let text = &doc.text;
+        let own = project::rel(&root, &doc.path).replace('\\', "/");
+        let blade = is_blade(&doc.path);
+        let mut hints = Vec::new();
+        if routes_on && !blade && own.starts_with("routes/") {
+            hints.extend(inlays::route_definitions(text));
+        }
+        if routes_on
+            && !blade
+            && own.contains("Http/Controllers/")
+            && let Some(class) = parse_class(text)
+        {
+            let actions = self.cache.get(RefKind::RouteAction, &project, &root);
+            let mut by_method: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+            for e in actions.iter() {
+                let Some((owner, method)) = e.key.split_once('@') else {
+                    continue;
+                };
+                if owner.rsplit('\\').next() == Some(class.name.as_str()) {
+                    by_method
+                        .entry(method)
+                        .or_default()
+                        .push(e.detail.clone().unwrap_or_default());
+                }
+            }
+            for method in class.methods.iter().filter(|m| m.public && m.body.0 > 0) {
+                let Some(label) = by_method
+                    .get(method.name.as_str())
+                    .and_then(|d| inlays::method_label(&method.name, d))
+                else {
+                    continue;
+                };
+                hints.push(inlays::Hint {
+                    at: inlays::signature_end(text, method.start, method.body.0 - 1),
+                    label,
+                    tooltip: Some("Routes that run this method".into()),
+                });
+            }
+        }
+        let empty = std::rc::Rc::new(Vec::new());
+        let route_entries = if routes_on {
+            self.cache.get(RefKind::Route, &project, &root)
+        } else {
+            empty.clone()
+        };
+        let config_entries = if config_on {
+            self.cache.get(RefKind::Config, &project, &root)
+        } else {
+            empty.clone()
+        };
+        let trans_entries = if trans_on {
+            self.cache.get(RefKind::Translation, &project, &root)
+        } else {
+            empty
+        };
+        let scope = scope_of(text);
+        hints.extend(inlays::usages(
+            text,
+            blade,
+            &scope,
+            |kind, key| match kind {
+                RefKind::Route => route_entries
+                    .iter()
+                    .find(|e| e.key == key)
+                    .and_then(|e| inlays::route_label(e.detail.as_deref()?))
+                    .map(|l| (l, None)),
+                RefKind::Config => config_entries.iter().find(|e| e.key == key).and_then(|e| {
+                    let file = project::rel(&root, &e.location.path).replace('\\', "/");
+                    inlays::config_label(e.detail.as_deref()?, &file).map(|l| (l, None))
+                }),
+                RefKind::Translation => trans_entries
+                    .iter()
+                    .filter(|e| e.key == key)
+                    .find_map(|e| inlays::translation_label(e.detail.as_deref()?))
+                    .map(|(l, locale)| (l, Some(format!("Text in {locale}")))),
+                _ => None,
+            },
+        ));
+        hints.sort_by_key(|h| h.at);
+        let lines = Lines::new(text);
+        hints
+            .into_iter()
+            .filter_map(|h| {
+                let position = lines.position(text, h.at);
+                if position.line < range.start.line || position.line > range.end.line {
+                    return None;
+                }
+                let mut hint = InlayHint::new(position, h.label).padding_left();
+                if let Some(tooltip) = h.tooltip {
+                    hint = hint.tooltip(tooltip);
+                }
+                Some(hint)
+            })
+            .collect()
+    }
+
     fn hover_at(&mut self, doc: &Document, at: Position) -> Option<Hover> {
         if is_env_file(&doc.path) {
             return None;
@@ -2978,6 +3093,12 @@ impl openidea_plugin::Plugin for Laravel {
     }
 }
 
+impl InlayHints for Laravel {
+    fn inlay_hints(&mut self, doc: &Document, range: Range) -> Vec<InlayHint> {
+        self.inlay_hints_at(doc, range)
+    }
+}
+
 impl HoverProvider for Laravel {
     fn hover(&mut self, doc: &Document, at: Position) -> Option<Hover> {
         self.hover_at(doc, at)
@@ -3011,6 +3132,7 @@ const _: () = {
     openidea_plugin::__views_exports!(Laravel, Component);
     openidea_plugin::__indexing_exports!(Laravel, Component);
     openidea_plugin::__hover_exports!(Laravel, Component);
+    openidea_plugin::__inlay_hints_exports!(Laravel, Component);
     openidea_plugin::__file_actions_exports!(Laravel, Component);
 
     impl syntax::Guest for Component {
@@ -5704,5 +5826,68 @@ return [
                 }
             }
         }
+    }
+
+    #[test]
+    fn inlay_hints_show_routes_config_and_translations() {
+        let host = setup();
+        host.add_file("app/Http/Controllers/UsersController.php", CONTROLLER);
+        host.add_file(
+            "lang/en/messages.php",
+            "<?php\nreturn ['welcome' => 'Welcome'];\n",
+        );
+        let mut plugin = Laravel::default();
+        let labels = |plugin: &mut Laravel, path: &str, text: &str| -> Vec<(u32, String)> {
+            let d = doc(path, text);
+            let all = Range::new(Position::new(0, 0), Position::new(10_000, 0));
+            plugin
+                .inlay_hints(&d, all)
+                .into_iter()
+                .map(|h| (h.position.line, h.label))
+                .collect()
+        };
+        let routes = labels(&mut plugin, "routes/web.php", ROUTES);
+        assert_eq!(
+            routes,
+            [(3, "GET /users · admin.users.index".to_owned())],
+            "only routes a group changes"
+        );
+        let controller = labels(
+            &mut plugin,
+            "app/Http/Controllers/UsersController.php",
+            CONTROLLER,
+        );
+        assert_eq!(
+            controller,
+            [
+                (3, "GET /users".to_owned()),
+                (5, "= env('APP_NAME')".to_owned()),
+                (8, "POST /users".to_owned())
+            ]
+        );
+        let page = "<?php\nroute('admin.users.index');\nconfig('app.env');\nconfig('app.name');\n__('messages.welcome');\nconfig('app.nope');\n";
+        assert_eq!(
+            labels(&mut plugin, "app/Http/Controllers/Page.php", page),
+            [
+                (1, "GET /users".to_owned()),
+                (2, "= 'local'".to_owned()),
+                (3, "= env('APP_NAME')".to_owned()),
+                (4, "= 'Welcome'".to_owned()),
+            ]
+        );
+        let visible = Range::new(Position::new(2, 0), Position::new(2, 99));
+        let d = doc("app/Http/Controllers/Page.php", page);
+        assert_eq!(plugin.inlay_hints(&d, visible).len(), 1);
+        host.set_setting("inlayConfig", "false");
+        assert_eq!(
+            labels(&mut plugin, "app/Http/Controllers/Page.php", page),
+            [(1, "GET /users".to_owned()), (4, "= 'Welcome'".to_owned())]
+        );
+        let blade =
+            "<a href=\"{{ route('admin.users.index') }}\">{{ __('messages.welcome') }}</a>\n";
+        assert_eq!(
+            labels(&mut plugin, "resources/views/nav.blade.php", blade),
+            [(0, "GET /users".to_owned()), (0, "= 'Welcome'".to_owned())]
+        );
     }
 }

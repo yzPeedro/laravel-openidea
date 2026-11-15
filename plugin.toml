@@ -21,7 +21,7 @@ kinds = ["completion", "definition", "line-markers", "code-actions"]
 languages = ["php", "blade", "dotenv"]
 
 [[contributes.providers]]
-kinds = ["hover"]
+kinds = ["hover", "inlay-hints"]
 languages = ["php", "blade"]
 
 [[contributes.providers]]

@@ -1,6 +1,6 @@
 # Settings
 
-Laravel OpenIDEA has 19 settings: twelve inspection switches, the translation locale, how to run PHP, the Docker Compose service, tools on save, the IDE helper stub and what AI agents may do. Each one can be set globally and overridden per project.
+Laravel OpenIDEA has 22 settings: twelve inspection switches, three inlay hint switches, the translation locale, how to run PHP, the Docker Compose service, tools on save, the IDE helper stub and what AI agents may do. Each one can be set globally and overridden per project.
 
 <p align="center"><img src="images/settings-laravel-1.webp" alt="Settings, Plugins, Laravel OpenIdea: the inspection checkboxes, the preferred translation locale, Run Artisan with and Format PHP files on save with, and the Global / This project switch" width="720"></p>
 <p align="center"><sub>Settings › Plugins › Laravel OpenIdea, first half (the demo project has every inspection turned on)</sub></p>
@@ -45,6 +45,9 @@ The settings are declared in `settings.schema.json`, and the page is generated f
 | `mcpAccess` | What connected AI agents may do through the MCP server: read (inspect the app), write (also generators, migrate, seed, caches, Pint, tests) or full (also Tinker and every Artisan command) | `read`, `write`, `full` | `read` |
 | `phpstanOnSave` | Run PHPStan (and Larastan) on the saved file and show its errors | checkbox | off |
 | `dockerService` | Docker Compose service for Artisan (empty: detect) | text | empty |
+| `inlayRoutes` | Show route URIs and names inline | checkbox | on |
+| `inlayConfig` | Show config values inline | checkbox | on |
+| `inlayTranslations` | Show translation text inline | checkbox | on |
 
 ## When a change takes effect
 
@@ -54,6 +57,7 @@ The plugin reads each setting when it is used, so most changes apply right away:
 - `artisanRunner` and `dockerService` apply to the next Artisan, Tinker, hub or tool run.
 - `formatOnSave` and `phpstanOnSave` apply to the next save.
 - `ideHelpers` and `mcpAccess` apply the next time you focus an editor in the project, when the plugin syncs `storage/openidea`.
+- `inlayRoutes`, `inlayConfig` and `inlayTranslations` apply the next time the editor asks for hints: when you type or scroll. See [Inlay hints](Inlay-Hints.md).
 - `locale` is read when the plugin starts. Reload the plugins (or restart the IDE) after changing it.
 
 ## Inspections
