@@ -54,6 +54,7 @@ New here? Start with [Installation](Installation.md), then open the [hub](Hub.md
 | [Front-end files](Frontend-Files.md) | Vite entries, Ziggy route names and translation keys in JS, TS, Vue and Svelte |
 | [Pest](Pest.md) | Datasets and groups |
 | [Go to definition](Go-to-Definition.md) | Everything Ctrl+click opens |
+| [Inlay hints](Inlay-Hints.md) | Full route URIs and names under group prefixes, the routes of each controller method, and config values, translations and route URIs next to the string |
 | [Hover](Hover.md) | The route's URI and controller, the config value, the translation in each locale, and where each is defined |
 | [Find Usages and Rename](Find-Usages.md) | Every definition and usage of a route name, config key or translation key, renamed together |
 | [Related files](Gutter-Related-Files.md) | The Laravel icon that links a model to its migrations, factory, resources, policy, observers, events and more, a controller method to its routes and tests, and a view to what renders it |

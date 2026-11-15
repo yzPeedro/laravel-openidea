@@ -13,6 +13,7 @@ Laravel OpenIDEA is an independent project. It reuses no code, branding or text 
 - MCP server for AI agents and Laravel Boost integration.
 - Folio pages as routes, named routes from the route cache, and pivot attributes.
 - Hover on Laravel strings, and Find Usages and Rename for route names, config keys and translation keys.
+- Inlay hints for route URIs and names, controller routes, config values and translations.
 
 ## Next
 
@@ -21,7 +22,6 @@ Laravel OpenIDEA is an independent project. It reuses no code, branding or text 
 | Hub: create missing classes | Quick fix to create a Livewire or Blade component class |
 | Route actions from the hub | "Add route" when a name is used but not defined |
 | More packages | laravel-data, Filament resources, Nova |
-| Inline config and translation values | Inlay hints provider (plugin API 1.3) |
 
 ## Needs new OpenIDEA plugin APIs
 
