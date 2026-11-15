@@ -12,6 +12,7 @@ Laravel OpenIDEA is an independent project. It reuses no code, branding or text 
 - The hub: 40+ sections with filters and sorting, Artisan, Tinker, logs, Live Audit, profiles, debug calls, ecosystem and AI agents.
 - MCP server for AI agents and Laravel Boost integration.
 - Folio pages as routes, named routes from the route cache, and pivot attributes.
+- Hover on Laravel strings, and Find Usages and Rename for route names, config keys and translation keys.
 
 ## Next
 
@@ -20,6 +21,7 @@ Laravel OpenIDEA is an independent project. It reuses no code, branding or text 
 | Hub: create missing classes | Quick fix to create a Livewire or Blade component class |
 | Route actions from the hub | "Add route" when a name is used but not defined |
 | More packages | laravel-data, Filament resources, Nova |
+| Inline config and translation values | Inlay hints provider (plugin API 1.3) |
 
 ## Needs new OpenIDEA plugin APIs
 
@@ -27,9 +29,6 @@ These need host APIs that OpenIDEA doesn't offer yet. They would be proposed ups
 
 | Item | API |
 | --- | --- |
-| Hover with config values, route URIs and translations | hover provider |
-| Find usages of a route, view, config key or translation | references provider |
-| Rename a route, view or config key | rename provider |
-| Inline config and translation values | inlay hints provider |
-| Typed model members everywhere | access to the IDE's PHP symbols |
+| Typed model members everywhere | access to the IDE's PHP types (`project.symbols` has names only) |
+| Rename a view (moving its file) | a rename that can move files from a plugin's index |
 | Storage path completion (`Storage::get('…')`) | listing ignored files (`storage/app` is git-ignored) |
