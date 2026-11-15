@@ -6,6 +6,7 @@ mod checks;
 mod closures;
 mod completions;
 mod configfiles;
+mod creates;
 mod devtools;
 mod directives;
 mod dotenv;
@@ -28,6 +29,7 @@ mod keyrefs;
 mod logs;
 mod mcp;
 mod members;
+mod missing;
 mod modeldoc;
 mod modelmap;
 mod namespaces;
@@ -134,6 +136,7 @@ pub struct Laravel {
     hub_tables: Option<(String, HubTables)>,
     facts_cache: BTreeMap<String, std::rc::Rc<checks::Parts>>,
     live: BTreeMap<String, u64>,
+    blade_published: BTreeSet<String>,
     files: BTreeMap<String, projectfiles::Store>,
     stamps: BTreeMap<String, Option<(u64, Option<u64>)>>,
     statuses: BTreeMap<String, String>,
@@ -2099,7 +2102,16 @@ impl Laravel {
         let Some((project, root, refs)) = self.references(&doc) else {
             return Vec::new();
         };
+        let livewire = self.livewire_checked(&project);
+        let inertia = self.inertia_checked(&project, &root);
         let enabled = |kind: RefKind| match kind {
+            RefKind::Config => host::setting_bool("unknownConfigInspection").unwrap_or(true),
+            RefKind::Livewire => {
+                livewire && host::setting_bool("unknownLivewireInspection").unwrap_or(true)
+            }
+            RefKind::InertiaPage => {
+                inertia && host::setting_bool("unknownInertiaInspection").unwrap_or(true)
+            }
             RefKind::View => host::setting_bool("unknownViewInspection").unwrap_or(true),
             RefKind::Route => host::setting_bool("unknownRouteInspection").unwrap_or(false),
             RefKind::Middleware | RefKind::Ability => {
@@ -2160,15 +2172,19 @@ impl Laravel {
             if !arg.closed || arg.concat || !enabled(kind) || !refs::checkable(kind, value) {
                 continue;
             }
-            if self
-                .cache
-                .get(kind, &project, &root)
-                .iter()
-                .any(|e| e.key == value)
-            {
+            let entries = self.cache.get(kind, &project, &root);
+            let known = if kind == RefKind::Config {
+                !missing::config_unknown(&entries, value)
+            } else {
+                entries.iter().any(|e| e.key == value)
+            };
+            if known {
                 continue;
             }
             let label = match kind {
+                RefKind::Config => "Config key",
+                RefKind::Livewire => "Livewire component",
+                RefKind::InertiaPage => "Inertia page",
                 RefKind::View => "View",
                 RefKind::Route => "Route",
                 RefKind::Middleware => "Middleware",
@@ -2189,6 +2205,7 @@ impl Laravel {
         }
         let found = self.findings(&project, &root, path, text);
         out.extend(Self::finding_diagnostics(text, &found));
+        out.extend(self.missing_diagnostics(&project, &root, path, text));
         out
     }
 
@@ -2205,6 +2222,12 @@ impl Laravel {
         else {
             return;
         };
+        if is_blade(path) {
+            if self.blade_published.len() >= 64 {
+                self.blade_published.clear();
+            }
+            self.blade_published.insert(path.to_owned());
+        }
         let mut items = self.inspect(path, &text);
         if let Some(found) = self.analysis.get(path) {
             items.extend(found.iter().cloned());
@@ -3044,11 +3067,17 @@ impl openidea_plugin::Plugin for Laravel {
                     if all.len() > MANY_CHANGES {
                         self.forget_everything();
                     } else {
+                        let mut names_changed = false;
                         for path in all {
                             let path = self.absolute(path);
+                            names_changed |= missing::defines_names(&path);
                             if self.disk_changed(&path) {
                                 paths.insert(path);
                             }
+                        }
+                        if names_changed {
+                            self.live.clear();
+                            paths.extend(self.blade_published.iter().cloned());
                         }
                     }
                 }
@@ -5888,6 +5917,262 @@ return [
         assert_eq!(
             labels(&mut plugin, "resources/views/nav.blade.php", blade),
             [(0, "GET /users".to_owned()), (0, "= 'Welcome'".to_owned())]
+        );
+    }
+
+    #[test]
+    fn reports_and_creates_what_strings_point_to_but_does_not_exist() {
+        use openidea_plugin::file_actions::{FileActions, FileOperation};
+        let host = setup();
+        host.add_file(
+            "composer.json",
+            "{\"require\": {\"laravel/framework\": \"^12.0\", \"livewire/livewire\": \"^3.0\", \"inertiajs/inertia-laravel\": \"^2.0\"}, \"autoload\": {\"psr-4\": {\"App\\\\\": \"app/\"}}}",
+        );
+        host.add_file(
+            "vendor/composer/installed.json",
+            "{\"packages\": [{\"name\": \"livewire/livewire\", \"version\": \"v3.6.0\"}]}",
+        );
+        host.add_file(
+            "vendor/laravel/framework/config/cors.php",
+            "<?php\nreturn ['paths' => ['api/*'], 'max_age' => 0];\n",
+        );
+        host.add_file("resources/js/Pages/Home.vue", "<template></template>\n");
+        host.add_file("app/Http/Controllers/UsersController.php", CONTROLLER);
+        let mut plugin = Laravel::default();
+        let codes = |plugin: &mut Laravel, path: &str, text: &str| -> Vec<(String, String)> {
+            plugin
+                .inspect(&format!("/project/{path}"), text)
+                .into_iter()
+                .filter(|d| {
+                    d.code.as_deref().is_some_and(|c| {
+                        c.contains("config")
+                            || c.contains("livewire")
+                            || c.contains("inertia")
+                            || c.contains("controller")
+                            || c.contains("unknown-view")
+                    })
+                })
+                .map(|d| (d.code.unwrap_or_default(), d.message))
+                .collect()
+        };
+        let page = "<?php\nconfig('app.nope');\nconfig('app.env');\nconfig('cors.paths');\nconfig('cors.nope');\nconfig('sanctum.guard');\nInertia::render('Missing/Page');\nInertia::render('Home');\n@livewire('counter');\nview('orders.missing');\n";
+        assert_eq!(
+            codes(&mut plugin, "app/Http/Controllers/Page.php", page),
+            [
+                (
+                    "laravel.unknown-config-key".to_owned(),
+                    "Config key 'app.nope' not found".to_owned()
+                ),
+                (
+                    "laravel.unknown-config-key".to_owned(),
+                    "Config key 'cors.nope' not found".to_owned()
+                ),
+                (
+                    "laravel.unknown-inertia-page".to_owned(),
+                    "Inertia page 'Missing/Page' not found".to_owned()
+                ),
+                (
+                    "laravel.unknown-livewire-component".to_owned(),
+                    "Livewire component 'counter' not found".to_owned()
+                ),
+                (
+                    "laravel.unknown-view".to_owned(),
+                    "View 'orders.missing' not found".to_owned()
+                ),
+            ]
+        );
+        let blade = "<div>\n    <livewire:user-table />\n</div>\n";
+        assert_eq!(
+            codes(&mut plugin, "resources/views/home.blade.php", blade),
+            [(
+                "laravel.unknown-livewire-component".to_owned(),
+                "Livewire component 'user-table' not found".to_owned()
+            )]
+        );
+        let routes = "<?php\nRoute::get('/users', UsersController::class);\nRoute::get('/report', [UsersController::class, 'report']);\nRoute::resource('people', UsersController::class)->only(['store', 'destroy']);\n";
+        assert_eq!(
+            codes(&mut plugin, "routes/web.php", routes),
+            [
+                (
+                    "laravel.missing-controller-method".to_owned(),
+                    "Method UsersController::report() not found".to_owned()
+                ),
+                (
+                    "laravel.missing-controller-method".to_owned(),
+                    "Method UsersController::destroy() not found".to_owned()
+                ),
+            ]
+        );
+
+        let all = |text: &str, needle: &str| {
+            let at = text.find(needle).unwrap() + 1;
+            let p = openidea_plugin::text::position(text, at);
+            Range::new(p, p)
+        };
+        let resolve = |plugin: &mut Laravel, path: &str, text: &str, needle: &str| {
+            let d = doc(path, text);
+            let actions = plugin.file_actions(&d, all(text, needle));
+            let action = actions
+                .into_iter()
+                .find(|a| a.title.starts_with("Create"))
+                .expect("a create action");
+            let title = action.title.clone();
+            (title, plugin.resolve_file_action(&d, action).unwrap())
+        };
+        let (title, view) = resolve(
+            &mut plugin,
+            "app/Http/Controllers/Page.php",
+            page,
+            "orders.missing",
+        );
+        assert_eq!(
+            title,
+            "Create view 'orders.missing' (resources/views/orders/missing.blade.php)"
+        );
+        assert!(
+            matches!(view.operations.as_slice(), [FileOperation::Create { path, .. }] if path == "resources/views/orders/missing.blade.php")
+        );
+        let (_, lw) = resolve(
+            &mut plugin,
+            "resources/views/home.blade.php",
+            blade,
+            "user-table",
+        );
+        let paths: Vec<&str> = lw
+            .operations
+            .iter()
+            .map(|o| match o {
+                FileOperation::Create { path, .. } => path.as_str(),
+                _ => "",
+            })
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "app/Livewire/UserTable.php",
+                "resources/views/livewire/user-table.blade.php"
+            ]
+        );
+        assert_eq!(lw.open.as_deref(), Some("app/Livewire/UserTable.php"));
+        let (_, page_action) = resolve(
+            &mut plugin,
+            "app/Http/Controllers/Page.php",
+            page,
+            "Missing/Page",
+        );
+        assert!(
+            matches!(page_action.operations.as_slice(), [FileOperation::Create { path, .. }] if path == "resources/js/Pages/Missing/Page.vue")
+        );
+        let (title, methods) = resolve(&mut plugin, "routes/web.php", routes, "people");
+        assert_eq!(title, "Create UsersController::destroy()");
+        let [(path, edits)] = methods.edits.as_slice() else {
+            panic!("{:?}", methods.edits)
+        };
+        assert_eq!(path, "app/Http/Controllers/UsersController.php");
+        assert!(
+            edits
+                .iter()
+                .any(|e| e.text.contains("public function destroy(string $id)")),
+            "{edits:?}"
+        );
+        assert!(
+            plugin
+                .file_actions(
+                    &doc("app/Http/Controllers/Page.php", page),
+                    all(page, "app.env")
+                )
+                .iter()
+                .all(|a| !a.title.starts_with("Create"))
+        );
+
+        host.add_file(
+            "vendor/composer/installed.json",
+            "{\"packages\": [{\"name\": \"livewire/livewire\", \"version\": \"v4.0.1\"}]}",
+        );
+        let mut fresh = Laravel::default();
+        assert!(
+            codes(&mut fresh, "resources/views/home.blade.php", blade).is_empty(),
+            "Livewire 4 is not checked"
+        );
+        host.set_setting("unknownConfigInspection", "false");
+        assert!(
+            !codes(&mut fresh, "app/Http/Controllers/Page.php", page)
+                .iter()
+                .any(|(c, _)| c.contains("config"))
+        );
+    }
+
+    #[test]
+    fn creating_a_missing_file_refreshes_the_warnings_that_pointed_to_it() {
+        let host = setup();
+        host.add_file(
+            "composer.json",
+            "{\"require\": {\"laravel/framework\": \"^12.0\", \"livewire/livewire\": \"^3.0\"}}",
+        );
+        host.add_file(
+            "vendor/composer/installed.json",
+            "{\"packages\": [{\"name\": \"livewire/livewire\", \"version\": \"v3.6.0\"}]}",
+        );
+        let blade = "<livewire:user-table />\n";
+        host.add_file("resources/views/home.blade.php", blade);
+        let page = "<?php\nreturn view('orders.missing');\n";
+        host.add_file("app/Http/Controllers/Page.php", page);
+        let mut plugin = Laravel::default();
+        let warnings = |host: &MockHost, path: &str| -> Vec<String> {
+            host.diagnostics()
+                .get(&format!("/project/{path}"))
+                .map(|d| d.iter().map(|x| x.message.clone()).collect())
+                .unwrap_or_default()
+        };
+        plugin.handle_events(
+            &[Event::FileOpened(
+                "/project/resources/views/home.blade.php".into(),
+            )],
+            &host.invocation(),
+        );
+        assert_eq!(
+            warnings(&host, "resources/views/home.blade.php"),
+            ["Livewire component 'user-table' not found"]
+        );
+        plugin.code_actions(
+            &doc("app/Http/Controllers/Page.php", page),
+            Range::default(),
+        );
+        assert!(
+            plugin
+                .live
+                .contains_key("/project/app/Http/Controllers/Page.php")
+        );
+
+        host.add_file(
+            "app/Livewire/UserTable.php",
+            "<?php\nnamespace App\\Livewire;\nclass UserTable extends Component {}\n",
+        );
+        host.add_file("resources/views/orders/missing.blade.php", "<div></div>\n");
+        plugin.handle_events(
+            &[Event::FilesChanged(openidea_plugin::FilesChanged {
+                created: vec![
+                    "/project/app/Livewire/UserTable.php".into(),
+                    "/project/resources/views/orders/missing.blade.php".into(),
+                ],
+                modified: vec![],
+                removed: vec![],
+            })],
+            &host.invocation(),
+        );
+        assert!(warnings(&host, "resources/views/home.blade.php").is_empty());
+        assert!(
+            plugin.live.is_empty(),
+            "open PHP files are inspected again on the next request"
+        );
+        plugin.code_actions(
+            &doc("app/Http/Controllers/Page.php", page),
+            Range::default(),
+        );
+        assert!(
+            !warnings(&host, "app/Http/Controllers/Page.php")
+                .iter()
+                .any(|w| w.contains("orders.missing"))
         );
     }
 }

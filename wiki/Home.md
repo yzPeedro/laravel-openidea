@@ -66,7 +66,11 @@ New here? Start with [Installation](Installation.md), then open the [hub](Hub.md
 | Page | What it reports |
 | --- | --- |
 | [Inspections overview](Inspections.md) | How inspections run, their settings and quick fixes |
-| [Unknown views](Inspection-Unknown-Views.md) | Views that don't exist, with the closest view as fix |
+| [Unknown views](Inspection-Unknown-Views.md) | Views that don't exist, with the closest view or a new view as fix |
+| [Unknown config keys](Inspection-Unknown-Config-Keys.md) | Config keys their file doesn't define, Laravel's own defaults included |
+| [Missing controller methods](Inspection-Missing-Controller-Methods.md) | Routes and resources pointing to methods the controller doesn't have, with a fix that writes them |
+| [Unknown Livewire components](Inspection-Unknown-Livewire-Components.md) | `<livewire:…>` and `@livewire` names with no component, with a fix that creates it |
+| [Unknown Inertia pages](Inspection-Unknown-Inertia-Pages.md) | `Inertia::render()` pages with no file, with a fix that creates it |
 | [Unknown route names](Inspection-Unknown-Routes.md) | Route names nobody defines |
 | [Unknown validation rules](Inspection-Unknown-Rules.md) | Rules your Laravel version doesn't have |
 | [Unknown columns](Inspection-Unknown-Columns.md) | Columns missing from the model's table |

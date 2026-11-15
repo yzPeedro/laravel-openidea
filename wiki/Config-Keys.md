@@ -47,6 +47,8 @@ Suggestions whose key starts with what you typed come first, then the ones that 
 
 Every `*.php` file under `config/` (up to 2000 files) is read as text; nothing is executed. The plugin follows the array literal the file returns, with `[…]` and `array(…)`, at any depth. Keys built at runtime (`array_merge`, loops, spreads) aren't seen.
 
+Laravel's own defaults are read too: since Laravel 11 the framework keeps its config files in `vendor/laravel/framework/config` and merges them with yours, so `config('cors.paths')` or `config('view.compiled')` work without a `config/cors.php`. A top-level key your file defines replaces the framework's value, as in Laravel. Those keys show the framework file as their location; [Find Usages and Rename](Find-Usages.md) leave them out, since the file isn't yours.
+
 Values are never read from `.env`: the plugin shows `env('APP_KEY')`, not the key itself, so a secret written in `.env` never appears in the list.
 
 ## Ctrl+click
