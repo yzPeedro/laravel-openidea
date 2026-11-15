@@ -76,6 +76,8 @@ An event's icon lists its listeners, and each listener's icon lists the event an
 | Blade views | The first line |
 | Enums | The enum name |
 
+A route opens at its URI (`'/orders'`) and a test at the call that names the route (`route(`), not on the route name itself, so [Find Usages and Rename](Find-Usages.md) on a route name only see the name.
+
 ### One icon or several
 
 Each link is recorded by the area of the file it points to (`app` and the other autoloaded folders, `tests/`, `routes/`, `database/migrations/` and `resources/views/`), because OpenIDEA keeps targets of a gutter icon to the same source root when there are any there. OpenIDEA 0.1.41 and newer show the links of one line as a single icon with one list; OpenIDEA 0.1.40 can show one icon per area on the same line.

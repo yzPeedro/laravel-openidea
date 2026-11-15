@@ -5679,4 +5679,30 @@ return [
         let home = hover(&mut plugin, "resources/views/nav.blade.php", blade, "home").unwrap();
         assert!(home.starts_with("**Route** `home`"), "{home}");
     }
+
+    #[test]
+    fn related_links_never_share_a_range_with_renamable_keys() {
+        let host = setup();
+        host.add_file("app/Http/Controllers/UsersController.php", CONTROLLER);
+        let test = "<?php\nit('lists', function () {\n    $this->get(route('home'));\n    $this->get(route('admin.users.index'))->assertOk();\n    $this->get('/users');\n});\n";
+        host.add_file("tests/Feature/UsersTest.php", test);
+        let mut plugin = Laravel::default();
+        for (path, text) in [
+            ("/project/routes/web.php", ROUTES),
+            ("/project/tests/Feature/UsersTest.php", test),
+        ] {
+            let keys = plugin.key_edges(path, text);
+            let anchors: Vec<_> = keys.definitions.iter().chain(&keys.references).collect();
+            assert!(!anchors.is_empty(), "{path}");
+            let related = plugin.related_edges(path, text);
+            for link in &related.definitions {
+                for anchor in &anchors {
+                    let (a, b) = (link.range, anchor.range);
+                    let overlap = (a.start.line, a.start.character) < (b.end.line, b.end.character)
+                        && (b.start.line, b.start.character) < (a.end.line, a.end.character);
+                    assert!(!overlap, "{path}: {} overlaps {}", link.key, anchor.key);
+                }
+            }
+        }
+    }
 }
