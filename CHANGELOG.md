@@ -2,7 +2,7 @@
 
 All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [semantic versioning](https://semver.org/).
 
-## Unreleased
+## 0.17.0
 
 - Unknown config keys: `config('…')` and the other config reads warn when the key's file doesn't define it, with Laravel's own defaults from `vendor/laravel/framework/config` counted (Laravel 11+), keys of files the project doesn't have (packages) left alone, and only under literal arrays. Completion, Ctrl+click and hover know those framework defaults too. Setting `unknownConfigInspection`.
 - Missing controller methods: route files warn when an action, an invokable controller or a `Route::resource()` / `apiResource()` points to methods the controller doesn't have, following parent classes inside the project. *Create <Controller>::<method>()* writes empty methods with resource signatures and the `Request` import. Setting `missingControllerMethodInspection`.
