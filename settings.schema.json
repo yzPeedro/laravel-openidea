@@ -126,5 +126,20 @@
       "title": "Docker Compose service for Artisan (empty: detect)",
       "default": ""
     }
+  },
+  "inlayRoutes": {
+    "type": "boolean",
+    "title": "Show route URIs and names inline",
+    "default": true
+  },
+  "inlayConfig": {
+    "type": "boolean",
+    "title": "Show config values inline",
+    "default": true
+  },
+  "inlayTranslations": {
+    "type": "boolean",
+    "title": "Show translation text inline",
+    "default": true
   }
 }
