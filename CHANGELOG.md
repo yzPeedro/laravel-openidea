@@ -2,6 +2,11 @@
 
 All notable changes to Laravel OpenIDEA. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+- *Create <Controller>::<method>()* no longer adds a second `use … Request;` when the short name `Request` is already taken, as by `use Illuminate\Support\Facades\Request;`: the PHP file stopped compiling (*name is already in use*) and the controller could no longer load. The new methods now write `\Illuminate\Http\Request` in full in that case, and reuse an alias the file already has for it (`use Illuminate\Http\Request as HttpRequest;`).
+- Rename on a config or translation key that holds other keys, such as `mail` in `'mail' => ['from' => …]`, now renames that segment in every child key too: renaming `mail` to `contact` writes `config('app.contact.from')` instead of leaving `config('app.mail.from')` pointing to an array that no longer exists. Find Usages on `mail` lists the child keys as well.
+
 ## 0.17.0
 
 - Unknown config keys: `config('…')` and the other config reads warn when the key's file doesn't define it, with Laravel's own defaults from `vendor/laravel/framework/config` counted (Laravel 11+), keys of files the project doesn't have (packages) left alone, and only under literal arrays. Completion, Ctrl+click and hover know those framework defaults too. Setting `unknownConfigInspection`.

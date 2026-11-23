@@ -5686,7 +5686,11 @@ PHP Fatal error: Allowed memory size"
             "routes/api.php",
             "<?php\nRoute::apiResource('photos', PhotoController::class);\n",
         );
-        let page = "<?php\nclass Page\n{\n    public function show()\n    {\n        route('admin.users.index');\n        route('photos.index');\n        config('app.name');\n        config('queue.default');\n        __('messages.nav.home');\n        return to_route('home');\n    }\n}\n";
+        host.add_file(
+            "config/contact.php",
+            "<?php\nreturn ['mail' => ['from' => 'test@example.invalid']];\n",
+        );
+        let page = "<?php\nclass Page\n{\n    public function show()\n    {\n        route('admin.users.index');\n        route('photos.index');\n        config('app.name');\n        config('queue.default');\n        config('contact.mail');\n        config('contact.mail.from');\n        __('messages.nav.home');\n        return to_route('home');\n    }\n}\n";
         host.add_file("app/Http/Controllers/Page.php", page);
         let mut plugin = Laravel::default();
         let spans =
@@ -5714,13 +5718,21 @@ PHP Fatal error: Allowed memory size"
                     "index".to_owned()
                 ),
                 ("laravel-config#app.name".to_owned(), "name".to_owned()),
+                ("laravel-config#contact.mail".to_owned(), "mail".to_owned()),
+                ("laravel-config#contact.mail".to_owned(), "mail".to_owned()),
+                (
+                    "laravel-config#contact.mail.from".to_owned(),
+                    "from".to_owned()
+                ),
+                ("laravel-trans#messages.nav".to_owned(), "nav".to_owned()),
                 (
                     "laravel-trans#messages.nav.home".to_owned(),
                     "home".to_owned()
                 ),
                 ("laravel-route#home".to_owned(), "home".to_owned()),
             ],
-            "resource routes and keys only in vendor/ are left out"
+            "resource routes and keys only in vendor/ are left out; a parent key is \
+             anchored inside its children, so renaming it reaches them"
         );
         let routes = plugin.key_edges("/project/routes/web.php", ROUTES);
         assert_eq!(
@@ -6083,6 +6095,39 @@ return [
                 )
                 .iter()
                 .all(|a| !a.title.starts_with("Create"))
+        );
+
+        // `Request` already names the facade: a second `use … Request;` would
+        // not compile, so the new method spells the HTTP request in full.
+        host.add_file(
+            "app/Http/Controllers/Controller.php",
+            "<?php\n\nnamespace App\\Http\\Controllers;\n\nabstract class Controller\n{\n}\n",
+        );
+        host.add_file(
+            "app/Http/Controllers/PhotoController.php",
+            "<?php\n\nnamespace App\\Http\\Controllers;\n\nuse Illuminate\\Support\\Facades\\Request;\n\nclass PhotoController extends Controller\n{\n    public function index()\n    {\n        return Request::input('q');\n    }\n}\n",
+        );
+        let photos = "<?php\nRoute::get('/photos', [PhotoController::class, 'index']);\nRoute::post('/photos', [PhotoController::class, 'store']);\n";
+        let mut fresh = Laravel::default();
+        assert_eq!(
+            codes(&mut fresh, "routes/web.php", photos),
+            [(
+                "laravel.missing-controller-method".to_owned(),
+                "Method PhotoController::store() not found".to_owned()
+            )]
+        );
+        let (title, store) = resolve(&mut fresh, "routes/web.php", photos, "'store'");
+        assert_eq!(title, "Create PhotoController::store()");
+        let [(path, edits)] = store.edits.as_slice() else {
+            panic!("{:?}", store.edits)
+        };
+        assert_eq!(path, "app/Http/Controllers/PhotoController.php");
+        assert!(edits.iter().all(|e| !e.text.contains("use ")), "{edits:?}");
+        assert!(
+            edits.iter().any(|e| e
+                .text
+                .contains("public function store(\\Illuminate\\Http\\Request $request)")),
+            "{edits:?}"
         );
 
         host.add_file(

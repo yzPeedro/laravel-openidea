@@ -38,6 +38,10 @@ Usages are read in the same files as [Gutter usages](Gutter-Usages.md#what-count
 
 Only the last segment of a key is written where it's defined: `config('app.name')` is the key `'name'` inside `config/app.php`, `__('messages.welcome')` is `'welcome'` inside `lang/en/messages.php`, and `admin.users.index` is `->name('users.index')` under a group named `admin.`. So that's the part Find Usages and Rename work on, on both sides. Renaming it keeps the definition and the usages in step; the file, the parent arrays and the group prefix stay as they are. On the other segments, Ctrl+click still opens the definition as before.
 
+### Parent keys
+
+A config or translation array that holds other keys is a key too: `'mail' => ['from' => …]` in `config/app.php` defines `app.mail` and `app.mail.from`. Its name is written inside every child key, so `mail` in `config('app.mail.from')` counts as a usage of `app.mail`. Find Usages on `mail` lists `config('app.mail')` and `config('app.mail.from')`, and renaming it to `contact` writes `'contact' => [...]`, `config('app.contact')` and `config('app.contact.from')`, so no child key is left pointing to an array that no longer exists. The file name (`app`) is never a key, and route names have no parents: a group prefix isn't defined anywhere on its own.
+
 ### What is left out
 
 A usage is only indexed when the project defines its key literally, so Rename never changes the usages without the definition:
