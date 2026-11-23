@@ -1041,6 +1041,9 @@ impl FileActions for Laravel {
         let Some(cursor) = offset(&doc.text, selection.start) else {
             return Vec::new();
         };
+        if let Some(action) = self.create_action(&project, &root, doc, cursor) {
+            return vec![action];
+        }
         self.method_routes(&project, &root, &doc.path, &doc.text, cursor)
             .into_iter()
             .map(|r| FileAction {
@@ -1063,6 +1066,16 @@ impl FileActions for Laravel {
         doc: &Document,
         action: FileAction,
     ) -> Result<FileAction, Error> {
+        if let Some(target) = action
+            .data
+            .as_deref()
+            .and_then(|d| serde_json::from_str::<crate::missing::CreateRef>(d).ok())
+        {
+            let (project, root) = self
+                .laravel_project(&doc.path)
+                .ok_or_else(|| Error::Invalid("this file is not in a Laravel project".into()))?;
+            return self.resolve_create(&project, &root, target, action);
+        }
         let Some(r) = action
             .data
             .as_deref()

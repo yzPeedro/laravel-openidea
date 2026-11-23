@@ -127,6 +127,26 @@
       "default": ""
     }
   },
+  "unknownConfigInspection": {
+    "type": "boolean",
+    "title": "Report unknown config keys",
+    "default": true
+  },
+  "missingControllerMethodInspection": {
+    "type": "boolean",
+    "title": "Report routes that point to controller methods that don't exist",
+    "default": true
+  },
+  "unknownLivewireInspection": {
+    "type": "boolean",
+    "title": "Report unknown Livewire components (Livewire 3 and older)",
+    "default": true
+  },
+  "unknownInertiaInspection": {
+    "type": "boolean",
+    "title": "Report unknown Inertia pages",
+    "default": true
+  },
   "inlayRoutes": {
     "type": "boolean",
     "title": "Show route URIs and names inline",

@@ -14,12 +14,13 @@ Laravel OpenIDEA is an independent project. It reuses no code, branding or text 
 - Folio pages as routes, named routes from the route cache, and pivot attributes.
 - Hover on Laravel strings, and Find Usages and Rename for route names, config keys and translation keys.
 - Inlay hints for route URIs and names, controller routes, config values and translations.
+- Inspections that create what's missing: views, Livewire components, Inertia pages and controller methods, plus unknown config keys with Laravel's own defaults.
 
 ## Next
 
 | Item | Notes |
 | --- | --- |
-| Hub: create missing classes | Quick fix to create a Livewire or Blade component class |
+| Create missing Blade components | Quick fix to create a Blade component class and view |
 | Route actions from the hub | "Add route" when a name is used but not defined |
 | More packages | laravel-data, Filament resources, Nova |
 
