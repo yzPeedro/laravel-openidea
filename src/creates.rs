@@ -140,10 +140,10 @@ pub fn signature(method: &str) -> &'static str {
     }
 }
 
-fn method_stub(method: &str) -> String {
+fn method_stub(method: &str, request: &str) -> String {
     let head = match signature(method) {
         "" => format!("{method}()"),
-        s => s.to_owned(),
+        s => s.replace("Request $", &format!("{request} $")),
     };
     format!("    public function {head}\n    {{\n    }}\n")
 }
@@ -152,11 +152,29 @@ pub fn needs_request(methods: &[String]) -> bool {
     methods.iter().any(|m| signature(m).contains("Request "))
 }
 
-pub fn imports_request(text: &str) -> bool {
+const HTTP_REQUEST: &str = "Illuminate\\Http\\Request";
+
+/// How the new methods name `Illuminate\Http\Request`, and whether a `use`
+/// line must be added for it. An alias the file already has is reused. When
+/// the short name `Request` belongs to another class (a facade import, an
+/// alias, the class itself), the fully qualified name is written instead: a
+/// second `use … Request;` would not compile.
+pub fn request_name(text: &str) -> (String, bool) {
     let (_, imports) = crate::indexer::imports(text);
-    imports
-        .get("Request")
-        .is_some_and(|f| f == "Illuminate\\Http\\Request")
+    let is_http = |f: &str| {
+        f.trim_start_matches('\\')
+            .eq_ignore_ascii_case(HTTP_REQUEST)
+    };
+    if let Some((alias, _)) = imports.iter().find(|(_, f)| is_http(f)) {
+        return (alias.clone(), false);
+    }
+    let taken = imports.keys().any(|a| a.eq_ignore_ascii_case("Request"))
+        || parse_class(text).is_some_and(|c| c.name.eq_ignore_ascii_case("Request"));
+    if taken {
+        (format!("\\{HTTP_REQUEST}"), false)
+    } else {
+        ("Request".to_owned(), true)
+    }
 }
 
 pub fn class_body(text: &str, class: &Class) -> Option<(usize, usize)> {
@@ -184,13 +202,18 @@ pub fn add_methods(text: &str, methods: &[String]) -> Option<Vec<(usize, usize, 
     let line_start = text[..close].rfind('\n').map_or(0, |i| i + 1);
     let before = text[..line_start].trim_end();
     let blank = if before.ends_with('{') { "" } else { "\n" };
-    let stubs: Vec<String> = methods.iter().map(|m| method_stub(m)).collect();
+    let (request, import) = if needs_request(methods) {
+        request_name(text)
+    } else {
+        (String::new(), false)
+    };
+    let stubs: Vec<String> = methods.iter().map(|m| method_stub(m, &request)).collect();
     let mut edits = vec![(
         line_start,
         line_start,
         format!("{blank}{}", stubs.join("\n")),
     )];
-    if needs_request(methods) && !imports_request(text) {
+    if import {
         let (at, first) = use_insertion(text)?;
         let line = if first {
             "use Illuminate\\Http\\Request;\n\n"
@@ -409,6 +432,45 @@ mod tests {
             out.ends_with("{\n    public function index()\n    {\n    }\n}\n"),
             "{out}"
         );
+    }
+
+    #[test]
+    fn an_occupied_request_name_is_never_imported_twice() {
+        let apply = |text: &str| {
+            let mut out = text.to_owned();
+            for (s, e, t) in add_methods(text, &["store".to_owned()])
+                .unwrap()
+                .iter()
+                .rev()
+            {
+                out.replace_range(*s..*e, t);
+            }
+            out
+        };
+        let facade = "<?php\nnamespace App\\Http\\Controllers;\n\nuse Illuminate\\Support\\Facades\\Request;\n\nclass PhotoController extends Controller\n{\n}\n";
+        let out = apply(facade);
+        assert_eq!(out.matches("use ").count(), 1, "{out}");
+        assert!(
+            out.contains("public function store(\\Illuminate\\Http\\Request $request)"),
+            "{out}"
+        );
+        let alias = "<?php\nnamespace App\\Http\\Controllers;\n\nuse App\\Support\\Request;\nuse Illuminate\\Http\\Request as HttpRequest;\n\nclass A\n{\n}\n";
+        let out = apply(alias);
+        assert_eq!(out.matches("use ").count(), 2, "{out}");
+        assert!(out.contains("store(HttpRequest $request)"), "{out}");
+        let lower = "<?php\nnamespace App;\n\nuse Other\\request;\n\nclass A\n{\n}\n";
+        assert!(apply(lower).contains("store(\\Illuminate\\Http\\Request $request)"));
+        let own = "<?php\nnamespace App\\Http;\n\nclass Request\n{\n}\n";
+        let out = apply(own);
+        assert!(!out.contains("use "), "{out}");
+        assert!(
+            out.contains("store(\\Illuminate\\Http\\Request $request)"),
+            "{out}"
+        );
+        let imported = "<?php\nnamespace App;\n\nuse Illuminate\\Http\\Request;\n\nclass A\n{\n}\n";
+        let out = apply(imported);
+        assert_eq!(out.matches("use ").count(), 1, "{out}");
+        assert!(out.contains("store(Request $request)"), "{out}");
     }
 
     #[test]

@@ -116,6 +116,20 @@ pub fn references(
             if !defined(kind, key) {
                 continue;
             }
+            // Config and translation arrays nest: `mail` in `app.mail.from` is
+            // the key `app.mail` too, so renaming that parent reaches here.
+            if kind != RefKind::Route {
+                let base = arg.start + seg.start;
+                let mut from = 0;
+                for (dot, _) in key.match_indices('.') {
+                    let parent = &key[..dot];
+                    // The first segment names the file, never an array key.
+                    if from > 0 && from < dot && defined(kind, parent) {
+                        out.push((format!("{key_prefix}{parent}"), base + from, base + dot));
+                    }
+                    from = dot + 1;
+                }
+            }
             out.push((format!("{key_prefix}{key}"), start, end));
         }
     }
@@ -205,6 +219,36 @@ mod tests {
                 ("laravel-route#admin.users.store", "store"),
                 ("laravel-config#app.name", "name"),
                 ("laravel-trans#messages.welcome", "welcome"),
+            ]
+        );
+    }
+
+    #[test]
+    fn anchors_every_defined_parent_of_nested_config_and_translation_keys() {
+        let text = "<?php\nconfig('app.mail');\nconfig('app.mail.from.address');\n__('shop.cart.empty');\nroute('admin.users.index');\n";
+        let defined = [
+            "app.mail",
+            "app.mail.from",
+            "app.mail.from.address",
+            "shop.cart",
+            "shop.cart.empty",
+            "admin",
+            "admin.users",
+            "admin.users.index",
+        ];
+        let found = references(text, false, &refs::Scope::default(), |_, key| {
+            defined.contains(&key)
+        });
+        assert_eq!(
+            spans(text, &found),
+            [
+                ("laravel-config#app.mail", "mail"),
+                ("laravel-config#app.mail", "mail"),
+                ("laravel-config#app.mail.from", "from"),
+                ("laravel-config#app.mail.from.address", "address"),
+                ("laravel-trans#shop.cart", "cart"),
+                ("laravel-trans#shop.cart.empty", "empty"),
+                ("laravel-route#admin.users.index", "index"),
             ]
         );
     }

@@ -20,7 +20,7 @@ Route::get('/report', ReportController::class);                       // Method 
 - **Message:** `Method <Controller>::<method>() not found`, or `<Controller> has no <method>(), <method>()` for a resource.
 - **Range:** the method name, the controller class of an invokable route, or the resource name.
 
-**Quick fix.** With the cursor on the underlined text, Alt+Enter offers *Create &lt;Controller&gt;::&lt;method&gt;()*. It adds empty public methods at the end of the controller, with the signatures `make:controller --resource` writes (`store(Request $request)`, `show(string $id)`, `update(Request $request, string $id)`, `destroy(string $id)`, plain `name()` for anything else), adds `use Illuminate\Http\Request;` when a method needs it, and opens the controller. One undo reverts it.
+**Quick fix.** With the cursor on the underlined text, Alt+Enter offers *Create &lt;Controller&gt;::&lt;method&gt;()*. It adds empty public methods at the end of the controller, with the signatures `make:controller --resource` writes (`store(Request $request)`, `show(string $id)`, `update(Request $request, string $id)`, `destroy(string $id)`, plain `name()` for anything else), adds `use Illuminate\Http\Request;` when a method needs it, and opens the controller. When the file already names the HTTP request under an alias (`use Illuminate\Http\Request as HttpRequest;`), the methods use that alias. When `Request` already means another class, such as the `Illuminate\Support\Facades\Request` facade, nothing is imported and the methods write `\Illuminate\Http\Request` in full, so the controller keeps compiling. One undo reverts it.
 
 ## Details
 
